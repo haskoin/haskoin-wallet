@@ -1,8 +1,8 @@
-{-# LANGUAGE BangPatterns              #-}
-{-# LANGUAGE NoImplicitPrelude         #-}
-{-# LANGUAGE OverloadedStrings         #-}
-{-# LANGUAGE RecordWildCards           #-}
-{-# LANGUAGE TemplateHaskell           #-}
+{-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet where
 
 import           Control.Arrow                              (right, (&&&))
@@ -10,6 +10,7 @@ import           Control.Monad                              (unless, when)
 import qualified Data.Aeson                                 as Json
 import           Data.Aeson.TH
 import           Data.List                                  (sortOn)
+import           Data.Map.Strict                            (Map)
 import qualified Data.Map.Strict                            as Map
 import           Data.Text                                  (Text)
 import           Foundation
@@ -579,19 +580,23 @@ writeDoc fileName dat = do
 readDoc :: Json.FromJSON a => FilePath -> IO a
 readDoc fileName = do
     bytes <- readFile fileName
-    case decodeJson bytes of
-        Just (DocStructure net payload) ->
+    let m = fromMaybe err $ decodeJson bytes :: Map Text Json.Value
+    case m Map.!? toText "network" of
+        Just (Json.String net) ->
             if net == fromString networkName
-                then return payload
-                else badNet $ fromText net
-        _ ->
-            consoleError $
-            formatError $ "Could not read file " <> filePathToString fileName
+                then case decodeJson bytes of
+                         Just (DocStructure _ res) -> return res
+                         _ -> err
+                else badNetErr $ fromText net
+        _ -> err
   where
-    badNet net =
+    err =
+        consoleError $
+        formatError $ "Could not read file " <> filePathToString fileName
+    badNetErr net =
         consoleError $
         formatError $
-        "Bad network. This file has to be used in the network " <> net
+        "Bad network. This file has to be used on the network: " <> net
 
 withAccountStore :: String -> ((String, AccountStore) -> IO ()) -> IO ()
 withAccountStore name f
