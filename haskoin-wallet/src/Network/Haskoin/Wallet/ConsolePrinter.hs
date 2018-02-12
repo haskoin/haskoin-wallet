@@ -17,6 +17,7 @@ data ConsolePrinter
     | ConsoleNest !(CountOf (Element String)) !ConsolePrinter
     | ConsoleText !ConsoleFormat
     | ConsoleEmpty
+    | ConsoleNonEmpty
 
 instance Monoid ConsolePrinter where
     mempty = ConsoleEmpty
@@ -26,6 +27,7 @@ instance Monoid ConsolePrinter where
 
 isEmptyPrinter :: ConsolePrinter -> Bool
 isEmptyPrinter ConsoleEmpty       = True
+isEmptyPrinter (ConsoleText f)    = null $ getFormat f
 isEmptyPrinter (ConsoleNest _ n)  = isEmptyPrinter n
 isEmptyPrinter (ConsoleNewline n) = isEmptyPrinter n
 isEmptyPrinter _                  = False
@@ -42,6 +44,13 @@ vcat = go . filter (not . isEmptyPrinter)
     go []     = ConsoleEmpty
     go [x]    = x
     go (x:xs) = x <> ConsoleNewline (go xs)
+
+hsep :: [ConsolePrinter] -> ConsolePrinter
+hsep = go . filter (not . isEmptyPrinter)
+  where
+    go []     = ConsoleEmpty
+    go [x]    = x
+    go (x:xs) = x <+> go xs
 
 nest :: CountOf (Element String) -> ConsolePrinter -> ConsolePrinter
 nest = ConsoleNest
@@ -76,9 +85,14 @@ renderIO cp = go 0 0 cp >> putStrLn ""
                 printFormat f
                 return $ l + length (getFormat f)
             ConsoleEmpty -> return l
+            ConsoleNonEmpty -> return l
 
 data ConsoleFormat
     = FormatTitle { getFormat :: !String }
+    | FormatCommand { getFormat :: !String }
+    | FormatOption { getFormat :: !String }
+    | FormatOptExample { getFormat :: !String }
+    | FormatArgument { getFormat :: !String }
     | FormatStatic { getFormat :: !String }
     | FormatAccount { getFormat :: !String }
     | FormatPubKey { getFormat :: !String }
@@ -95,6 +109,8 @@ data ConsoleFormat
     | FormatFee { getFormat :: !String }
     | FormatTrue { getFormat :: !String }
     | FormatFalse { getFormat :: !String }
+    | FormatOnline { getFormat :: !String }
+    | FormatOffline { getFormat :: !String }
     | FormatCash { getFormat :: !String }
     | FormatBitcoin { getFormat :: !String }
     | FormatTestnet { getFormat :: !String }
@@ -102,6 +118,18 @@ data ConsoleFormat
 
 formatTitle :: String -> ConsolePrinter
 formatTitle = text . FormatTitle
+
+formatCommand :: String -> ConsolePrinter
+formatCommand = text . FormatCommand
+
+formatOption :: String -> ConsolePrinter
+formatOption = text . FormatOption
+
+formatOptExample :: String -> ConsolePrinter
+formatOptExample = text . FormatOptExample
+
+formatArgument :: String -> ConsolePrinter
+formatArgument = text . FormatArgument
 
 formatStatic :: String -> ConsolePrinter
 formatStatic = text . FormatStatic
@@ -151,6 +179,12 @@ formatTrue = text . FormatTrue
 formatFalse :: String -> ConsolePrinter
 formatFalse = text . FormatFalse
 
+formatOnline :: String -> ConsolePrinter
+formatOnline = text . FormatOnline
+
+formatOffline :: String -> ConsolePrinter
+formatOffline = text . FormatOffline
+
 formatCash :: String -> ConsolePrinter
 formatCash = text . FormatCash
 
@@ -166,6 +200,16 @@ formatError = text . FormatError
 formatSGR :: ConsoleFormat -> [SGR]
 formatSGR frm = case frm of
     FormatTitle _           -> [ SetConsoleIntensity BoldIntensity ]
+    FormatCommand _         -> [ SetConsoleIntensity BoldIntensity
+                               , SetColor Foreground Dull Blue
+                               ]
+    FormatOption _          -> [ SetConsoleIntensity BoldIntensity
+                               , SetColor Foreground Dull Magenta
+                               ]
+    FormatOptExample _      -> [ SetConsoleIntensity BoldIntensity
+                               ]
+    FormatArgument _        -> [ SetItalicized True
+                               ]
     FormatStatic _          -> []
     FormatAccount _         -> [ SetConsoleIntensity BoldIntensity
                                , SetColor Foreground Dull White
@@ -198,6 +242,12 @@ formatSGR frm = case frm of
                                , SetColor Foreground Dull Green
                                ]
     FormatFalse _           -> [ SetConsoleIntensity BoldIntensity
+                               , SetColor Foreground Dull Red
+                               ]
+    FormatOnline _          -> [ SetConsoleIntensity BoldIntensity
+                               , SetColor Foreground Dull Green
+                               ]
+    FormatOffline _         -> [ SetConsoleIntensity BoldIntensity
                                , SetColor Foreground Dull Red
                                ]
     FormatCash _            -> [ SetColor Foreground Dull Green

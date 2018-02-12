@@ -37,10 +37,11 @@ import           Network.Haskoin.Wallet.HTTP.Haskoin
 import           Network.Haskoin.Wallet.HTTP.Insight
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.TxInformation
+import           Network.Haskoin.Wallet.UsageInfo
 import qualified System.Console.Argument                    as Argument
 import           System.Console.Command
 import qualified System.Console.Haskeline                   as Haskeline
-import           System.Console.Program                     (showUsage, single)
+import           System.Console.Program
 import qualified System.Directory                           as D
 
 data DocStructure a = DocStructure
@@ -53,26 +54,7 @@ $(deriveJSON (dropFieldLabel 12) ''DocStructure)
 clientMain :: IO ()
 clientMain = single hwCommands
 
-hwCommands :: Commands IO
-hwCommands =
-    Node
-        hw
-        [ Node mnemonic []
-        , Node pubkey []
-        , Node watch []
-        , Node rename []
-        , Node receive []
-        , Node addresses []
-        , Node balance []
-        , Node transactions []
-        , Node send []
-        , Node sign []
-        , Node broadcast []
-        , Node help []
-        ]
-
-hw :: Command IO
-hw = command "hw" "bitcoin wallet management" $ io $ showUsage hwCommands
+{- Options -}
 
 entOpt :: Argument.Option Natural
 entOpt =
@@ -91,6 +73,178 @@ diceOpt =
         Argument.boolean
         False
         "Provide additional entropy from 6-sided dice rolls"
+
+derOpt :: Argument.Option Natural
+derOpt =
+    Argument.option
+        ['d']
+        ["deriv"]
+        (fromIntegral <$> Argument.natural)
+        0
+        "Bip44 account derivation"
+
+netOpt :: Argument.Option String
+netOpt =
+    Argument.option
+        ['n']
+        ["network"]
+        (fromLString <$> Argument.string)
+        "bitcoin"
+        "Set the network (bitcoin|testnet3|bitcoincash|cashtest)"
+
+setOptNet :: String -> IO ()
+setOptNet name
+    | name == fromLString (getNetworkName bitcoinNetwork) = do
+        setBitcoinNetwork
+        renderIO $ formatBitcoin "--- Bitcoin ---"
+    | name == fromLString (getNetworkName bitcoinCashNetwork) = do
+        setBitcoinCashNetwork
+        renderIO $ formatCash "--- Bitcoin Cash ---"
+    | name == fromLString (getNetworkName testnet3Network) = do
+        setTestnet3Network
+        renderIO $ formatTestnet "--- Testnet ---"
+    | name == fromLString (getNetworkName cashTestNetwork) = do
+        setCashTestNetwork
+        renderIO $ formatTestnet "--- Bitcoin Cash Testnet ---"
+    | otherwise =
+        consoleError $
+        vcat
+            [ formatError "Invalid network name. Select one of the following:"
+            , nest 4 $
+              vcat $
+              fmap
+                  (formatStatic . fromLString)
+                  [ getNetworkName bitcoinNetwork
+                  , getNetworkName bitcoinCashNetwork
+                  , getNetworkName testnet3Network
+                  , getNetworkName cashTestNetwork
+                  ]
+            ]
+
+unitOpt :: Argument.Option String
+unitOpt =
+    Argument.option
+        ['u']
+        ["unit"]
+        (fromLString <$> Argument.string)
+        "bitcoin"
+        "Set the units for amounts (bitcoin|bit|satoshi)"
+
+parseUnit :: String -> AmountUnit
+parseUnit unit =
+    case unit of
+        "bitcoin" -> UnitBitcoin
+        "bit" -> UnitBit
+        "satoshi" -> UnitSatoshi
+        _ ->
+            consoleError $
+            vcat
+                [ formatError "Invalid unit value. Choose one of:"
+                , nest 4 $
+                  vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
+                ]
+
+serOpt :: Argument.Option String
+serOpt =
+    Argument.option
+        ['s']
+        ["service"]
+        (fromLString <$> Argument.string)
+        ""
+        "Blockchain service (haskoin|blockchain|insight)"
+
+parseBlockchainService :: String -> Service
+parseBlockchainService service =
+    case service of
+        "" -> defaultBlockchainService
+        "haskoin" -> Service HaskoinService
+        "blockchain" -> Service BlockchainInfoService
+        "insight" -> Service InsightService
+        _ ->
+            consoleError $
+            vcat
+                [ formatError
+                      "Invalid service name. Select one of the following:"
+                , nest 4 $
+                  vcat $ fmap formatStatic ["haskoin", "blockchain", "insight"]
+                ]
+
+defaultBlockchainService :: Service
+defaultBlockchainService
+    | getNetwork == bitcoinNetwork = Service BlockchainInfoService
+    | getNetwork == testnet3Network = Service HaskoinService
+    | getNetwork == bitcoinCashNetwork = Service HaskoinService
+    | getNetwork == cashTestNetwork = Service HaskoinService
+    | otherwise = consoleError $ formatError $
+        "No blockchain service for network " <> fromLString networkName
+
+accOpt :: Argument.Option String
+accOpt =
+    Argument.option
+        ['a']
+        ["account"]
+        (fromLString <$> Argument.string)
+        ""
+        "Account name"
+
+cntOpt :: Argument.Option Natural
+cntOpt =
+    Argument.option
+        ['c']
+        ["count"]
+        (fromIntegral <$> Argument.natural)
+        5
+        "Number of addresses to display"
+
+feeOpt :: Argument.Option Satoshi
+feeOpt =
+    Argument.option
+        ['f']
+        ["fee"]
+        (fromIntegral <$> Argument.natural)
+        200
+        "Fee per byte"
+
+dustOpt :: Argument.Option Satoshi
+dustOpt =
+    Argument.option
+        ['d']
+        ["dust"]
+        (fromIntegral <$> Argument.natural)
+        5430
+        "Do not create change outputs below this value"
+
+verbOpt :: Argument.Option Bool
+verbOpt =
+    Argument.option
+        ['v']
+        ["verbose"]
+        Argument.boolean
+        False
+        "Produce a more detailed output"
+
+{- Commands -}
+
+hwCommands :: Commands IO
+hwCommands =
+    Node
+        hw
+        [ Node mnemonic []
+        , Node createacc []
+        , Node importacc []
+        , Node renameacc []
+        , Node receive []
+        , Node addresses []
+        , Node balance []
+        , Node transactions []
+        , Node preparetx []
+        , Node signtx []
+        , Node sendtx []
+        , Node help []
+        ]
+
+hw :: Command IO
+hw = command "hw" "bitcoin wallet management" $ io $ renderIO usage
 
 mnemonic :: Command IO
 mnemonic =
@@ -130,113 +284,9 @@ mnemonicPrinter n ws =
         mconcat
             [formatKey $ block 4 $ show i <> ".", formatMnemonic $ block 10 w]
 
-derOpt :: Argument.Option Natural
-derOpt =
-    Argument.option
-        ['d']
-        ["deriv"]
-        (fromIntegral <$> Argument.natural)
-        0
-        "Bip44 account derivation"
-
-netOpt :: Argument.Option String
-netOpt =
-    Argument.option
-        ['n']
-        ["network"]
-        (fromLString <$> Argument.string)
-        "bitcoin"
-        "Set the network (=bitcoin|testnet3|bitcoincash|cashtest)"
-
-unitOpt :: Argument.Option String
-unitOpt =
-    Argument.option
-        ['u']
-        ["unit"]
-        (fromLString <$> Argument.string)
-        "bitcoin"
-        "Set the units for amounts (=bitcoin|bit|satoshi)"
-
-parseUnit :: String -> AmountUnit
-parseUnit unit =
-    case unit of
-        "bitcoin" -> UnitBitcoin
-        "bit" -> UnitBit
-        "satoshi" -> UnitSatoshi
-        _ ->
-            consoleError $
-            vcat
-                [ formatError "Invalid unit value. Choose one of:"
-                , nest 4 $
-                  vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
-                ]
-
-setOptNet :: String -> IO ()
-setOptNet name
-    | name == fromLString (getNetworkName bitcoinNetwork) = do
-        setBitcoinNetwork
-        renderIO $ formatBitcoin "--- Bitcoin ---"
-    | name == fromLString (getNetworkName bitcoinCashNetwork) = do
-        setBitcoinCashNetwork
-        renderIO $ formatCash "--- Bitcoin Cash ---"
-    | name == fromLString (getNetworkName testnet3Network) = do
-        setTestnet3Network
-        renderIO $ formatTestnet "--- Testnet ---"
-    | name == fromLString (getNetworkName cashTestNetwork) = do
-        setCashTestNetwork
-        renderIO $ formatTestnet "--- Bitcoin Cash Testnet ---"
-    | otherwise =
-        consoleError $
-        vcat
-            [ formatError "Invalid network name. Select one of the following:"
-            , nest 4 $
-              vcat $
-              fmap
-                  (formatStatic . fromLString)
-                  [ getNetworkName bitcoinNetwork
-                  , getNetworkName bitcoinCashNetwork
-                  , getNetworkName testnet3Network
-                  , getNetworkName cashTestNetwork
-                  ]
-            ]
-
-serOpt :: Argument.Option String
-serOpt =
-    Argument.option
-        ['s']
-        ["service"]
-        (fromLString <$> Argument.string)
-        ""
-        "Blockchain service (=haskoin|blockchain|insight)"
-
-parseBlockchainService :: String -> Service
-parseBlockchainService service =
-    case service of
-        "" -> defaultBlockchainService
-        "haskoin" -> Service HaskoinService
-        "blockchain" -> Service BlockchainInfoService
-        "insight" -> Service InsightService
-        _ ->
-            consoleError $
-            vcat
-                [ formatError
-                      "Invalid service name. Select one of the following:"
-                , nest 4 $
-                  vcat $ fmap formatStatic ["haskoin", "blockchain", "insight"]
-                ]
-
-defaultBlockchainService :: Service
-defaultBlockchainService
-    | getNetwork == bitcoinNetwork = Service BlockchainInfoService
-    | getNetwork == testnet3Network = Service HaskoinService
-    | getNetwork == bitcoinCashNetwork = Service HaskoinService
-    | getNetwork == cashTestNetwork = Service HaskoinService
-    | otherwise = consoleError $ formatError $
-        "No blockchain service for network " <> fromLString networkName
-
-pubkey :: Command IO
-pubkey =
-    command "pubkey" "Derive a public key from a mnemonic" $
+createacc :: Command IO
+createacc =
+    command "createacc" "Derive a public key from a mnemonic" $
     withOption derOpt $ \deriv ->
     withOption netOpt $ \network ->
         io $ do
@@ -258,9 +308,9 @@ pubkey =
                     , nest 4 $ formatFilePath $ filePathToString path
                     ]
 
-watch :: Command IO
-watch =
-    command "watch" "Create a new read-only account from an xpub file" $
+importacc :: Command IO
+importacc =
+    command "importacc" "Create a new read-only account from an xpub file" $
     withOption netOpt $ \network ->
     withNonOption Argument.file $ \fp ->
         io $ do
@@ -288,9 +338,9 @@ watch =
                           ]
                     ]
 
-rename :: Command IO
-rename =
-    command "rename" "Rename an account" $
+renameacc :: Command IO
+renameacc =
+    command "renameacc" "Rename an account" $
     withOption netOpt $ \network ->
     withNonOption Argument.string $ \oldName ->
     withNonOption Argument.string $ \newName ->
@@ -305,15 +355,6 @@ rename =
                 formatStatic "renamed to" <+>
                 formatAccount (fromLString newName)
 
-accOpt :: Argument.Option String
-accOpt =
-    Argument.option
-        ['a']
-        ["account"]
-        (fromLString <$> Argument.string)
-        ""
-        "Account name"
-
 receive :: Command IO
 receive =
     command "receive" "Generate a new address to receive coins" $
@@ -326,15 +367,6 @@ receive =
                 updateAccountStore k $ const store'
                 renderIO $
                     addressFormat $ nonEmpty_ [(thd &&& fst) addr]
-
-cntOpt :: Argument.Option Natural
-cntOpt =
-    Argument.option
-        ['i']
-        ["number"]
-        (fromIntegral <$> Argument.natural)
-        5
-        "Number of addresses to display"
 
 addresses :: Command IO
 addresses =
@@ -374,27 +406,10 @@ addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
             ]
     n = length $ show $ maximum $ nonEmptyFmap fst as
 
-feeOpt :: Argument.Option Satoshi
-feeOpt =
-    Argument.option
-        ['f']
-        ["fee"]
-        (fromIntegral <$> Argument.natural)
-        200
-        "Fee per byte"
-
-dustOpt :: Argument.Option Satoshi
-dustOpt =
-    Argument.option
-        ['d']
-        ["dust"]
-        (fromIntegral <$> Argument.natural)
-        5430
-        "Do not create change outputs below this value"
-
-send :: Command IO
-send =
-    command "send" "Send coins (hw send address amount [address amount..])" $
+preparetx :: Command IO
+preparetx =
+    command "preparetx"
+            "Prepare a tx (hw preparetx address amount [address amount..])" $
     withOption accOpt $ \acc ->
     withOption feeOpt $ \feeByte ->
     withOption dustOpt $ \dust ->
@@ -448,8 +463,8 @@ toRecipient :: AmountUnit -> [String] -> Maybe (Address, Satoshi)
 toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
 toRecipient _ _         = Nothing
 
-sign :: Command IO
-sign = command "sign" "Sign the output of the \"send\" command" $
+signtx :: Command IO
+signtx = command "signtx" "Sign the output of the \"preparetx\" command" $
     withOption derOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -510,15 +525,6 @@ balance =
                         , nest 4 $ formatAmount unit bal
                         ]
 
-verbOpt :: Argument.Option Bool
-verbOpt =
-    Argument.option
-        ['v']
-        ["verbose"]
-        Argument.boolean
-        False
-        "Produce a more detailed output"
-
 transactions :: Command IO
 transactions = command "transactions" "Display the account transactions" $
     withOption accOpt $ \acc ->
@@ -549,8 +555,8 @@ transactions = command "transactions" "Display the account transactions" $
                             (Just currHeight)
                             txInfPath
 
-broadcast :: Command IO
-broadcast = command "broadcast" "broadcast a tx from a file in hex format" $
+sendtx :: Command IO
+sendtx = command "sendtx" "broadcast a tx from a file in hex format" $
     withOption netOpt $ \network ->
     withOption serOpt $ \s ->
     withNonOption Argument.file $ \fp ->
@@ -565,7 +571,7 @@ broadcast = command "broadcast" "broadcast a tx from a file in hex format" $
                 formatStatic "has been broadcast"
 
 help :: Command IO
-help = command "help" "Show usage info" $ io $ showUsage hwCommands
+help = command "help" "Show usage info" $ io $ renderIO usage
 
 {- Command Line Helpers -}
 
@@ -586,7 +592,7 @@ readDoc fileName = do
             if net == fromString networkName
                 then case decodeJson bytes of
                          Just (DocStructure _ res) -> return res
-                         _ -> err
+                         _                         -> err
                 else badNetErr $ fromText net
         _ -> err
   where
