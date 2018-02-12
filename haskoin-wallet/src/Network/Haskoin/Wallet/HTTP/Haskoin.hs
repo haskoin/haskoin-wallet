@@ -65,11 +65,14 @@ instance BlockchainService HaskoinService where
 getBalance :: [Address] -> IO Satoshi
 getBalance addrs = do
     v <- httpJsonGet opts url
-    return $ fromIntegral $ sum $ v ^.. values . key "confirmed" . _Integer
+    return $ fromMaybe err $ integralToNatural $ sum $ v ^.. values .
+        key "confirmed" .
+        _Integer
   where
     url = getURL <> "/address/balances"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
     aList = intercalate "," $ addrToBase58 <$> addrs
+    err = consoleError $ formatError "Balance was negative"
 
 getUnspent :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 getUnspent addrs = do
@@ -121,7 +124,7 @@ getAddressTxs addrs = do
         addrB58 <- v ^? key "address" . _String
         addr <- base58ToAddr $ fromText addrB58
         amnt <- v ^? key "amount" . _Integer
-        let heightM = fromIntegral <$> v ^? key "height" . _Integer
+        let heightM = integralToNatural =<< v ^? key "height" . _Integer
             blockM = hexToBlockHash . fromText =<< v ^? key "block" . _String
         return
             AddressTx
@@ -175,7 +178,7 @@ getTxs tids = do
     tList = intercalate "," $ txHashToHex <$> tids
     parseTx v = do
         tx <- decodeBytes =<< decodeHexText =<< v ^? key "hex" . _String
-        fee <- fromIntegral <$> v ^? key "fee" . _Integer
+        fee <- integralToNatural =<< v ^? key "fee" . _Integer
         return (tx, fee)
 
 broadcastTx :: Tx -> IO ()
@@ -190,7 +193,7 @@ broadcastTx tx = do
 getBestHeight :: IO Natural
 getBestHeight = do
     v <- httpJsonGet HTTP.defaults url
-    let resM = fromIntegral <$> v ^? key "height" . _Integer
+    let resM = integralToNatural =<< v ^? key "height" . _Integer
     maybe err return resM
   where
     url = getURL <> "/block/best"

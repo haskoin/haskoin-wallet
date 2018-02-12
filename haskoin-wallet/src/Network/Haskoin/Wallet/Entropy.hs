@@ -53,7 +53,8 @@ mixEntropy ent1 ent2
 diceToEntropy :: CountOf Word8 -> String -> Either String (UArray Word8)
 diceToEntropy ent rolls
     | length rolls /= requiredRolls ent =
-        Left $ show (requiredRolls ent) <> " dice rolls are required"
+        Left $
+        show (fromCount $ requiredRolls ent) <> " dice rolls are required"
     | otherwise = do
         bytes <- maybeToEither "Could not decode base6" $ decodeBase6 rolls
         case ent - length bytes of

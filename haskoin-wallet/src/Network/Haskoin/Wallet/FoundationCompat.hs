@@ -17,6 +17,7 @@ import qualified Network.Haskoin.Block        as Block
 import qualified Network.Haskoin.Crypto       as Crypto
 import qualified Network.Haskoin.Transaction  as Transaction
 import           Network.Haskoin.Util         (eitherToMaybe)
+import qualified Prelude
 
 {- Data.Aeson Compatibility -}
 
@@ -140,3 +141,7 @@ base58ToAddr = Crypto.base58ToAddr . stringToBS
 xPubExport :: Crypto.XPubKey -> String
 xPubExport = fst . fromBytesLenient . asBytes Crypto.xPubExport
 
+integralToNatural :: Prelude.Integral a => a -> Maybe Natural
+integralToNatural i
+    | i < 0 = Nothing
+    | otherwise = Just $ fromIntegral i

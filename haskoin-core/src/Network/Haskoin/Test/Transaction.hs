@@ -54,7 +54,7 @@ arbitraryLegacyTx :: Gen Tx
 arbitraryLegacyTx = do
     v    <- arbitrary
     ni   <- choose (0,5)
-    no   <- choose (0,5)
+    no   <- choose (if ni == 0 then 2 else 0, 5) -- avoid witness case
     inps <- vectorOf ni arbitraryTxIn
     outs <- vectorOf no arbitraryTxOut
     let uniqueInps = nubBy (\a b -> prevOutput a == prevOutput b) inps

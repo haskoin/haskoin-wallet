@@ -670,7 +670,7 @@ serviceSpec name service =
             (outputAddress . snd) <$>
                 res `shouldSatisfy`
                 all (== Right "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
-        it "can receive a transaction movement (online test)" $ do
+        it "can receive a transaction information (online test)" $ do
             res <-
                 httpTxInformation service
                     ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]

@@ -1,6 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
+{-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.HTTP.Insight
 ( InsightService(..)
 ) where
@@ -9,12 +9,12 @@ import           Control.Lens                            ((^..), (^?))
 import           Control.Monad                           (guard)
 import qualified Data.Aeson                              as Json
 import           Data.Aeson.Lens
-import           Data.List                               (sum, nub)
+import           Data.List                               (sum)
 import qualified Data.Map.Strict                         as Map
 import           Foundation
 import           Foundation.Collection
-import           Foundation.Numerical
 import           Foundation.Compat.Text
+import           Foundation.Numerical
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Crypto                  hiding (addrToBase58,
                                                           base58ToAddr)
@@ -78,7 +78,7 @@ getUnspent addrs = do
 getTxInformation :: [Address] -> IO [TxInformation]
 getTxInformation addrs = do
     v <- httpJsonGet HTTP.defaults url
-    let resM = mapM parseTxMovement $ v ^.. key "items" . values
+    let resM = mapM parseTxInformation $ v ^.. key "items" . values
         txInfs =
             fromMaybe
                 (consoleError $ formatError "Could not parse TxInformation")
@@ -92,12 +92,13 @@ getTxInformation addrs = do
   where
     url = getURL <> "/addrs/" <> toLString aList <> "/txs"
     aList = intercalate "," $ addrToBase58 <$> addrs
-    parseTxMovement v = do
+    parseTxInformation v = do
         tid <- hexToTxHash . fromText =<< v ^? key "txid" . _String
-        bytes <- fromIntegral <$> v ^? key "size" . _Integer
+        bytes <- integralToNatural =<< v ^? key "size" . _Integer
         feesDouble <- v ^? key "fees" . _Double
-        let feeSat = roundDown (feesDouble * 100000000) :: Satoshi
-            heightM = fromIntegral <$> v ^? key "blockheight" . _Integer
+        feeSat <-
+            integralToNatural (roundDown (feesDouble * 100000000) :: Integer)
+        let heightM = v ^? key "blockheight" . _Integer
             bidM = hexToBlockHash . fromText =<< v ^? key "blockhash" . _String
             is =
                 Map.fromListWith (+) $ mapMaybe parseVin $ v ^.. key "vin" .
@@ -108,20 +109,23 @@ getTxInformation addrs = do
         return
             TxInformation
             { txInformationTxHash = Just tid
-            , txInformationTxSize = Just bytes
+            , txInformationTxSize = Just $ fromIntegral bytes
             , txInformationOutbound = Map.empty
             , txInformationNonStd = 0
             , txInformationInbound = Map.map (, Nothing) os
             , txInformationMyInputs = Map.map (, Nothing) is
             , txInformationFee = Just feeSat
-            , txInformationHeight = heightM
+            , txInformationHeight = integralToNatural =<< heightM
             , txInformationBlockHash = bidM
             }
     parseVin v = do
         addr <- base58ToAddr . fromText =<< v ^? key "addr" . _String
         guard $ addr `elem` addrs
-        amnt <- fromIntegral <$> v ^? key "valueSat" . _Integer
-        return (addr, amnt)
+        amnt <- v ^? key "valueSat" . _Integer
+        let err =
+                consoleError $
+                formatError "Encountered a negative value in valueSat"
+        return (addr, fromMaybe err $ integralToNatural amnt)
     parseVout v = do
         let xs = v ^.. key "scriptPubKey" . key "addresses" . values . _String
         addr <- base58ToAddr . fromText . head =<< nonEmpty xs
@@ -152,8 +156,8 @@ broadcastTx tx = do
 getBestHeight :: IO Natural
 getBestHeight = do
     v <- httpJsonGet HTTP.defaults url
-    let resM = fromIntegral <$> v ^? key "info" . key "blocks" . _Integer
-    maybe err return resM
+    let resM = v ^? key "info" . key "blocks" . _Integer
+    maybe err return (integralToNatural =<< resM)
   where
     url = getURL <> "/status"
     err = consoleError $ formatError "Could not get the best block height"

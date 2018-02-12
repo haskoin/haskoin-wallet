@@ -52,11 +52,14 @@ instance BlockchainService BlockchainInfoService where
 getBalance :: [Address] -> IO Satoshi
 getBalance addrs = do
     v <- httpJsonGet opts url
-    return $ fromIntegral $ sum $ v ^.. members . key "final_balance" . _Integer
+    return $ fromMaybe err $ integralToNatural $ sum $ v ^.. members .
+        key "final_balance" .
+        _Integer
   where
     url = getURL <> "/balance"
     opts = HTTP.defaults & HTTP.param "active" .~ [toText aList]
     aList = intercalate "|" $ addrToBase58 <$> addrs
+    err = consoleError $ formatError "Balance was negative"
 
 getUnspent :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 getUnspent addrs = do
@@ -81,7 +84,7 @@ getUnspent addrs = do
 getTxInformation :: [Address] -> IO [TxInformation]
 getTxInformation addrs = do
     v <- httpJsonGet opts url
-    let resM = mapM parseTxMovement $ v ^.. key "txs" . values
+    let resM = mapM parseTxInformation $ v ^.. key "txs" . values
         txInfs =
             fromMaybe
                 (consoleError $ formatError "Could not parse TxInformation")
@@ -96,11 +99,11 @@ getTxInformation addrs = do
     url = getURL <> "/multiaddr"
     opts = HTTP.defaults & HTTP.param "active" .~ [toText aList]
     aList = intercalate "|" $ addrToBase58 <$> addrs
-    parseTxMovement v = do
+    parseTxInformation v = do
         tid <- hexToTxHash . fromText =<< v ^? key "hash" . _String
-        size <- v ^? key "size" . _Integer
-        fee <- v ^? key "fee" . _Integer
-        let heightM = fromIntegral <$> v ^? key "block_height" . _Integer
+        size <- integralToNatural =<< v ^? key "size" . _Integer
+        fee <- integralToNatural =<< v ^? key "fee" . _Integer
+        let heightM = integralToNatural =<< v ^? key "block_height" . _Integer
             is =
                 Map.fromList $ mapMaybe go $ v ^.. key "inputs" . values .
                 key "prev_out"
@@ -113,15 +116,18 @@ getTxInformation addrs = do
             , txInformationNonStd = 0
             , txInformationInbound = Map.map (, Nothing) os
             , txInformationMyInputs = Map.map (, Nothing) is
-            , txInformationFee = Just $ fromIntegral fee
+            , txInformationFee = Just fee
             , txInformationHeight = heightM
             , txInformationBlockHash = Nothing
             }
     go v = do
         addr <- base58ToAddr . fromText =<< v ^? key "addr" . _String
         guard $ addr `elem` addrs
-        amnt <- fromIntegral <$> v ^? key "value" . _Integer
-        return (addr, amnt)
+        amnt <- v ^? key "value" . _Integer
+        let err =
+                consoleError $
+                formatError "Encountered a negative value"
+        return (addr, fromMaybe err $ integralToNatural amnt)
 
 getTx :: TxHash -> IO Tx
 getTx tid = do
@@ -143,7 +149,7 @@ broadcastTx tx = do
 getBestHeight :: IO Natural
 getBestHeight = do
     v <- httpJsonGet HTTP.defaults url
-    let resM = fromIntegral <$> v ^? key "height" . _Integer
+    let resM = integralToNatural =<< v ^? key "height" . _Integer
     maybe err return resM
   where
     url = getURL <> "/latestblock"
