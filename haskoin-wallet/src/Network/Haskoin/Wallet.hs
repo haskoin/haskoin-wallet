@@ -184,9 +184,12 @@ hwCommands =
 hw :: Command IO
 hw = command "hw" "bitcoin wallet management" $ io $ renderIO usage
 
+help :: Command IO
+help = command (cmdNameL cmdHelp) (cmdDescL cmdHelp) $ io $ renderIO usage
+
 mnemonic :: Command IO
 mnemonic =
-    command (toLString cmdMnemonic) "Generate a mnemonic" $
+    command (cmdNameL cmdMnemonic) (cmdDescL cmdMnemonic) $
     withOption entOpt $ \reqEnt ->
     withOption diceOpt $ \useDice ->
         io $ do
@@ -224,7 +227,7 @@ mnemonicPrinter n ws =
 
 createacc :: Command IO
 createacc =
-    command (toLString cmdCreateAcc) "Derive a public key from a mnemonic" $
+    command (cmdNameL cmdCreateAcc) (cmdDescL cmdCreateAcc) $
     withOption derOpt $ \deriv ->
     withOption netOpt $ \network ->
         io $ do
@@ -248,7 +251,7 @@ createacc =
 
 importacc :: Command IO
 importacc =
-    command (toLString cmdImportAcc) "Create a new read-only account" $
+    command (cmdNameL cmdImportAcc) (cmdDescL cmdImportAcc) $
     withOption netOpt $ \network ->
     withNonOption Argument.file $ \fp ->
         io $ do
@@ -278,7 +281,7 @@ importacc =
 
 renameacc :: Command IO
 renameacc =
-    command (toLString cmdRenameAcc) "Rename an account" $
+    command (cmdNameL cmdRenameAcc) (cmdDescL cmdRenameAcc) $
     withOption netOpt $ \network ->
     withNonOption Argument.string $ \oldName ->
     withNonOption Argument.string $ \newName ->
@@ -295,7 +298,7 @@ renameacc =
 
 receive :: Command IO
 receive =
-    command (toLString cmdReceive) "Generate a new address to receive coins" $
+    command (cmdNameL cmdReceive) (cmdDescL cmdReceive) $
     withOption accOpt $ \acc ->
     withOption netOpt $ \network ->
         io $ do
@@ -308,7 +311,7 @@ receive =
 
 addresses :: Command IO
 addresses =
-    command (toLString cmdAddresses) "Display historical addresses" $
+    command (cmdNameL cmdAddresses) (cmdDescL cmdAddresses) $
     withOption accOpt $ \acc ->
     withOption cntOpt $ \cnt ->
     withOption netOpt $ \network ->
@@ -346,7 +349,7 @@ addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
 
 preparetx :: Command IO
 preparetx =
-    command (toLString cmdPrepareTx) "Create an unsigned transaction" $
+    command (cmdNameL cmdPrepareTx) (cmdDescL cmdPrepareTx) $
     withOption accOpt $ \acc ->
     withOption feeOpt $ \feeByte ->
     withOption dustOpt $ \dust ->
@@ -401,7 +404,7 @@ toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
 toRecipient _ _         = Nothing
 
 signtx :: Command IO
-signtx = command (toLString cmdSignTx) "Sign the output of preparetx" $
+signtx = command (cmdNameL cmdSignTx) (cmdDescL cmdSignTx) $
     withOption derOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -442,7 +445,7 @@ signtx = command (toLString cmdSignTx) "Sign the output of preparetx" $
 
 balance :: Command IO
 balance =
-    command (toLString cmdBalance) "Display the account balance" $
+    command (cmdNameL cmdBalance) (cmdDescL cmdBalance) $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -463,7 +466,7 @@ balance =
                         ]
 
 transactions :: Command IO
-transactions = command (toLString cmdTransactions) "Display the account txs" $
+transactions = command (cmdNameL cmdTransactions) (cmdDescL cmdTransactions) $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -493,7 +496,7 @@ transactions = command (toLString cmdTransactions) "Display the account txs" $
                             txInfPath
 
 sendtx :: Command IO
-sendtx = command (toLString cmdSendTx) "broadcast a tx" $
+sendtx = command (cmdNameL cmdSendTx) (cmdDescL cmdSendTx) $
     withOption netOpt $ \network ->
     withOption serOpt $ \s ->
     withNonOption Argument.file $ \fp ->
@@ -506,9 +509,6 @@ sendtx = command (toLString cmdSendTx) "broadcast a tx" $
                 formatStatic "Tx" <+>
                 formatTxHash (txHashToHex $ txHash tx) <+>
                 formatStatic "has been broadcast"
-
-help :: Command IO
-help = command (toLString cmdHelp) "Show usage info" $ io $ renderIO usage
 
 {- Command Line Helpers -}
 
