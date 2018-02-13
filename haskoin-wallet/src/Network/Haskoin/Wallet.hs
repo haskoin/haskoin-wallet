@@ -56,41 +56,21 @@ clientMain = single hwCommands
 
 {- Options -}
 
+toOpt :: ConsoleOption a -> Argument.Type a -> Argument.Option a
+toOpt (ConsoleOption short long _ def desc) t =
+    Argument.option [short] [toLString long] t def (toLString desc)
+
 entOpt :: Argument.Option Natural
-entOpt =
-    Argument.option
-        ['e']
-        ["entropy"]
-        (fromIntegral <$> Argument.natural)
-        16
-        "Entropy in bytes to generate the mnemonic [16,20..32]"
+entOpt = toOpt getEntOpt (fromIntegral <$> Argument.natural)
 
 diceOpt :: Argument.Option Bool
-diceOpt =
-    Argument.option
-        ['d']
-        ["dice"]
-        Argument.boolean
-        False
-        "Provide additional entropy from 6-sided dice rolls"
+diceOpt = toOpt getDiceOpt Argument.boolean
 
 derOpt :: Argument.Option Natural
-derOpt =
-    Argument.option
-        ['d']
-        ["deriv"]
-        (fromIntegral <$> Argument.natural)
-        0
-        "Bip44 account derivation"
+derOpt = toOpt getDerOpt (fromIntegral <$> Argument.natural)
 
 netOpt :: Argument.Option String
-netOpt =
-    Argument.option
-        ['n']
-        ["network"]
-        (fromLString <$> Argument.string)
-        "bitcoin"
-        "Set the network (bitcoin|testnet3|bitcoincash|cashtest)"
+netOpt = toOpt getNetOpt (fromLString <$> Argument.string)
 
 setOptNet :: String -> IO ()
 setOptNet name
@@ -122,13 +102,7 @@ setOptNet name
             ]
 
 unitOpt :: Argument.Option String
-unitOpt =
-    Argument.option
-        ['u']
-        ["unit"]
-        (fromLString <$> Argument.string)
-        "bitcoin"
-        "Set the units for amounts (bitcoin|bit|satoshi)"
+unitOpt = toOpt getUnitOpt (fromLString <$> Argument.string)
 
 parseUnit :: String -> AmountUnit
 parseUnit unit =
@@ -145,13 +119,7 @@ parseUnit unit =
                 ]
 
 serOpt :: Argument.Option String
-serOpt =
-    Argument.option
-        ['s']
-        ["service"]
-        (fromLString <$> Argument.string)
-        ""
-        "Blockchain service (haskoin|blockchain|insight)"
+serOpt = toOpt getSerOpt (fromLString <$> Argument.string)
 
 parseBlockchainService :: String -> Service
 parseBlockchainService service =
@@ -179,49 +147,19 @@ defaultBlockchainService
         "No blockchain service for network " <> fromLString networkName
 
 accOpt :: Argument.Option String
-accOpt =
-    Argument.option
-        ['a']
-        ["account"]
-        (fromLString <$> Argument.string)
-        ""
-        "Account name"
+accOpt = toOpt getAccOpt (fromLString <$> Argument.string)
 
 cntOpt :: Argument.Option Natural
-cntOpt =
-    Argument.option
-        ['c']
-        ["count"]
-        (fromIntegral <$> Argument.natural)
-        5
-        "Number of addresses to display"
+cntOpt = toOpt getCntOpt (fromIntegral <$> Argument.natural)
 
 feeOpt :: Argument.Option Satoshi
-feeOpt =
-    Argument.option
-        ['f']
-        ["fee"]
-        (fromIntegral <$> Argument.natural)
-        200
-        "Fee per byte"
+feeOpt = toOpt getFeeOpt (fromIntegral <$> Argument.natural)
 
 dustOpt :: Argument.Option Satoshi
-dustOpt =
-    Argument.option
-        ['d']
-        ["dust"]
-        (fromIntegral <$> Argument.natural)
-        5430
-        "Do not create change outputs below this value"
+dustOpt = toOpt getDustOpt (fromIntegral <$> Argument.natural)
 
 verbOpt :: Argument.Option Bool
-verbOpt =
-    Argument.option
-        ['v']
-        ["verbose"]
-        Argument.boolean
-        False
-        "Produce a more detailed output"
+verbOpt = toOpt getVerbOpt Argument.boolean
 
 {- Commands -}
 

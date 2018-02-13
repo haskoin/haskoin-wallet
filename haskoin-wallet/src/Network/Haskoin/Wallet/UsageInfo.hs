@@ -1,10 +1,10 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-module Network.Haskoin.Wallet.UsageInfo (usage) where
+module Network.Haskoin.Wallet.UsageInfo where
 
-import Foundation
-import Foundation.String
-import Network.Haskoin.Wallet.ConsolePrinter
+import           Foundation
+import           Network.Haskoin.Wallet.ConsolePrinter
+import           Network.Haskoin.Wallet.FoundationCompat
 
 usage :: ConsolePrinter
 usage =
@@ -13,15 +13,15 @@ usage =
         , formatTitle "hw" <+>
           formatCommand "command" <+>
           formatStatic "[" <> formatArgument "Args" <> formatStatic "]" <+>
-          formatStatic "[--" <> formatOption "options" <> formatStatic "]" 
+          formatStatic "[--" <> formatOption "options" <> formatStatic "]"
         , formatStatic "Lightweight Bitcoin and Bitcoin Cash wallet."
         , ConsoleNonEmpty
-        , nest 2 commands
+        , nest 2 printerCommands
         , ConsoleNonEmpty
         ]
 
-commands :: ConsolePrinter
-commands =
+printerCommands :: ConsolePrinter
+printerCommands =
     vcat $ intersperse ConsoleNonEmpty
     [ cmdHelp
     , cmdMnemonic
@@ -50,7 +50,7 @@ cmdMnemonic =
         [ formatCommand "mnemonic"
         , fOffline <+> followup ["createacc", "signtx"]
         , formatStatic "Generate a mnemonic using your systems entropy."
-        , nest 2 $ vcat [fDiceOpt, fEntOpt]
+        , nest 2 $ vcat [fOpt getDiceOpt, fOpt getEntOpt]
         ]
 
 cmdCreateAcc :: ConsolePrinter
@@ -59,7 +59,7 @@ cmdCreateAcc =
         [ formatCommand "createacc"
         , fOffline <+> followup ["importacc"]
         , formatStatic "Create a new account from a mnemonic."
-        , nest 2 $ vcat [fDerOpt, fNetOpt]
+        , nest 2 $ vcat [fOpt getDerOpt, fOpt getNetOpt]
         ]
 
 cmdImportAcc :: ConsolePrinter
@@ -68,7 +68,7 @@ cmdImportAcc =
         [ formatCommand "importacc" <+> formatArgument "Filename"
         , followup ["receive"]
         , formatStatic "Import an account file into the wallet."
-        , nest 2 $ fNetOpt
+        , nest 2 $ fOpt getNetOpt
         ]
 
 cmdRenameAcc :: ConsolePrinter
@@ -77,7 +77,7 @@ cmdRenameAcc =
         [ formatCommand "renameacc" <+>
           formatArgument "OldName" <+> formatArgument "NewName"
         , formatStatic "Rename an account."
-        , nest 2 $ fNetOpt
+        , nest 2 $ fOpt getNetOpt
         ]
 
 cmdReceive :: ConsolePrinter
@@ -85,7 +85,7 @@ cmdReceive =
     vcat
         [ formatCommand "receive"
         , formatStatic "Generate a new address for receiving a payment."
-        , nest 2 $ vcat [ fAccOpt, fNetOpt ]
+        , nest 2 $ vcat [fOpt getAccOpt, fOpt getNetOpt]
         ]
 
 cmdAddresses :: ConsolePrinter
@@ -93,7 +93,7 @@ cmdAddresses =
     vcat
         [ formatCommand "addresses"
         , formatStatic "List the latest receiving addresses in your account."
-        , nest 2 $ vcat [ fCntOpt, fAccOpt, fNetOpt ]
+        , nest 2 $ vcat [fOpt getCntOpt, fOpt getAccOpt, fOpt getNetOpt]
         ]
 
 cmdPrepareTx :: ConsolePrinter
@@ -103,7 +103,15 @@ cmdPrepareTx =
           formatArgument "address value [address2 value2 ...]"
         , fOnline <+> followup ["signtx"]
         , formatStatic "Prepare a new unsigned transaction."
-        , nest 2 $ vcat [ fFeeOpt, fDustOpt, fUnitOpt, fAccOpt, fNetOpt, fSerOpt ]
+        , nest 2 $
+          vcat
+              [ fOpt getFeeOpt
+              , fOpt getDustOpt
+              , fOpt getUnitOpt
+              , fOpt getAccOpt
+              , fOpt getNetOpt
+              , fOpt getSerOpt
+              ]
         ]
 
 cmdSignTx :: ConsolePrinter
@@ -112,7 +120,7 @@ cmdSignTx =
         [ formatCommand "signtx" <+> formatArgument "Filename"
         , fOffline <+> followup ["sendtx"]
         , formatStatic "Sign a transaction that was created with preparetx."
-        , nest 2 $ vcat [ fDerOpt, fUnitOpt, fNetOpt ]
+        , nest 2 $ vcat [ fOpt getDerOpt, fOpt getUnitOpt, fOpt getNetOpt ]
         ]
 
 cmdSendTx :: ConsolePrinter
@@ -121,7 +129,7 @@ cmdSendTx =
         [ formatCommand "sendtx" <+> formatArgument "Filename"
         , fOnline
         , formatStatic "Broadcast a transaction that was signed with signtx."
-        , nest 2 $ vcat [ fNetOpt, fSerOpt ]
+        , nest 2 $ vcat [ fOpt getNetOpt, fOpt getSerOpt ]
         ]
 
 cmdBalance :: ConsolePrinter
@@ -130,7 +138,8 @@ cmdBalance =
         [ formatCommand "balance"
         , fOnline
         , formatStatic "Display the account balance."
-        , nest 2 $ vcat [ fAccOpt, fUnitOpt, fNetOpt, fSerOpt ]
+        , nest 2 $
+          vcat [fOpt getAccOpt, fOpt getUnitOpt, fOpt getNetOpt, fOpt getSerOpt]
         ]
 
 cmdTransactions :: ConsolePrinter
@@ -139,76 +148,131 @@ cmdTransactions =
         [ formatCommand "transactions"
         , fOnline
         , formatStatic "Display the account transactions."
-        , nest 2 $ vcat [ fAccOpt, fUnitOpt, fVerOpt, fNetOpt, fSerOpt ]
+        , nest 2 $
+          vcat
+              [ fOpt getAccOpt
+              , fOpt getUnitOpt
+              , fOpt getVerbOpt
+              , fOpt getNetOpt
+              , fOpt getSerOpt
+              ]
         ]
 
-fDiceOpt :: ConsolePrinter
-fDiceOpt =
-  fOpt "d" "dice" "True" "False" <+>
-  formatStatic "Provide additional entropy using 6-sided dice."
+data ConsoleOption a = ConsoleOption
+    { consoleOptionShort       :: !Char
+    , consoleOptionLong        :: !String
+    , consoleOptionExample     :: [String]
+    , consoleOptionDefault     :: a
+    , consoleOptionDescription :: !String
+    }
 
-fEntOpt :: ConsolePrinter
-fEntOpt =
-  fOpt "e" "entropy" "[16,20..32]" "16" <+>
-  formatStatic "Use more entropy to generate a mnemonic."
+getDiceOpt :: ConsoleOption Bool
+getDiceOpt =
+    ConsoleOption
+        'd'
+        "dice"
+        ["True"]
+        False
+        "Provide additional entropy using 6-sided dice."
 
-fDerOpt :: ConsolePrinter
-fDerOpt =
-    fOpt "d" "deriv" "1" "0" <+>
-    formatStatic "Specify a different bip44 account derivation."
+getEntOpt :: ConsoleOption Natural
+getEntOpt =
+    ConsoleOption
+        'e'
+        "entropy"
+        ["[16,20..32]"]
+        16
+        "Use more entropy to generate a mnemonic."
 
-fNetOpt :: ConsolePrinter
-fNetOpt =
-    fOpt "n" "network" "[bitcoin,testnet3,bitcoincash,cashtest]" "bitcoin"
+getDerOpt :: ConsoleOption Natural
+getDerOpt =
+    ConsoleOption
+        'd'
+        "deriv"
+        ["1"]
+        0
+        "Specify a different bip44 account derivation."
 
-fAccOpt :: ConsolePrinter
-fAccOpt =
-    fOpt "a" "account" "main" "" <+>
-    formatStatic "Specify a different account to use for this command."
+getNetOpt :: ConsoleOption String
+getNetOpt =
+    ConsoleOption
+        'n'
+        "network"
+        ["bitcoin", "testnet3", "bitcoincash", "cashtest"]
+        "bitcoin"
+        ""
 
-fCntOpt :: ConsolePrinter
-fCntOpt =
-    fOpt "c" "count" "10" "5" <+>
-    formatStatic "Number of addresses to display."
+getAccOpt :: ConsoleOption String
+getAccOpt =
+    ConsoleOption
+        'a'
+        "account"
+        ["main"]
+        ""
+        "Specify a different account to use for this command."
 
-fFeeOpt :: ConsolePrinter
-fFeeOpt =
-    fOpt "f" "fee" "50" "200" <+>
-    formatStatic "Fee to pay in sat/bytes"
+getCntOpt :: ConsoleOption Natural
+getCntOpt = ConsoleOption 'c' "count" ["10"] 5 "Number of addresses to display."
 
-fDustOpt :: ConsolePrinter
-fDustOpt =
-    fOpt "d" "dust" "8000" "5430" <+>
-    formatStatic "Smallest allowed satoshi value for change outputs."
+getFeeOpt :: ConsoleOption Natural
+getFeeOpt = ConsoleOption 'f' "fee" ["50"] 200 "Fee to pay in sat/bytes"
 
-fUnitOpt :: ConsolePrinter
-fUnitOpt =
-    fOpt "u" "unit" "[bitcoin,bit,satoshi]" "bitcoin" <+>
-    formatStatic "Specify the unit for displayed amounts."
+getDustOpt :: ConsoleOption Natural
+getDustOpt =
+    ConsoleOption
+        'd'
+        "dust"
+        ["8000"]
+        5430
+        "Smallest allowed satoshi value for change outputs."
 
-fSerOpt :: ConsolePrinter
-fSerOpt =
-    fOpt "s" "service" "[haskoin,blockchain,insight]" "haskoin" <+>
-    formatStatic "HTTP data service."
+getUnitOpt :: ConsoleOption String
+getUnitOpt =
+    ConsoleOption
+        'u'
+        "unit"
+        ["bitcoin", "bit", "satoshi"]
+        "bitcoin"
+        "Specify the unit for displayed amounts."
 
-fVerOpt :: ConsolePrinter
-fVerOpt =
-    fOpt "v" "verbose" "True" "False" <+>
-    formatStatic "Produce a more detailed output for this command."
+getSerOpt :: ConsoleOption String
+getSerOpt =
+    ConsoleOption
+        's'
+        "service"
+        ["haskoin", "blockchain", "insight"]
+        "haskoin"
+        "HTTP data service."
+
+getVerbOpt :: ConsoleOption Bool
+getVerbOpt =
+    ConsoleOption
+        'v'
+        "verbose"
+        ["True"]
+        False
+        "Produce a more detailed output for this command."
 
 {- Helpers -}
 
-fOpt :: String -> String -> String -> String -> ConsolePrinter
-fOpt short long example def =
+fOpt :: Show a => ConsoleOption a -> ConsolePrinter
+fOpt (ConsoleOption short long examples def str) =
     hsep
-        [ formatStatic "-" <> formatOption short
-        , formatStatic "--" <> formatOption long <> formatStatic "=" <>
-          formatOptExample example
-        , if null def
-              then mempty
-              else formatStatic "(Default:" <+>
-                   formatOptExample def <> formatStatic ")"
+        [ formatStatic "-" <> formatOption (fromLString [short])
+        , formatStatic "--" <> formatOption long <> formatStatic "=" <> fExample
+        , formatStatic "(Default:" <+>
+          formatOptExample (show def) <> formatStatic ")"
+        , formatStatic str
         ]
+  where
+    fExample =
+        case examples of
+            [] -> mempty
+            [e] -> formatOptExample e
+            es ->
+                formatStatic "[" <>
+                intercalate (formatStatic ",") (formatOptExample <$> es) <>
+                formatStatic "]"
 
 followup :: [String] -> ConsolePrinter
 followup cmds =
