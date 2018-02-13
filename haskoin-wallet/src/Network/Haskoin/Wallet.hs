@@ -186,7 +186,7 @@ hw = command "hw" "bitcoin wallet management" $ io $ renderIO usage
 
 mnemonic :: Command IO
 mnemonic =
-    command "mnemonic" "Generate a mnemonic" $
+    command (toLString cmdMnemonic) "Generate a mnemonic" $
     withOption entOpt $ \reqEnt ->
     withOption diceOpt $ \useDice ->
         io $ do
@@ -224,7 +224,7 @@ mnemonicPrinter n ws =
 
 createacc :: Command IO
 createacc =
-    command "createacc" "Derive a public key from a mnemonic" $
+    command (toLString cmdCreateAcc) "Derive a public key from a mnemonic" $
     withOption derOpt $ \deriv ->
     withOption netOpt $ \network ->
         io $ do
@@ -248,7 +248,7 @@ createacc =
 
 importacc :: Command IO
 importacc =
-    command "importacc" "Create a new read-only account from an xpub file" $
+    command (toLString cmdImportAcc) "Create a new read-only account" $
     withOption netOpt $ \network ->
     withNonOption Argument.file $ \fp ->
         io $ do
@@ -278,7 +278,7 @@ importacc =
 
 renameacc :: Command IO
 renameacc =
-    command "renameacc" "Rename an account" $
+    command (toLString cmdRenameAcc) "Rename an account" $
     withOption netOpt $ \network ->
     withNonOption Argument.string $ \oldName ->
     withNonOption Argument.string $ \newName ->
@@ -295,7 +295,7 @@ renameacc =
 
 receive :: Command IO
 receive =
-    command "receive" "Generate a new address to receive coins" $
+    command (toLString cmdReceive) "Generate a new address to receive coins" $
     withOption accOpt $ \acc ->
     withOption netOpt $ \network ->
         io $ do
@@ -308,7 +308,7 @@ receive =
 
 addresses :: Command IO
 addresses =
-    command "addresses" "Display historical addresses" $
+    command (toLString cmdAddresses) "Display historical addresses" $
     withOption accOpt $ \acc ->
     withOption cntOpt $ \cnt ->
     withOption netOpt $ \network ->
@@ -346,8 +346,7 @@ addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
 
 preparetx :: Command IO
 preparetx =
-    command "preparetx"
-            "Prepare a tx (hw preparetx address amount [address amount..])" $
+    command (toLString cmdPrepareTx) "Create an unsigned transaction" $
     withOption accOpt $ \acc ->
     withOption feeOpt $ \feeByte ->
     withOption dustOpt $ \dust ->
@@ -402,7 +401,7 @@ toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
 toRecipient _ _         = Nothing
 
 signtx :: Command IO
-signtx = command "signtx" "Sign the output of the \"preparetx\" command" $
+signtx = command (toLString cmdSignTx) "Sign the output of preparetx" $
     withOption derOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -443,7 +442,7 @@ signtx = command "signtx" "Sign the output of the \"preparetx\" command" $
 
 balance :: Command IO
 balance =
-    command "balance" "Display the account balance" $
+    command (toLString cmdBalance) "Display the account balance" $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -464,7 +463,7 @@ balance =
                         ]
 
 transactions :: Command IO
-transactions = command "transactions" "Display the account transactions" $
+transactions = command (toLString cmdTransactions) "Display the account txs" $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
@@ -494,7 +493,7 @@ transactions = command "transactions" "Display the account transactions" $
                             txInfPath
 
 sendtx :: Command IO
-sendtx = command "sendtx" "broadcast a tx from a file in hex format" $
+sendtx = command (toLString cmdSendTx) "broadcast a tx" $
     withOption netOpt $ \network ->
     withOption serOpt $ \s ->
     withNonOption Argument.file $ \fp ->
@@ -509,7 +508,7 @@ sendtx = command "sendtx" "broadcast a tx from a file in hex format" $
                 formatStatic "has been broadcast"
 
 help :: Command IO
-help = command "help" "Show usage info" $ io $ renderIO usage
+help = command (toLString cmdHelp) "Show usage info" $ io $ renderIO usage
 
 {- Command Line Helpers -}
 

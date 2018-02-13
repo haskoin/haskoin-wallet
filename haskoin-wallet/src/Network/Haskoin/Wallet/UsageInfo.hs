@@ -23,85 +23,121 @@ usage =
 printerCommands :: ConsolePrinter
 printerCommands =
     vcat $ intersperse ConsoleNonEmpty
-    [ cmdHelp
-    , cmdMnemonic
-    , cmdCreateAcc
-    , cmdImportAcc
-    , cmdRenameAcc
-    , cmdReceive
-    , cmdAddresses
-    , cmdPrepareTx
-    , cmdSignTx
-    , cmdSendTx
-    , cmdBalance
-    , cmdTransactions
+    [ cmdHelpFormat
+    , cmdMnemonicFormat
+    , cmdCreateAccFormat
+    , cmdImportAccFormat
+    , cmdRenameAccFormat
+    , cmdReceiveFormat
+    , cmdAddressesFormat
+    , cmdPrepareTxFormat
+    , cmdSignTxFormat
+    , cmdSendTxFormat
+    , cmdBalanceFormat
+    , cmdTransactionsFormat
     ]
 
-cmdHelp :: ConsolePrinter
-cmdHelp =
+cmdHelp :: String
+cmdHelp = "help"
+
+cmdMnemonic :: String
+cmdMnemonic = "mnemonic"
+
+cmdCreateAcc :: String
+cmdCreateAcc = "createacc"
+
+cmdImportAcc :: String
+cmdImportAcc = "importacc"
+
+cmdRenameAcc :: String
+cmdRenameAcc = "renameacc"
+
+cmdReceive :: String
+cmdReceive = "receive"
+
+cmdAddresses :: String
+cmdAddresses = "addresses"
+
+cmdPrepareTx :: String
+cmdPrepareTx = "preparetx"
+
+cmdSignTx :: String
+cmdSignTx = "signtx"
+
+cmdSendTx :: String
+cmdSendTx = "sendtx"
+
+cmdBalance :: String
+cmdBalance = "balance"
+
+cmdTransactions :: String
+cmdTransactions = "transactions"
+
+cmdHelpFormat :: ConsolePrinter
+cmdHelpFormat =
     vcat
-        [ formatCommand "help"
+        [ formatCommand cmdHelp
         , formatStatic "Display this information."
         ]
 
-cmdMnemonic :: ConsolePrinter
-cmdMnemonic =
+cmdMnemonicFormat :: ConsolePrinter
+cmdMnemonicFormat =
     vcat
-        [ formatCommand "mnemonic"
-        , fOffline <+> followup ["createacc", "signtx"]
+        [ formatCommand cmdMnemonic
+        , fOffline <+> followup [cmdCreateAcc, cmdSignTx]
         , formatStatic "Generate a mnemonic using your systems entropy."
         , nest 2 $ vcat [fOpt getDiceOpt, fOpt getEntOpt]
         ]
 
-cmdCreateAcc :: ConsolePrinter
-cmdCreateAcc =
+cmdCreateAccFormat :: ConsolePrinter
+cmdCreateAccFormat =
     vcat
-        [ formatCommand "createacc"
-        , fOffline <+> followup ["importacc"]
+        [ formatCommand cmdCreateAcc
+        , fOffline <+> followup [cmdImportAcc]
         , formatStatic "Create a new account from a mnemonic."
         , nest 2 $ vcat [fOpt getDerOpt, fOpt getNetOpt]
         ]
 
-cmdImportAcc :: ConsolePrinter
-cmdImportAcc =
+cmdImportAccFormat :: ConsolePrinter
+cmdImportAccFormat =
     vcat
-        [ formatCommand "importacc" <+> formatArgument "Filename"
-        , followup ["receive"]
+        [ formatCommand cmdImportAcc <+> formatArgument "Filename"
+        , followup [cmdReceive]
         , formatStatic "Import an account file into the wallet."
         , nest 2 $ fOpt getNetOpt
         ]
 
-cmdRenameAcc :: ConsolePrinter
-cmdRenameAcc =
+cmdRenameAccFormat :: ConsolePrinter
+cmdRenameAccFormat =
     vcat
-        [ formatCommand "renameacc" <+>
+        [ formatCommand cmdRenameAcc <+>
           formatArgument "OldName" <+> formatArgument "NewName"
         , formatStatic "Rename an account."
         , nest 2 $ fOpt getNetOpt
         ]
 
-cmdReceive :: ConsolePrinter
-cmdReceive =
+cmdReceiveFormat :: ConsolePrinter
+cmdReceiveFormat =
     vcat
-        [ formatCommand "receive"
+        [ formatCommand cmdReceive
         , formatStatic "Generate a new address for receiving a payment."
         , nest 2 $ vcat [fOpt getAccOpt, fOpt getNetOpt]
         ]
 
-cmdAddresses :: ConsolePrinter
-cmdAddresses =
+cmdAddressesFormat :: ConsolePrinter
+cmdAddressesFormat =
     vcat
-        [ formatCommand "addresses"
+        [ formatCommand cmdAddresses
         , formatStatic "List the latest receiving addresses in your account."
         , nest 2 $ vcat [fOpt getCntOpt, fOpt getAccOpt, fOpt getNetOpt]
         ]
 
-cmdPrepareTx :: ConsolePrinter
-cmdPrepareTx =
+cmdPrepareTxFormat :: ConsolePrinter
+cmdPrepareTxFormat =
     vcat
-        [ formatCommand "preparetx" <+>
+        [ formatCommand cmdPrepareTx <+>
           formatArgument "address value [address2 value2 ...]"
-        , fOnline <+> followup ["signtx"]
+        , fOnline <+> followup [cmdSignTx]
         , formatStatic "Prepare a new unsigned transaction."
         , nest 2 $
           vcat
@@ -114,38 +150,38 @@ cmdPrepareTx =
               ]
         ]
 
-cmdSignTx :: ConsolePrinter
-cmdSignTx =
+cmdSignTxFormat :: ConsolePrinter
+cmdSignTxFormat =
     vcat
-        [ formatCommand "signtx" <+> formatArgument "Filename"
-        , fOffline <+> followup ["sendtx"]
+        [ formatCommand cmdSignTx <+> formatArgument "Filename"
+        , fOffline <+> followup [cmdSendTx]
         , formatStatic "Sign a transaction that was created with preparetx."
         , nest 2 $ vcat [ fOpt getDerOpt, fOpt getUnitOpt, fOpt getNetOpt ]
         ]
 
-cmdSendTx :: ConsolePrinter
-cmdSendTx =
+cmdSendTxFormat :: ConsolePrinter
+cmdSendTxFormat =
     vcat
-        [ formatCommand "sendtx" <+> formatArgument "Filename"
+        [ formatCommand cmdSendTx <+> formatArgument "Filename"
         , fOnline
         , formatStatic "Broadcast a transaction that was signed with signtx."
         , nest 2 $ vcat [ fOpt getNetOpt, fOpt getSerOpt ]
         ]
 
-cmdBalance :: ConsolePrinter
-cmdBalance =
+cmdBalanceFormat :: ConsolePrinter
+cmdBalanceFormat =
     vcat
-        [ formatCommand "balance"
+        [ formatCommand cmdBalance 
         , fOnline
         , formatStatic "Display the account balance."
         , nest 2 $
           vcat [fOpt getAccOpt, fOpt getUnitOpt, fOpt getNetOpt, fOpt getSerOpt]
         ]
 
-cmdTransactions :: ConsolePrinter
-cmdTransactions =
+cmdTransactionsFormat :: ConsolePrinter
+cmdTransactionsFormat =
     vcat
-        [ formatCommand "transactions"
+        [ formatCommand cmdTransactions
         , fOnline
         , formatStatic "Display the account transactions."
         , nest 2 $
