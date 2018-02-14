@@ -116,6 +116,7 @@ getTxInformation addrs = do
             , txInformationNonStd = 0
             , txInformationInbound = Map.map (, Nothing) os
             , txInformationMyInputs = Map.map (, Nothing) is
+            , txInformationOtherInputs = Map.empty
             , txInformationFee = Just fee
             , txInformationHeight = heightM
             , txInformationBlockHash = Nothing
@@ -124,9 +125,7 @@ getTxInformation addrs = do
         addr <- base58ToAddr . fromText =<< v ^? key "addr" . _String
         guard $ addr `elem` addrs
         amnt <- v ^? key "value" . _Integer
-        let err =
-                consoleError $
-                formatError "Encountered a negative value"
+        let err = consoleError $ formatError "Encountered a negative value"
         return (addr, fromMaybe err $ integralToNatural amnt)
 
 getTx :: TxHash -> IO Tx

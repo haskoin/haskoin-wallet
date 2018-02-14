@@ -56,7 +56,7 @@ buildTxSignData service store rcpMap feeByte dust
             fmap toWalletCoin <$> httpUnspent service (Map.keys walletAddrMap)
         case buildWalletTx walletAddrMap allCoins change rcpMap feeByte dust of
             Right (tx, depTxHash, inDeriv, outDeriv) -> do
-                depTxs <- mapM (httpTx service) depTxHash
+                depTxs <- httpTxs service depTxHash
                 return $
                     Right
                         ( TxSignData
@@ -115,6 +115,37 @@ buildWalletTx walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte dust =
     tot = sum $ Map.elems rcpMap
     descCoins = sortBy (comparing Down) coins
 
+swipeTxSignData ::
+       BlockchainService s
+    => s
+    -> AccountStore
+    -> [Address]
+    -> Satoshi -- Fee per byte
+    -> IO (Either String (TxSignData, AccountStore))
+swipeTxSignData service store addrs feeByte = do
+    coins <- fmap toWalletCoin <$> httpUnspent service addrs
+    let tot = sum $ walletCoinValue <$> coins
+        fee = guessTxFee (fromIntegral feeByte) 1 (fromCount $ length coins)
+        ops = walletCoinOutPoint <$> coins
+        depTxHash = nub $ outPointHash <$> ops
+    depTxs <- httpTxs service depTxHash
+    return $
+        eitherString $ do
+            amnt <-
+                maybeToEither "The inputs do not cover the required fee" $
+                tot - fromIntegral fee
+            tx <- buildAddrTx ops [(addrToBase58 (fst rcpt), fromIntegral amnt)]
+            return
+                ( TxSignData
+                  { txSignDataTx = tx
+                  , txSignDataInputs = depTxs
+                  , txSignDataInputPaths = []
+                  , txSignDataOutputPaths = [snd rcpt]
+                  }
+                , store')
+  where
+    (rcpt, store') = nextExtAddress store
+
 {- Signing Transactions -}
 
 bip44Deriv :: Natural -> HardPath
@@ -136,7 +167,7 @@ $(deriveJSON (dropFieldLabel 10) ''TxSignData)
 
 pubTxInformation :: TxSignData -> XPubKey -> Either String TxInformation
 pubTxInformation tsd@(TxSignData tx _ inPaths outPaths) pubKey
-    | fromCount (length coins) /= fromCount (length $ txIn tx) =
+    | fromCount (length allCoins) /= fromCount (length $ txIn tx) =
         Left "Referenced input transactions are missing"
     | length inPaths /= toCount (Map.size myInputAddrs) =
         Left "Tx is missing inputs from private keys"
@@ -151,6 +182,7 @@ pubTxInformation tsd@(TxSignData tx _ inPaths outPaths) pubKey
             , txInformationNonStd = outNonStdValue
             , txInformationInbound = Map.map (second Just) inboundAddrs
             , txInformationMyInputs = Map.map (second Just) myInputAddrs
+            , txInformationOtherInputs = othValMap
             , txInformationFee = feeM
             , txInformationHeight = Nothing
             , txInformationBlockHash = Nothing
@@ -165,11 +197,13 @@ pubTxInformation tsd@(TxSignData tx _ inPaths outPaths) pubKey
     -- Inputs
     inAddrMap :: Map Address SoftPath
     inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
-    (coins, myCoins) = parseTxCoins tsd pubKey
-    inValMap = fst $ txOutAddressMap $ fmap snd myCoins
-    myInputAddrs = Map.intersectionWith (,) inValMap inAddrMap
+    (myCoins, othCoins) = parseTxCoins tsd pubKey
+    allCoins = myCoins <> othCoins
+    myValMap = fst $ txOutAddressMap $ fmap snd myCoins
+    othValMap = fst $ txOutAddressMap $ fmap snd othCoins
+    myInputAddrs = Map.intersectionWith (,) myValMap inAddrMap
     -- Amounts and Fees
-    inSum = sum $ fmap (toNatural . outValue . snd) coins :: Satoshi
+    inSum = sum $ fmap (toNatural . outValue . snd) allCoins :: Satoshi
     outSum = sum $ toNatural . outValue <$> txOut tx :: Satoshi
     feeM = inSum - outSum :: Maybe Satoshi
     -- Guess the signed transaction size
@@ -186,7 +220,7 @@ signWalletTx :: TxSignData -> XPrvKey -> Either String (TxInformation, Tx, Bool)
 signWalletTx tsd@(TxSignData tx _ inPaths _) signKey = do
     sigDat <- mapM g myCoins
     signedTx <- eitherString $ signTx tx (fmap f sigDat) prvKeys
-    let vDat = rights $ fmap g coins
+    let vDat = rights $ fmap g allCoins
         isSigned = noEmptyInputs signedTx && verifyStdTx signedTx vDat
     txInformation <- pubTxInformation tsd pubKey
     return
@@ -197,7 +231,8 @@ signWalletTx tsd@(TxSignData tx _ inPaths _) signKey = do
         , isSigned)
   where
     pubKey = deriveXPubKey signKey
-    (coins, myCoins) = parseTxCoins tsd pubKey
+    (myCoins, othCoins) = parseTxCoins tsd pubKey
+    allCoins = myCoins <> othCoins
     prvKeys = fmap (toPrvKeyG . xPrvKey . (`derivePath` signKey)) inPaths
     f (so, val, op) = SigInput so val op (maybeSetForkId sigHashAll) Nothing
     g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
@@ -214,11 +249,10 @@ pathToAddr pubKey = xPubAddr . (`derivePubPath` pubKey)
 parseTxCoins :: TxSignData -> XPubKey
              -> ([(OutPoint, TxOut)],[(OutPoint, TxOut)])
 parseTxCoins (TxSignData tx inTxs inPaths _) pubKey =
-    (coins, myCoins)
+    partition (isMyCoin . snd) coins
   where
     inAddrs = nub $ fmap (pathToAddr pubKey) inPaths
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
-    myCoins = filter (isMyCoin . snd) coins
     isMyCoin to =
         case decodeTxOutAddr to of
             Right a -> a `elem` inAddrs

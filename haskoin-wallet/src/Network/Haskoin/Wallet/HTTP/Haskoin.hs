@@ -154,6 +154,7 @@ mergeAddressTxs as =
                        , txInformationNonStd = 0
                        , txInformationInbound = toAddrMap is
                        , txInformationMyInputs = toAddrMap os
+                       , txInformationOtherInputs = Map.empty
                        , txInformationFee = Nothing
                        , txInformationHeight = addrTxHeight a
                        , txInformationBlockHash = addrTxBlockHash a

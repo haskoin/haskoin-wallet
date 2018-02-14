@@ -176,6 +176,7 @@ hwCommands =
         , Node balance []
         , Node transactions []
         , Node preparetx []
+        , Node prepareswipetx []
         , Node signtx []
         , Node sendtx []
         , Node help []
@@ -365,13 +366,12 @@ preparetx =
                         Map.fromList $
                         fromMaybe rcptErr $ mapM (toRecipient unit) $
                         groupIn 2 $ fmap fromLString as
-                    service = parseBlockchainService s
+                    !service = parseBlockchainService s
                 resE <- buildTxSignData service store rcps feeByte dust
                 let (!signDat, !store') =
                         either (consoleError . formatError) id resE
                     infoE = pubTxInformation signDat (accountStoreXPubKey store)
-                    !info =
-                        either (consoleError . formatError) id infoE
+                    !info = either (consoleError . formatError) id infoE
                 when (store /= store') $ updateAccountStore k $ const store'
                 let chsum = txChksum $ txSignDataTx signDat
                     fname =
@@ -390,6 +390,49 @@ preparetx =
                         ]
   where
     rcptErr = consoleError $ formatError "Could not parse the recipients"
+
+prepareswipetx :: Command IO
+prepareswipetx =
+    command (cmdNameL cmdPrepareSwipeTx) (cmdDescL cmdPrepareSwipeTx) $
+    withOption accOpt $ \acc ->
+    withOption feeOpt $ \feeByte ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withOption serOpt $ \s ->
+    withNonOptions Argument.string $ \as ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+                !rcps =
+                    fromMaybe
+                        rcptErr $
+                        mapM base58ToAddr (fromLString <$> as)
+                !service = parseBlockchainService s
+            withAccountStore acc $ \(k, store) -> do
+                resE <- swipeTxSignData service store rcps feeByte
+                let (!signDat, !store') =
+                        either (consoleError . formatError) id resE
+                    infoE = pubTxInformation signDat (accountStoreXPubKey store)
+                    !info = either (consoleError . formatError) id infoE
+                when (store /= store') $ updateAccountStore k $ const store'
+                let chsum = txChksum $ txSignDataTx signDat
+                    fname =
+                        fromString $ "swipetx-" <> toLString chsum <> "-unsigned"
+                path <- writeDoc fname signDat
+                renderIO $
+                    vcat
+                        [ txInformationFormat
+                            (accountStoreDeriv store)
+                            unit
+                            (Just False)
+                            Nothing
+                            info
+                        , formatTitle "Unsigned Tx Swipe Data File"
+                        , nest 4 $ formatFilePath $ filePathToString path
+                        ]
+
+  where
+    rcptErr = consoleError $ formatError "Could not parse addresses"
 
 txChksum :: Tx -> String
 txChksum = take 16 . txHashToHex . nosigTxHash
@@ -453,11 +496,9 @@ balance =
         io $ do
             setOptNet network
             let !unit = parseUnit u
+                !service = parseBlockchainService s
             withAccountStore acc $ \(_, store) -> do
-                let service = parseBlockchainService s
-                    addrs =
-                        allExtAddresses store <>
-                        allIntAddresses store
+                let addrs = allExtAddresses store <> allIntAddresses store
                 bal <- httpBalance service $ fmap fst addrs
                 renderIO $
                     vcat
@@ -475,9 +516,9 @@ transactions = command (cmdNameL cmdTransactions) (cmdDescL cmdTransactions) $
         io $ do
             setOptNet network
             let !unit = parseUnit u
+                !service = parseBlockchainService s
             withAccountStore acc $ \(_, store) -> do
-                let service = parseBlockchainService s
-                    walletAddrs = allExtAddresses store <> allIntAddresses store
+                let walletAddrs = allExtAddresses store <> allIntAddresses store
                     walletAddrMap = Map.fromList walletAddrs
                 txInfs <- httpTxInformation service $ fmap fst walletAddrs
                 currHeight <- httpBestHeight service

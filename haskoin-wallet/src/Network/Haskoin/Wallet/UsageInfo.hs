@@ -31,6 +31,7 @@ printerCommands =
     , cmdReceiveFormat
     , cmdAddressesFormat
     , cmdPrepareTxFormat
+    , cmdPrepareSwipeTxFormat
     , cmdSignTxFormat
     , cmdSendTxFormat
     , cmdBalanceFormat
@@ -53,8 +54,7 @@ cmdMnemonic = ("mnemonic", "Generate a mnemonic using your systems entropy.")
 cmdMnemonicFormat :: ConsolePrinter
 cmdMnemonicFormat =
     vcat
-
-    [ formatCommand (cmdName cmdMnemonic)
+        [ formatCommand (cmdName cmdMnemonic)
         , fOffline <+> followup [cmdName cmdCreateAcc, cmdName cmdSignTx]
         , formatStatic (cmdDesc cmdMnemonic)
         , nest 2 $ vcat [fOpt getDiceOpt, fOpt getEntOpt]
@@ -133,6 +133,28 @@ cmdPrepareTxFormat =
           vcat
               [ fOpt getFeeOpt
               , fOpt getDustOpt
+              , fOpt getUnitOpt
+              , fOpt getAccOpt
+              , fOpt getNetOpt
+              , fOpt getSerOpt
+              ]
+        ]
+
+cmdPrepareSwipeTx :: (String, String)
+cmdPrepareSwipeTx =
+    ( "prepareswipetx"
+    , "Prepare a transaction that swipes all the funds from a list of addresses.")
+
+cmdPrepareSwipeTxFormat :: ConsolePrinter
+cmdPrepareSwipeTxFormat =
+    vcat
+        [ formatCommand (cmdName cmdPrepareSwipeTx) <+>
+          formatArgument "address [address2 ...]"
+        , fOnline <+> followup [cmdName cmdSignTx]
+        , formatStatic (cmdDesc cmdPrepareSwipeTx)
+        , nest 2 $
+          vcat
+              [ fOpt getFeeOpt
               , fOpt getUnitOpt
               , fOpt getAccOpt
               , fOpt getNetOpt

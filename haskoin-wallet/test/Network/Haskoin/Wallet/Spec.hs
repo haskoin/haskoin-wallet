@@ -299,6 +299,7 @@ signingSpec =
                           [ ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
+                , txInformationOtherInputs = Map.empty
                 , txInformationFee = Just 10000000
                 , txInformationHeight = Nothing
                 , txInformationBlockHash = Nothing
@@ -325,7 +326,8 @@ signingSpec =
             res `shouldBe`
                 TxInformation
                 { txInformationTxHash = Nothing
-                , txInformationTxSize = Just $ fromIntegral $ guessTxSize 2 [] 2 0
+                , txInformationTxSize =
+                      Just $ fromIntegral $ guessTxSize 2 [] 2 0
                 , txInformationOutbound =
                       Map.fromList [(just $ othAddrs ! 1, 200000000)]
                 , txInformationNonStd = 0
@@ -339,6 +341,8 @@ signingSpec =
                           [ ( just $ extAddrs ! 2
                             , (200000000, Just $ extDeriv :/ 2))
                           ]
+                , txInformationOtherInputs =
+                      Map.fromList [(just $ extAddrs ! 0, 100000000)]
                 , txInformationFee = Just 50000000
                 , txInformationHeight = Nothing
                 , txInformationBlockHash = Nothing
@@ -387,6 +391,7 @@ signingSpec =
                           , ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
+                , txInformationOtherInputs = Map.empty
                 , txInformationFee = Just 50000000
                 , txInformationHeight = Nothing
                 , txInformationBlockHash = Nothing
@@ -457,6 +462,7 @@ signingSpec =
                           , ( just $ extAddrs ! 0
                             , (600000000, Just $ extDeriv :/ 0))
                           ]
+                , txInformationOtherInputs = Map.empty
                 , txInformationFee = Just 100000000
                 , txInformationHeight = Nothing
                 , txInformationBlockHash = Nothing
@@ -554,6 +560,7 @@ mergeAddressTxsSpec =
                              , (just $ extAddrs ! 1, (4000, Nothing))
                              ]
                   , txInformationMyInputs = Map.empty
+                  , txInformationOtherInputs = Map.empty
                   , txInformationFee = Nothing
                   , txInformationHeight = Just 1
                   , txInformationBlockHash = Just $ dummyBlockHash 1
@@ -566,6 +573,7 @@ mergeAddressTxsSpec =
                   , txInformationInbound =
                         Map.fromList [(just $ extAddrs ! 1, (5000, Nothing))]
                   , txInformationMyInputs = Map.empty
+                  , txInformationOtherInputs = Map.empty
                   , txInformationFee = Nothing
                   , txInformationHeight = Just 2
                   , txInformationBlockHash = Just $ dummyBlockHash 2
@@ -639,6 +647,7 @@ mergeAddressTxsSpec =
                            [ (just $ extAddrs ! 0, (1000, Nothing))
                            , (just $ extAddrs ! 2, (5000, Nothing))
                            ]
+                  , txInformationOtherInputs = Map.empty
                   , txInformationFee = Nothing
                   , txInformationHeight = Just 1
                   , txInformationBlockHash = Just $ dummyBlockHash 1
@@ -652,6 +661,7 @@ mergeAddressTxsSpec =
                       Map.fromList [(just $ extAddrs ! 0, (1000, Nothing))]
                   , txInformationMyInputs =
                       Map.fromList [(just $ extAddrs ! 2, (2000, Nothing))]
+                  , txInformationOtherInputs = Map.empty
                   , txInformationFee = Nothing
                   , txInformationHeight = Just 2
                   , txInformationBlockHash = Just $ dummyBlockHash 2

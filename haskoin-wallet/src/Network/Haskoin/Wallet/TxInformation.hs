@@ -20,15 +20,16 @@ import           Network.Haskoin.Wallet.FoundationCompat
 import qualified Prelude
 
 data TxInformation = TxInformation
-    { txInformationTxHash    :: Maybe TxHash
-    , txInformationTxSize    :: Maybe (CountOf (Element (UArray Word8)))
-    , txInformationOutbound  :: Map Address Satoshi
-    , txInformationNonStd    :: Satoshi
-    , txInformationInbound   :: Map Address (Satoshi, Maybe SoftPath)
-    , txInformationMyInputs  :: Map Address (Satoshi, Maybe SoftPath)
-    , txInformationFee       :: Maybe Satoshi
-    , txInformationHeight    :: Maybe Natural
-    , txInformationBlockHash :: Maybe BlockHash
+    { txInformationTxHash      :: Maybe TxHash
+    , txInformationTxSize      :: Maybe (CountOf (Element (UArray Word8)))
+    , txInformationOutbound    :: Map Address Satoshi
+    , txInformationNonStd      :: Satoshi
+    , txInformationInbound     :: Map Address (Satoshi, Maybe SoftPath)
+    , txInformationMyInputs    :: Map Address (Satoshi, Maybe SoftPath)
+    , txInformationOtherInputs :: Map Address Satoshi
+    , txInformationFee         :: Maybe Satoshi
+    , txInformationHeight      :: Maybe Natural
+    , txInformationBlockHash   :: Maybe BlockHash
     } deriving (Eq, Show)
 
 txInformationAmount :: TxInformation -> Integer
@@ -177,7 +178,7 @@ txInformationFormat ::
     -> TxInformation
     -> ConsolePrinter
 txInformationFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
-    vcat [information, nest 2 $ vcat [outbound, inbound, myInputs]]
+    vcat [information, nest 2 $ vcat [outbound, inbound, myInputs, otherInputs]]
   where
     information =
         vcat
@@ -226,7 +227,7 @@ txInformationFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                             formatKey (block 15 "Confirmations:") <>
                             case (currHeight -) =<< txInformationHeight of
                                 Just conf -> formatStatic $ show $ conf + 1
-                                _         -> formatStatic "Pending"
+                                _ -> formatStatic "Pending"
                         _ -> mempty
                   , case txSignedM of
                         Just signed ->
@@ -277,6 +278,17 @@ txInformationFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   vcat $
                   fmap addrFormatMyInputs (Map.assocs txInformationMyInputs)
                 ]
+    otherInputs
+        | Map.null txInformationOtherInputs = mempty
+        | otherwise =
+            vcat
+                [ formatTitle "Other Coins"
+                , nest 2 $
+                  vcat $
+                  fmap
+                      addrFormatOtherInputs
+                      (Map.assocs txInformationOtherInputs)
+                ]
     addrFormatInbound (a, (v, pM)) =
         formatAddrVal
             unit
@@ -293,6 +305,13 @@ txInformationFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
             accDeriv
             (formatInternalAddress $ addrToBase58 a)
             pM
+            (negate $ fromIntegral v)
+    addrFormatOtherInputs (a, v) =
+        formatAddrVal
+            unit
+            accDeriv
+            (formatInternalAddress $ addrToBase58 a)
+            Nothing
             (negate $ fromIntegral v)
     addrFormatOutbound (a, v) =
         formatAddrVal

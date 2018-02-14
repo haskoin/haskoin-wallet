@@ -114,6 +114,7 @@ getTxInformation addrs = do
             , txInformationNonStd = 0
             , txInformationInbound = Map.map (, Nothing) os
             , txInformationMyInputs = Map.map (, Nothing) is
+            , txInformationOtherInputs = Map.empty
             , txInformationFee = Just feeSat
             , txInformationHeight = integralToNatural =<< heightM
             , txInformationBlockHash = bidM
