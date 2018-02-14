@@ -166,6 +166,7 @@ mergeAddressTxs as =
     toAddrVal = addrTxAddress &&& fromIntegral . abs . addrTxAmount
 
 getTxs :: [TxHash] -> IO [(Tx, Natural)]
+getTxs [] = return []
 getTxs tids = do
     v <- httpJsonGet opts url
     let xs = mapM parseTx $ v ^.. values

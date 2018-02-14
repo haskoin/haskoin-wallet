@@ -128,21 +128,27 @@ swipeTxSignData service store addrs feeByte = do
         fee = guessTxFee (fromIntegral feeByte) 1 (fromCount $ length coins)
         ops = walletCoinOutPoint <$> coins
         depTxHash = nub $ outPointHash <$> ops
-    depTxs <- httpTxs service depTxHash
-    return $
-        eitherString $ do
-            amnt <-
-                maybeToEither "The inputs do not cover the required fee" $
-                tot - fromIntegral fee
-            tx <- buildAddrTx ops [(addrToBase58 (fst rcpt), fromIntegral amnt)]
-            return
-                ( TxSignData
-                  { txSignDataTx = tx
-                  , txSignDataInputs = depTxs
-                  , txSignDataInputPaths = []
-                  , txSignDataOutputPaths = [snd rcpt]
-                  }
-                , store')
+    if null coins
+        then return $ Left "No coins were found in the given addresses"
+        else do
+            depTxs <- httpTxs service depTxHash
+            return $
+                eitherString $ do
+                    amnt <-
+                        maybeToEither "The inputs do not cover the required fee" $
+                        tot - fromIntegral fee
+                    tx <-
+                        buildAddrTx
+                            ops
+                            [(addrToBase58 (fst rcpt), fromIntegral amnt)]
+                    return
+                        ( TxSignData
+                          { txSignDataTx = tx
+                          , txSignDataInputs = depTxs
+                          , txSignDataInputPaths = []
+                          , txSignDataOutputPaths = [snd rcpt]
+                          }
+                        , store')
   where
     (rcpt, store') = nextExtAddress store
 
