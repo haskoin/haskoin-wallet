@@ -115,14 +115,14 @@ buildWalletTx walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte dust =
     tot = sum $ Map.elems rcpMap
     descCoins = sortBy (comparing Down) coins
 
-swipeTxSignData ::
+buildSwipeTx ::
        BlockchainService s
     => s
     -> AccountStore
     -> [Address]
     -> Satoshi -- Fee per byte
     -> IO (Either String (TxSignData, AccountStore))
-swipeTxSignData service store addrs feeByte = do
+buildSwipeTx service store addrs feeByte = do
     coins <- fmap toWalletCoin <$> httpUnspent service addrs
     let tot = sum $ walletCoinValue <$> coins
         fee = guessTxFee (fromIntegral feeByte) 1 (fromCount $ length coins)
@@ -171,56 +171,23 @@ data TxSignData = TxSignData
 
 $(deriveJSON (dropFieldLabel 10) ''TxSignData)
 
-pubTxInformation :: TxSignData -> XPubKey -> Either String TxInformation
-pubTxInformation tsd@(TxSignData tx _ inPaths outPaths) pubKey
-    | fromCount (length allCoins) /= fromCount (length $ txIn tx) =
+pubTxInfo :: TxSignData -> XPubKey -> Either String TxInformation
+pubTxInfo (TxSignData tx inTxs inPaths outPaths) pubKey
+    | fromCount (length coins) /= fromCount (length $ txIn tx) =
         Left "Referenced input transactions are missing"
-    | length inPaths /= toCount (Map.size myInputAddrs) =
+    | fromCount (length inPaths) /= Map.size (txInfoMyInputs info) =
         Left "Tx is missing inputs from private keys"
-    | length outPaths /= toCount (Map.size inboundAddrs) =
+    | fromCount (length outPaths) /= Map.size (txInfoInbound info) =
         Left "Tx is missing change outputs"
-    | otherwise =
-        return
-            TxInformation
-            { txInformationTxHash = Nothing
-            , txInformationTxSize = Just guessLen
-            , txInformationOutbound = outboundAddrs
-            , txInformationNonStd = outNonStdValue
-            , txInformationInbound = Map.map (second Just) inboundAddrs
-            , txInformationMyInputs = Map.map (second Just) myInputAddrs
-            , txInformationOtherInputs = othValMap
-            , txInformationFee = feeM
-            , txInformationHeight = Nothing
-            , txInformationBlockHash = Nothing
-            }
-    -- Outputs
+    | otherwise = return info
   where
-    outAddrMap :: Map Address SoftPath
+    info =
+        txInfoFillUnsignedTx tx $
+        txInfoFillInbound outAddrMap (txOut tx) $
+        txInfoFillInputs inAddrMap (snd <$> coins) emptyTxInfo
     outAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) outPaths
-    (outValMap, outNonStdValue) = txOutAddressMap $ txOut tx
-    inboundAddrs = Map.intersectionWith (,) outValMap outAddrMap
-    outboundAddrs = Map.difference outValMap outAddrMap
-    -- Inputs
-    inAddrMap :: Map Address SoftPath
     inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
-    (myCoins, othCoins) = parseTxCoins tsd pubKey
-    allCoins = myCoins <> othCoins
-    myValMap = fst $ txOutAddressMap $ fmap snd myCoins
-    othValMap = fst $ txOutAddressMap $ fmap snd othCoins
-    myInputAddrs = Map.intersectionWith (,) myValMap inAddrMap
-    -- Amounts and Fees
-    inSum = sum $ fmap (toNatural . outValue . snd) allCoins :: Satoshi
-    outSum = sum $ toNatural . outValue <$> txOut tx :: Satoshi
-    feeM = inSum - outSum :: Maybe Satoshi
-    -- Guess the signed transaction size
-    guessLen :: CountOf (Element (UArray Word8))
-    guessLen =
-        fromIntegral $
-        guessTxSize
-            (fromCount $ length $ txIn tx)
-            []
-            (fromCount $ length $ txOut tx)
-            0
+    coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
 
 signWalletTx :: TxSignData -> XPrvKey -> Either String (TxInformation, Tx, Bool)
 signWalletTx tsd@(TxSignData tx _ inPaths _) signKey = do
@@ -228,11 +195,11 @@ signWalletTx tsd@(TxSignData tx _ inPaths _) signKey = do
     signedTx <- eitherString $ signTx tx (fmap f sigDat) prvKeys
     let vDat = rights $ fmap g allCoins
         isSigned = noEmptyInputs signedTx && verifyStdTx signedTx vDat
-    txInformation <- pubTxInformation tsd pubKey
+    info <- pubTxInfo tsd pubKey
     return
         ( if isSigned
-              then txInformationFillTx signedTx txInformation
-              else txInformation
+              then txInfoFillTx signedTx info
+              else info
         , signedTx
         , isSigned)
   where
@@ -242,9 +209,28 @@ signWalletTx tsd@(TxSignData tx _ inPaths _) signKey = do
     prvKeys = fmap (toPrvKeyG . xPrvKey . (`derivePath` signKey)) inPaths
     f (so, val, op) = SigInput so val op (maybeSetForkId sigHashAll) Nothing
     g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
-    maybeSetForkId
-        | isJust sigHashForkId = setForkIdFlag
-        | otherwise = id
+
+signSwipeTx :: TxSignData -> [PrvKey] -> Either String (TxInformation, Tx, Bool)
+signSwipeTx (TxSignData tx inTxs _ _) prvKeys = do
+    sigDat <- mapM g coins
+    signedTx <- eitherString $ signTx tx (fmap f sigDat) prvKeys
+    let isSigned = noEmptyInputs signedTx && verifyStdTx signedTx sigDat
+    return
+        ( if isSigned
+              then txInfoFillTx signedTx info
+              else info
+        , signedTx
+        , isSigned)
+  where
+    info = txInfoFillInputs Map.empty (snd <$> coins) emptyTxInfo
+    coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
+    f (so, val, op) = SigInput so val op (maybeSetForkId sigHashAll) Nothing
+    g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
+
+maybeSetForkId :: SigHash -> SigHash
+maybeSetForkId
+    | isJust sigHashForkId = setForkIdFlag
+    | otherwise = id
 
 noEmptyInputs :: Tx -> Bool
 noEmptyInputs = all (not . null) . fmap (asBytes scriptInput) . txIn

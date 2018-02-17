@@ -284,29 +284,29 @@ signingSpec =
                 (res, tx, isSigned) = right $ signWalletTx dat xPrv
             res `shouldBe`
                 TxInformation
-                { txInformationTxHash = Just $ txHash tx
-                , txInformationTxSize = Just $ length $ encodeBytes tx
-                , txInformationOutbound =
+                { txInfoTxHash = Just $ txHash tx
+                , txInfoTxSize = Just $ length $ encodeBytes tx
+                , txInfoOutbound =
                       Map.fromList [(just $ othAddrs ! 0, 50000000)]
-                , txInformationNonStd = 0
-                , txInformationInbound =
+                , txInfoNonStd = 0
+                , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (40000000, Just $ intDeriv :/ 0))
                           ]
-                , txInformationMyInputs =
+                , txInfoMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
-                , txInformationOtherInputs = Map.empty
-                , txInformationFee = Just 10000000
-                , txInformationHeight = Nothing
-                , txInformationBlockHash = Nothing
+                , txInfoOtherInputs = Map.empty
+                , txInfoFee = Just 10000000
+                , txInfoHeight = Nothing
+                , txInfoBlockHash = Nothing
                 }
-            txInformationTxType res `shouldBe` "Outbound"
-            txInformationAmount res `shouldBe` -60000000
-            txInformationFeeByte res `shouldBe` Just 44444.44
+            txInfoTxType res `shouldBe` "Outbound"
+            txInfoAmount res `shouldBe` -60000000
+            txInfoFeeByte res `shouldBe` Just 44444.44
             isSigned `shouldBe` True
         it "can partially sign a transaction" $ do
             let fundTx =
@@ -325,31 +325,30 @@ signingSpec =
                 (res, _, isSigned) = right $ signWalletTx dat xPrv
             res `shouldBe`
                 TxInformation
-                { txInformationTxHash = Nothing
-                , txInformationTxSize =
-                      Just $ fromIntegral $ guessTxSize 2 [] 2 0
-                , txInformationOutbound =
+                { txInfoTxHash = Nothing
+                , txInfoTxSize = Just $ fromIntegral $ guessTxSize 2 [] 2 0
+                , txInfoOutbound =
                       Map.fromList [(just $ othAddrs ! 1, 200000000)]
-                , txInformationNonStd = 0
-                , txInformationInbound =
+                , txInfoNonStd = 0
+                , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 1
                             , (50000000, Just $ intDeriv :/ 1))
                           ]
-                , txInformationMyInputs =
+                , txInfoMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 2
                             , (200000000, Just $ extDeriv :/ 2))
                           ]
-                , txInformationOtherInputs =
+                , txInfoOtherInputs =
                       Map.fromList [(just $ extAddrs ! 0, 100000000)]
-                , txInformationFee = Just 50000000
-                , txInformationHeight = Nothing
-                , txInformationBlockHash = Nothing
+                , txInfoFee = Just 50000000
+                , txInfoHeight = Nothing
+                , txInfoBlockHash = Nothing
                 }
-            txInformationTxType res `shouldBe` "Outbound"
-            txInformationAmount res `shouldBe` -150000000
-            txInformationFeeByte res `shouldBe` Just 133689.84
+            txInfoTxType res `shouldBe` "Outbound"
+            txInfoAmount res `shouldBe` -150000000
+            txInfoFeeByte res `shouldBe` Just 133689.84
             isSigned `shouldBe` False
         it "can send coins to your own wallet only" $ do
             let fundTx =
@@ -373,32 +372,32 @@ signingSpec =
                 (res, tx, isSigned) = right $ signWalletTx dat xPrv
             res `shouldBe`
                 TxInformation
-                { txInformationTxHash = Just $ txHash tx
-                , txInformationTxSize = Just $ length $ encodeBytes tx
-                , txInformationOutbound = Map.empty
-                , txInformationNonStd = 0
-                , txInformationInbound =
+                { txInfoTxHash = Just $ txHash tx
+                , txInfoTxSize = Just $ length $ encodeBytes tx
+                , txInfoOutbound = Map.empty
+                , txInfoNonStd = 0
+                , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (50000000, Just $ intDeriv :/ 0))
                           , ( just $ extAddrs ! 2
                             , (200000000, Just $ extDeriv :/ 2))
                           ]
-                , txInformationMyInputs =
+                , txInfoMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 1
                             , (200000000, Just $ extDeriv :/ 1))
                           , ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
-                , txInformationOtherInputs = Map.empty
-                , txInformationFee = Just 50000000
-                , txInformationHeight = Nothing
-                , txInformationBlockHash = Nothing
+                , txInfoOtherInputs = Map.empty
+                , txInfoFee = Just 50000000
+                , txInfoHeight = Nothing
+                , txInfoBlockHash = Nothing
                 }
-            txInformationTxType res `shouldBe` "Self"
-            txInformationAmount res `shouldBe` -50000000
-            txInformationFeeByte res `shouldBe` Just 134408.60
+            txInfoTxType res `shouldBe` "Self"
+            txInfoAmount res `shouldBe` -50000000
+            txInfoFeeByte res `shouldBe` Just 134408.60
             isSigned `shouldBe` True
         it "can sign a complex transaction" $ do
             let fundTx1 =
@@ -438,22 +437,22 @@ signingSpec =
                 (res, tx, isSigned) = right $ signWalletTx dat xPrv
             res `shouldBe`
                 TxInformation
-                { txInformationTxHash = Just $ txHash tx
-                , txInformationTxSize = Just $ length $ encodeBytes tx
-                , txInformationOutbound =
+                { txInfoTxHash = Just $ txHash tx
+                , txInfoTxSize = Just $ length $ encodeBytes tx
+                , txInfoOutbound =
                       Map.fromList
                           [ (just $ othAddrs ! 0, 1000000000)
                           , (just $ othAddrs ! 1, 300000000)
                           ]
-                , txInformationNonStd = 0
-                , txInformationInbound =
+                , txInfoNonStd = 0
+                , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (200000000, Just $ intDeriv :/ 0))
                           , ( just $ intAddrs ! 1
                             , (100000000, Just $ intDeriv :/ 1))
                           ]
-                , txInformationMyInputs =
+                , txInfoMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 1
                             , (500000000, Just $ extDeriv :/ 1))
@@ -462,14 +461,43 @@ signingSpec =
                           , ( just $ extAddrs ! 0
                             , (600000000, Just $ extDeriv :/ 0))
                           ]
-                , txInformationOtherInputs = Map.empty
-                , txInformationFee = Just 100000000
-                , txInformationHeight = Nothing
-                , txInformationBlockHash = Nothing
+                , txInfoOtherInputs = Map.empty
+                , txInfoFee = Just 100000000
+                , txInfoHeight = Nothing
+                , txInfoBlockHash = Nothing
                 }
-            txInformationTxType res `shouldBe` "Outbound"
-            txInformationAmount res `shouldBe` -1400000000
-            txInformationFeeByte res `shouldBe` Just 105152.47
+            txInfoTxType res `shouldBe` "Outbound"
+            txInfoAmount res `shouldBe` -1400000000
+            txInfoFeeByte res `shouldBe` Just 105152.47
+            isSigned `shouldBe` True
+        it "can sign a WIF transaction" $ do
+            let fundTx = testTx' [(just $ extAddrs ! 0, 100000000)]
+                newTx =
+                    testTx
+                        [(txHash fundTx, 0)]
+                        [(just $ extAddrs ! 1, 50000000)]
+                dat = TxSignData newTx [fundTx] [] [extDeriv :/ 1]
+                prv = just $ fromWif $ stringToBS $ wifKey 0
+                (res, tx, isSigned) = right $ signSwipeTx dat [prv]
+            res `shouldBe`
+                TxInformation
+                { txInfoTxHash = Just $ txHash tx
+                , txInfoTxSize = Just $ length $ encodeBytes tx
+                , txInfoOutbound =
+                      Map.fromList [(just $ extAddrs ! 1, 50000000)]
+                , txInfoNonStd = 0
+                , txInfoInbound = Map.empty
+                , txInfoMyInputs =
+                      Map.empty
+                , txInfoOtherInputs =
+                      Map.fromList [(just $ extAddrs ! 0, 100000000)]
+                , txInfoFee = Just 50000000
+                , txInfoHeight = Nothing
+                , txInfoBlockHash = Nothing
+                }
+            txInfoTxType res `shouldBe` "Outbound"
+            txInfoAmount res `shouldBe` 0
+            txInfoFeeByte res `shouldBe` Just 261780.10
             isSigned `shouldBe` True
         it "can show \"Tx is missing inputs from private keys\" error" $ do
             let fundTx1 = testTx' [(just $ extAddrs ! 1, 100000000)]
@@ -550,33 +578,33 @@ mergeAddressTxsSpec =
                     ]
             mergeAddressTxs as `shouldBe`
                 [ TxInformation
-                  { txInformationTxHash = Just $ dummyTxHash 1
-                  , txInformationTxSize = Nothing
-                  , txInformationOutbound = Map.empty
-                  , txInformationNonStd = 0
-                  , txInformationInbound =
+                  { txInfoTxHash = Just $ dummyTxHash 1
+                  , txInfoTxSize = Nothing
+                  , txInfoOutbound = Map.empty
+                  , txInfoNonStd = 0
+                  , txInfoInbound =
                         Map.fromList
-                             [ (just $ extAddrs ! 0, (3000, Nothing))
-                             , (just $ extAddrs ! 1, (4000, Nothing))
-                             ]
-                  , txInformationMyInputs = Map.empty
-                  , txInformationOtherInputs = Map.empty
-                  , txInformationFee = Nothing
-                  , txInformationHeight = Just 1
-                  , txInformationBlockHash = Just $ dummyBlockHash 1
+                            [ (just $ extAddrs ! 0, (3000, Nothing))
+                            , (just $ extAddrs ! 1, (4000, Nothing))
+                            ]
+                  , txInfoMyInputs = Map.empty
+                  , txInfoOtherInputs = Map.empty
+                  , txInfoFee = Nothing
+                  , txInfoHeight = Just 1
+                  , txInfoBlockHash = Just $ dummyBlockHash 1
                   }
                 , TxInformation
-                  { txInformationTxHash = Just $ dummyTxHash 2
-                  , txInformationTxSize = Nothing
-                  , txInformationOutbound = Map.empty
-                  , txInformationNonStd = 0
-                  , txInformationInbound =
+                  { txInfoTxHash = Just $ dummyTxHash 2
+                  , txInfoTxSize = Nothing
+                  , txInfoOutbound = Map.empty
+                  , txInfoNonStd = 0
+                  , txInfoInbound =
                         Map.fromList [(just $ extAddrs ! 1, (5000, Nothing))]
-                  , txInformationMyInputs = Map.empty
-                  , txInformationOtherInputs = Map.empty
-                  , txInformationFee = Nothing
-                  , txInformationHeight = Just 2
-                  , txInformationBlockHash = Just $ dummyBlockHash 2
+                  , txInfoMyInputs = Map.empty
+                  , txInfoOtherInputs = Map.empty
+                  , txInfoFee = Nothing
+                  , txInfoHeight = Just 2
+                  , txInfoBlockHash = Just $ dummyBlockHash 2
                   }
                 ]
         it "Can merge input and output addresses" $ do
@@ -632,39 +660,39 @@ mergeAddressTxsSpec =
                     ]
             mergeAddressTxs as `shouldBe`
                 [ TxInformation
-                  { txInformationTxHash = Just $ dummyTxHash 1
-                  , txInformationTxSize = Nothing
-                  , txInformationOutbound = Map.empty
-                  , txInformationNonStd = 0
-                  , txInformationInbound =
-                      Map.fromList
-                           [ (just $ extAddrs ! 0, (1000, Nothing))
-                           , (just $ extAddrs ! 1, (4000, Nothing))
-                           , (just $ extAddrs ! 2, (6000, Nothing))
-                           ]
-                  , txInformationMyInputs =
-                      Map.fromList
-                           [ (just $ extAddrs ! 0, (1000, Nothing))
-                           , (just $ extAddrs ! 2, (5000, Nothing))
-                           ]
-                  , txInformationOtherInputs = Map.empty
-                  , txInformationFee = Nothing
-                  , txInformationHeight = Just 1
-                  , txInformationBlockHash = Just $ dummyBlockHash 1
+                  { txInfoTxHash = Just $ dummyTxHash 1
+                  , txInfoTxSize = Nothing
+                  , txInfoOutbound = Map.empty
+                  , txInfoNonStd = 0
+                  , txInfoInbound =
+                        Map.fromList
+                            [ (just $ extAddrs ! 0, (1000, Nothing))
+                            , (just $ extAddrs ! 1, (4000, Nothing))
+                            , (just $ extAddrs ! 2, (6000, Nothing))
+                            ]
+                  , txInfoMyInputs =
+                        Map.fromList
+                            [ (just $ extAddrs ! 0, (1000, Nothing))
+                            , (just $ extAddrs ! 2, (5000, Nothing))
+                            ]
+                  , txInfoOtherInputs = Map.empty
+                  , txInfoFee = Nothing
+                  , txInfoHeight = Just 1
+                  , txInfoBlockHash = Just $ dummyBlockHash 1
                   }
                 , TxInformation
-                  { txInformationTxHash = Just $ dummyTxHash 2
-                  , txInformationTxSize = Nothing
-                  , txInformationOutbound = Map.empty
-                  , txInformationNonStd = 0
-                  , txInformationInbound =
-                      Map.fromList [(just $ extAddrs ! 0, (1000, Nothing))]
-                  , txInformationMyInputs =
-                      Map.fromList [(just $ extAddrs ! 2, (2000, Nothing))]
-                  , txInformationOtherInputs = Map.empty
-                  , txInformationFee = Nothing
-                  , txInformationHeight = Just 2
-                  , txInformationBlockHash = Just $ dummyBlockHash 2
+                  { txInfoTxHash = Just $ dummyTxHash 2
+                  , txInfoTxSize = Nothing
+                  , txInfoOutbound = Map.empty
+                  , txInfoNonStd = 0
+                  , txInfoInbound =
+                        Map.fromList [(just $ extAddrs ! 0, (1000, Nothing))]
+                  , txInfoMyInputs =
+                        Map.fromList [(just $ extAddrs ! 2, (2000, Nothing))]
+                  , txInfoOtherInputs = Map.empty
+                  , txInfoFee = Nothing
+                  , txInfoHeight = Just 2
+                  , txInfoBlockHash = Just $ dummyBlockHash 2
                   }
                 ]
 
@@ -682,13 +710,12 @@ serviceSpec name service =
                 all (== Right "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         it "can receive a transaction information (online test)" $ do
             res <-
-                httpTxInformation service
-                    ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+                httpTxInformation service ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
             length res `shouldSatisfy` (> 9)
             let res1 = head $ nonEmpty_ res
                 as =
-                    Map.keys (txInformationInbound res1) <>
-                    Map.keys (txInformationMyInputs res1)
+                    Map.keys (txInfoInbound res1) <>
+                    Map.keys (txInfoMyInputs res1)
             as `shouldSatisfy` ("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" `elem`)
         it "can receive a transaction (online test)" $ do
             let tid =
@@ -708,9 +735,9 @@ mnem :: String
 mnem = "snow senior nerve virus fabric now fringe clip marble interest analyst can"
 
 keys :: (XPrvKey, XPubKey)
-keys = ( "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
-        , "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah"
-        )
+keys =
+    ( "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
+    , "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
 
 extAddrs :: [Address]
 extAddrs =
@@ -725,6 +752,11 @@ extAddrs =
     , "1HXJhfiD7JFCGMFZnhKRsZxoPF7xDTqWXP"
     , "1MZpAt1FofY69B6fzooFxZqe6SdrVrC3Yw"
     ]
+
+wifKey :: Natural -> String
+wifKey i =
+    bsToString_ $
+    toWif $ xPrvKey $ derivePath (extDeriv :/ fromIntegral i) (fst keys)
 
 intAddrs :: [Address]
 intAddrs =

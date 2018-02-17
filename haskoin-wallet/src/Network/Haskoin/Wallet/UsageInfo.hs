@@ -33,6 +33,7 @@ printerCommands =
     , cmdPrepareTxFormat
     , cmdPrepareSwipeTxFormat
     , cmdSignTxFormat
+    , cmdSignSwipeTxFormat
     , cmdSendTxFormat
     , cmdBalanceFormat
     , cmdTransactionsFormat
@@ -150,7 +151,7 @@ cmdPrepareSwipeTxFormat =
     vcat
         [ formatCommand (cmdName cmdPrepareSwipeTx) <+>
           formatArgument "address [address2 ...]"
-        , fOnline <+> followup [cmdName cmdSignTx]
+        , fOnline <+> followup [cmdName cmdSignSwipeTx]
         , formatStatic (cmdDesc cmdPrepareSwipeTx)
         , nest 2 $
           vcat
@@ -171,6 +172,21 @@ cmdSignTxFormat =
         [ formatCommand (cmdName cmdSignTx) <+> formatArgument "Filename"
         , fOffline <+> followup [cmdName cmdSendTx]
         , formatStatic (cmdDesc cmdSignTx)
+        , nest 2 $ vcat [fOpt getDerOpt, fOpt getUnitOpt, fOpt getNetOpt]
+        ]
+
+cmdSignSwipeTx :: (String, String)
+cmdSignSwipeTx =
+    ("signswipetx", "Sign a transaction that was created with prepareswipetx.")
+
+cmdSignSwipeTxFormat :: ConsolePrinter
+cmdSignSwipeTxFormat =
+    vcat
+        [ formatCommand (cmdName cmdSignSwipeTx) 
+            <+> formatArgument "Filename"
+            <+> formatArgument "WIF1 [WIF2...]"
+        , fOffline <+> followup [cmdName cmdSendTx]
+        , formatStatic (cmdDesc cmdSignSwipeTx)
         , nest 2 $ vcat [fOpt getDerOpt, fOpt getUnitOpt, fOpt getNetOpt]
         ]
 

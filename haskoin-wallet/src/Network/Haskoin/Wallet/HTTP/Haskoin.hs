@@ -94,21 +94,18 @@ getUnspent addrs = do
 getTxInformation :: [Address] -> IO [TxInformation]
 getTxInformation addrs = do
     txInfs <- mergeAddressTxs <$> getAddressTxs addrs
-    let tids = nub $ mapMaybe txInformationTxHash txInfs
+    let tids = nub $ mapMaybe txInfoTxHash txInfs
     txs <- getTxs tids
     return $ fmap (mergeWith txs) txInfs
   where
     findTx :: [(Tx, Natural)] -> TxInformation -> Maybe (Tx, Natural)
     findTx txs txInf = do
-        tid <- txInformationTxHash txInf
+        tid <- txInfoTxHash txInf
         find ((== tid) . txHash . fst) txs
     mergeWith :: [(Tx, Natural)] -> TxInformation -> TxInformation
     mergeWith txs txInf = maybe txInf (`addData` txInf) $ findTx txs txInf
     addData :: (Tx, Natural) -> TxInformation -> TxInformation
-    addData (tx, fee) txInf =
-        txInformationFillTx tx txInf
-        { txInformationFee = Just fee
-        }
+    addData (tx, fee) txInf = txInfoFillTx tx txInf {txInfoFee = Just fee}
 
 getAddressTxs :: [Address] -> IO [AddressTx]
 getAddressTxs addrs = do
@@ -137,7 +134,7 @@ getAddressTxs addrs = do
 
 mergeAddressTxs :: [AddressTx] -> [TxInformation]
 mergeAddressTxs as =
-    sortOn txInformationHeight $ mapMaybe toMvt $ Map.assocs aMap
+    sortOn txInfoHeight $ mapMaybe toMvt $ Map.assocs aMap
   where
     aMap :: Map TxHash [AddressTx]
     aMap = Map.fromListWith (<>) $ fmap (addrTxTxHash &&& (: [])) as
@@ -148,16 +145,16 @@ mergeAddressTxs as =
                 let (os, is) = partition ((< 0) . addrTxAmount) atxs
                 in Just
                        TxInformation
-                       { txInformationTxHash = Just tid
-                       , txInformationTxSize = Nothing
-                       , txInformationOutbound = Map.empty
-                       , txInformationNonStd = 0
-                       , txInformationInbound = toAddrMap is
-                       , txInformationMyInputs = toAddrMap os
-                       , txInformationOtherInputs = Map.empty
-                       , txInformationFee = Nothing
-                       , txInformationHeight = addrTxHeight a
-                       , txInformationBlockHash = addrTxBlockHash a
+                       { txInfoTxHash = Just tid
+                       , txInfoTxSize = Nothing
+                       , txInfoOutbound = Map.empty
+                       , txInfoNonStd = 0
+                       , txInfoInbound = toAddrMap is
+                       , txInfoMyInputs = toAddrMap os
+                       , txInfoOtherInputs = Map.empty
+                       , txInfoFee = Nothing
+                       , txInfoHeight = addrTxHeight a
+                       , txInfoBlockHash = addrTxBlockHash a
                        }
             _ -> Nothing
     toAddrMap :: [AddressTx] -> Map Address (Satoshi, Maybe SoftPath)

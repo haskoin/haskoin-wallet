@@ -90,10 +90,10 @@ getTxInformation addrs = do
                 (consoleError $ formatError "Could not parse TxInformation")
                 resM
     forM txInfs $ \txInf ->
-        case txInformationTxHash txInf of
+        case txInfoTxHash txInf of
             Just tid -> do
                 tx <- getTx tid
-                return $ txInformationFillTx tx txInf
+                return $ txInfoFillTx tx txInf
             _ -> return txInf
   where
     url = getURL <> "/multiaddr"
@@ -110,16 +110,16 @@ getTxInformation addrs = do
             os = Map.fromList $ mapMaybe go $ v ^.. key "out" . values
         return
             TxInformation
-            { txInformationTxHash = Just tid
-            , txInformationTxSize = Just $ fromIntegral size
-            , txInformationOutbound = Map.empty
-            , txInformationNonStd = 0
-            , txInformationInbound = Map.map (, Nothing) os
-            , txInformationMyInputs = Map.map (, Nothing) is
-            , txInformationOtherInputs = Map.empty
-            , txInformationFee = Just fee
-            , txInformationHeight = heightM
-            , txInformationBlockHash = Nothing
+            { txInfoTxHash = Just tid
+            , txInfoTxSize = Just $ fromIntegral size
+            , txInfoOutbound = Map.empty
+            , txInfoNonStd = 0
+            , txInfoInbound = Map.map (, Nothing) os
+            , txInfoMyInputs = Map.map (, Nothing) is
+            , txInfoOtherInputs = Map.empty
+            , txInfoFee = Just fee
+            , txInfoHeight = heightM
+            , txInfoBlockHash = Nothing
             }
     go v = do
         addr <- base58ToAddr . fromText =<< v ^? key "addr" . _String

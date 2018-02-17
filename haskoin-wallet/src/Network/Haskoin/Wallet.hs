@@ -360,34 +360,20 @@ preparetx =
     withNonOptions Argument.string $ \as ->
         io $ do
             setOptNet network
+            let !unit = parseUnit u
+                !rcps =
+                    Map.fromList $
+                    fromMaybe rcptErr $ mapM (toRecipient unit) $
+                    groupIn 2 $ fmap fromLString as
+                !service = parseBlockchainService s
             withAccountStore acc $ \(k, store) -> do
-                let !unit = parseUnit u
-                    !rcps =
-                        Map.fromList $
-                        fromMaybe rcptErr $ mapM (toRecipient unit) $
-                        groupIn 2 $ fmap fromLString as
-                    !service = parseBlockchainService s
                 resE <- buildTxSignData service store rcps feeByte dust
-                let (!signDat, !store') =
-                        either (consoleError . formatError) id resE
-                    infoE = pubTxInformation signDat (accountStoreXPubKey store)
-                    !info = either (consoleError . formatError) id infoE
-                when (store /= store') $ updateAccountStore k $ const store'
-                let chsum = txChksum $ txSignDataTx signDat
-                    fname =
-                        fromString $ "tx-" <> toLString chsum <> "-unsigned"
-                path <- writeDoc fname signDat
-                renderIO $
-                    vcat
-                        [ txInformationFormat
-                            (accountStoreDeriv store)
-                            unit
-                            (Just False)
-                            Nothing
-                            info
-                        , formatTitle "Unsigned Tx Data File"
-                        , nest 4 $ formatFilePath $ filePathToString path
-                        ]
+                case resE of
+                    Right (signDat, store') -> do
+                        savePrepareTx store unit "tx" signDat
+                        when (store /= store') $
+                            updateAccountStore k $ const store'
+                    Left err  -> consoleError $ formatError err
   where
     rcptErr = consoleError $ formatError "Could not parse the recipients"
 
@@ -409,30 +395,41 @@ prepareswipetx =
                         mapM base58ToAddr (fromLString <$> as)
                 !service = parseBlockchainService s
             withAccountStore acc $ \(k, store) -> do
-                resE <- swipeTxSignData service store rcps feeByte
-                let (!signDat, !store') =
-                        either (consoleError . formatError) id resE
-                    infoE = pubTxInformation signDat (accountStoreXPubKey store)
-                    !info = either (consoleError . formatError) id infoE
-                when (store /= store') $ updateAccountStore k $ const store'
-                let chsum = txChksum $ txSignDataTx signDat
-                    fname =
-                        fromString $ "swipetx-" <> toLString chsum <> "-unsigned"
-                path <- writeDoc fname signDat
-                renderIO $
-                    vcat
-                        [ txInformationFormat
-                            (accountStoreDeriv store)
-                            unit
-                            (Just False)
-                            Nothing
-                            info
-                        , formatTitle "Unsigned Tx Swipe Data File"
-                        , nest 4 $ formatFilePath $ filePathToString path
-                        ]
-
+                resE <- buildSwipeTx service store rcps feeByte
+                case resE of
+                    Right (signDat, store') -> do
+                        savePrepareTx store unit "swipetx" signDat
+                        when (store /= store') $
+                            updateAccountStore k $ const store'
+                    Left err  -> consoleError $ formatError err
   where
     rcptErr = consoleError $ formatError "Could not parse addresses"
+
+savePrepareTx ::
+       AccountStore
+    -> AmountUnit
+    -> LString
+    -> TxSignData
+    -> IO ()
+savePrepareTx store unit str signDat =
+    case pubTxInfo signDat (accountStoreXPubKey store) of
+        Right info -> do
+            let chsum = txChksum $ txSignDataTx signDat
+                fname =
+                    fromString $ str <> "-" <> toLString chsum <> "-unsigned"
+            path <- writeDoc fname signDat
+            renderIO $
+                vcat
+                    [ txInfoFormat
+                          (accountStoreDeriv store)
+                          unit
+                          (Just False)
+                          Nothing
+                          info
+                    , formatTitle "Unsigned Tx Data File"
+                    , nest 4 $ formatFilePath $ filePathToString path
+                    ]
+        Left err -> consoleError $ formatError err
 
 txChksum :: Tx -> String
 txChksum = take 16 . txHashToHex . nosigTxHash
@@ -458,33 +455,40 @@ signtx = command (cmdNameL cmdSignTx) (cmdDescL cmdSignTx) $
             dat <- readDoc $ fromString fp :: IO TxSignData
             signKey <- askSigningKey $ fromIntegral d
             case signWalletTx dat signKey of
-                Right (info, signedTx, isSigned) -> do
-                    renderIO $
-                        txInformationFormat
-                            (bip44Deriv d)
-                            unit
-                            (Just isSigned)
-                            Nothing
-                            info
-                    confirmAmount unit $ txInformationAmount info
-                    let signedHex = encodeHexText $ encodeBytes signedTx
-                        chsum = txChksum signedTx
-                        fname =
-                            fromString $
-                            "tx-" <> toLString chsum <> "-signed"
-                    path <- writeDoc fname signedHex
-                    renderIO $ vcat
-                        [ formatTitle "Signed Tx File"
-                        , nest 4 $ formatFilePath $ filePathToString path
-                        ]
-                Left err -> consoleError $ formatError err
+                Right res -> saveSignedTx d unit "tx" res
+                Left err  -> consoleError $ formatError err
+
+signswipetx :: Command IO
+signswipetx = command (cmdNameL cmdSignTx) (cmdDescL cmdSignTx) $
+    withOption derOpt $ \d ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withNonOption Argument.file $ \fp ->
+    withNonOptions Argument.string $ \wifStr ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+                !prvKeys = fromMaybe badKeys $ mapM (fromWif . fromString) wifStr
+            dat <- readDoc $ fromString fp :: IO TxSignData
+            case signSwipeTx dat prvKeys of
+                Right res -> saveSignedTx d unit "swipetx" res
+                Left err  -> consoleError $ formatError err
   where
-    confirmAmount :: AmountUnit -> Integer -> IO ()
-    confirmAmount unit txAmnt = do
-        userAmnt <- askInputLine "Type the tx amount to continue signing: "
-        when (readIntegerAmount unit userAmnt /= Just txAmnt) $ do
-            renderIO $ formatError "Invalid tx amount"
-            confirmAmount unit txAmnt
+    badKeys = consoleError $ formatError "Could not decode WIF keys"
+
+saveSignedTx ::
+       Natural -> AmountUnit -> LString -> (TxInformation, Tx, Bool) -> IO ()
+saveSignedTx d unit str (info, signedTx, isSigned) = do
+    renderIO $ txInfoFormat (bip44Deriv d) unit (Just isSigned) Nothing info
+    let signedHex = encodeHexText $ encodeBytes signedTx
+        chsum = txChksum signedTx
+        fname = fromString $ str <> "-" <> toLString chsum <> "-signed"
+    path <- writeDoc fname signedHex
+    renderIO $
+        vcat
+            [ formatTitle "Signed Tx File"
+            , nest 4 $ formatFilePath $ filePathToString path
+            ]
 
 balance :: Command IO
 balance =
@@ -522,12 +526,12 @@ transactions = command (cmdNameL cmdTransactions) (cmdDescL cmdTransactions) $
                     walletAddrMap = Map.fromList walletAddrs
                 txInfs <- httpTxInformation service $ fmap fst walletAddrs
                 currHeight <- httpBestHeight service
-                forM_ (sortOn txInformationHeight txInfs) $ \txInf -> do
+                forM_ (sortOn txInfoHeight txInfs) $ \txInf -> do
                     let format =
                             if verbose
-                                then txInformationFormat
-                                else txInformationFormatCompact
-                        txInfPath = txInformationFillPath walletAddrMap txInf
+                                then txInfoFormat
+                                else txInfoFormatCompact
+                        txInfPath = txInfoFillPath walletAddrMap txInf
                     renderIO $
                         format
                             (accountStoreDeriv store)
