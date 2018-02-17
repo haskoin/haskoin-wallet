@@ -41,7 +41,7 @@ walletSpec = do
     mergeAddressTxsSpec
     serviceSpec "blockchain.info" (Service BlockchainInfoService)
     serviceSpec "insight" (Service InsightService)
-    -- serviceSpec "haskoin" (Service HaskoinService)
+    serviceSpec "haskoin" (Service HaskoinService)
 
 diceSpec :: Spec
 diceSpec =

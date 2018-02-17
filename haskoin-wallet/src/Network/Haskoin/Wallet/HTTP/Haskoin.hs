@@ -49,6 +49,7 @@ getURL
     | getNetwork == testnet3Network = "https://testnet3.haskoin.com/api"
     | getNetwork == cashTestNetwork = "https://cashtest.haskoin.com/api"
     | getNetwork == bitcoinCashNetwork = "https://bitcoincash.haskoin.com/api"
+    | getNetwork == bitcoinNetwork = "https://bitcoin.haskoin.com/api"
     | otherwise =
         consoleError $
         formatError $
@@ -63,7 +64,10 @@ instance BlockchainService HaskoinService where
     httpBestHeight _ = getBestHeight
 
 getBalance :: [Address] -> IO Satoshi
-getBalance addrs = do
+getBalance = (sum <$>) . mapM getBalance_ . splitIn 50
+
+getBalance_ :: [Address] -> IO Satoshi
+getBalance_ addrs = do
     v <- httpJsonGet opts url
     return $ fromMaybe err $ integralToNatural $ sum $ v ^.. values .
         key "confirmed" .
@@ -75,7 +79,10 @@ getBalance addrs = do
     err = consoleError $ formatError "Balance was negative"
 
 getUnspent :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
-getUnspent addrs = do
+getUnspent = (mconcat <$>) . mapM getUnspent_ . splitIn 50
+
+getUnspent_ :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
+getUnspent_ addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseCoin $ v ^.. values
     maybe (consoleError $ formatError "Could not parse coin") return resM
@@ -108,7 +115,10 @@ getTxInformation addrs = do
     addData (tx, fee) txInf = txInfoFillTx tx txInf {txInfoFee = Just fee}
 
 getAddressTxs :: [Address] -> IO [AddressTx]
-getAddressTxs addrs = do
+getAddressTxs = (mconcat <$>) . mapM getAddressTxs_ . splitIn 50
+
+getAddressTxs_ :: [Address] -> IO [AddressTx]
+getAddressTxs_ addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseAddrTx $ v ^.. values
     maybe (consoleError $ formatError "Could not parse addrTx") return resM
@@ -162,9 +172,13 @@ mergeAddressTxs as =
     toAddrVal :: AddressTx -> (Address, Satoshi)
     toAddrVal = addrTxAddress &&& fromIntegral . abs . addrTxAmount
 
+
 getTxs :: [TxHash] -> IO [(Tx, Natural)]
-getTxs [] = return []
-getTxs tids = do
+getTxs = (mconcat <$>) . mapM getTxs_ . splitIn 50
+
+getTxs_ :: [TxHash] -> IO [(Tx, Natural)]
+getTxs_ [] = return []
+getTxs_ tids = do
     v <- httpJsonGet opts url
     let xs = mapM parseTx $ v ^.. values
     maybe
