@@ -7,9 +7,9 @@ module Network.Haskoin.Wallet.Amounts where
 import           Control.Monad
 import           Data.Decimal
 import           Foundation
-import           Foundation.Collection
 import           Foundation.String.Read
 import           Network.Haskoin.Wallet.ConsolePrinter
+import           Network.Haskoin.Wallet.FoundationCompat
 
 type Satoshi = Natural
 
@@ -60,10 +60,10 @@ showAmount unit amnt =
         UnitBitcoin ->
             let (q, r) = amnt `divMod` 100000000
             in addSep (show q) <> "." <>
-               stripEnd (padWith 8 '0' (<> show r))
+               stripEnd (padStart 8 '0' (show r))
         UnitBit ->
             let (q, r) = amnt `divMod` 100
-            in addSep (show q) <> "." <> padWith 2 '0' (<> show r)
+            in addSep (show q) <> "." <> padStart 2 '0' (show r)
         UnitSatoshi -> addSep (show amnt)
   where
     stripEnd = dropPatternEnd "0000" . dropPatternEnd "000000"
@@ -75,12 +75,12 @@ readAmount unit amntStr =
         UnitBitcoin -> do
             guard $ length r <= 8
             a <- readNatural q
-            b <- readNatural $ padWith 8 '0' (r <>)
+            b <- readNatural $ padEnd 8 '0' r
             return $ a * 100000000 + b
         UnitBit -> do
             guard $ length r <= 2
             a <- readNatural q
-            b <- readNatural $ padWith 2 '0' (r <>)
+            b <- readNatural $ padEnd 2 '0' r
             return $ a * 100 + b
         UnitSatoshi -> readNatural str
   where
@@ -104,27 +104,3 @@ readIntegerAmount unit str =
         Just ('-', rest) -> negate . toInteger <$> readAmount unit rest
         _                -> toInteger <$> readAmount unit str
 
-padWith :: Sequential c => CountOf (Element c) -> Element c -> (c -> c) -> c
-padWith n p f =
-    case n - length xs of
-        Just r -> f $ replicate r p
-        _      -> xs
-  where
-    xs = f mempty
-
-dropPatternEnd :: (Eq (Element c), Sequential c) => c -> c -> c
-dropPatternEnd p xs
-    | p `isSuffixOf` xs =
-        case length xs - length p of
-            Just n -> take n xs
-            _      -> xs
-    | otherwise = xs
-
-groupEnd :: Sequential c => CountOf (Element c) -> c -> [c]
-groupEnd n xs =
-    case length xs - n of
-        Nothing -> [xs]
-        Just 0 -> [xs]
-        Just r ->
-            let (a, b) = splitAt r xs
-            in groupEnd n a <> [b]

@@ -138,13 +138,7 @@ parseBlockchainService service =
                 ]
 
 defaultBlockchainService :: Service
-defaultBlockchainService
-    | getNetwork == bitcoinNetwork = Service BlockchainInfoService
-    | getNetwork == testnet3Network = Service HaskoinService
-    | getNetwork == bitcoinCashNetwork = Service HaskoinService
-    | getNetwork == cashTestNetwork = Service HaskoinService
-    | otherwise = consoleError $ formatError $
-        "No blockchain service for network " <> fromLString networkName
+defaultBlockchainService = Service HaskoinService
 
 accOpt :: Argument.Option String
 accOpt = toOpt getAccOpt (fromLString <$> Argument.string)
@@ -433,11 +427,6 @@ savePrepareTx store unit str signDat =
 
 txChksum :: Tx -> String
 txChksum = take 16 . txHashToHex . nosigTxHash
-
-groupIn :: Sequential c => CountOf (Element c) -> c -> [c]
-groupIn n xs
-    | length xs <= n = [xs]
-    | otherwise = [take n xs] <> groupIn n (drop n xs)
 
 toRecipient :: AmountUnit -> [String] -> Maybe (Address, Satoshi)
 toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v

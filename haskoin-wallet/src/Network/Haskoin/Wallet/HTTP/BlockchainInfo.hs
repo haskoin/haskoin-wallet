@@ -50,7 +50,10 @@ instance BlockchainService BlockchainInfoService where
     httpBroadcast _ = broadcastTx
 
 getBalance :: [Address] -> IO Satoshi
-getBalance addrs = do
+getBalance = (sum <$>) . mapM getBalance_ . groupIn 50
+
+getBalance_ :: [Address] -> IO Satoshi
+getBalance_ addrs = do
     v <- httpJsonGet opts url
     return $ fromMaybe err $ integralToNatural $ sum $ v ^.. members .
         key "final_balance" .
@@ -62,7 +65,10 @@ getBalance addrs = do
     err = consoleError $ formatError "Balance was negative"
 
 getUnspent :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
-getUnspent addrs = do
+getUnspent = (mconcat <$>) . mapM getUnspent_ . groupIn 50
+
+getUnspent_ :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
+getUnspent_ addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseCoin $ v ^.. key "unspent_outputs" . values
     maybe (consoleError $ formatError "Could not parse coin") return resM
@@ -82,7 +88,10 @@ getUnspent addrs = do
         return (OutPoint tid pos, scp, val)
 
 getTxInformation :: [Address] -> IO [TxInformation]
-getTxInformation addrs = do
+getTxInformation = (mconcat <$>) . mapM getTxInformation_ . groupIn 50
+
+getTxInformation_ :: [Address] -> IO [TxInformation]
+getTxInformation_ addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseTxInformation $ v ^.. key "txs" . values
         txInfs =

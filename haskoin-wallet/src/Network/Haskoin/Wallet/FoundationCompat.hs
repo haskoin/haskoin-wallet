@@ -1,4 +1,6 @@
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE TypeFamilies      #-}
 module Network.Haskoin.Wallet.FoundationCompat where
 
 import           Control.Monad                (guard)
@@ -10,6 +12,7 @@ import qualified Data.ByteString.Lazy         as BL
 import qualified Data.Serialize               as Cereal
 import           Data.Text                    (Text)
 import           Foundation
+import           Foundation.Collection
 import           Foundation.Compat.ByteString
 import           Foundation.Compat.Text
 import           Foundation.String
@@ -115,6 +118,30 @@ decodeHexText = decodeHex . toBytes UTF8 . fromText
 
 toStrictBS :: BL.ByteString -> BS.ByteString
 toStrictBS = BL.toStrict
+
+{- List helpers -}
+
+groupIn :: Sequential c => CountOf (Element c) -> c -> [c]
+groupIn n xs
+    | null xs = []
+    | otherwise = uncurry (:) $ second (groupIn n) $ splitAt n xs
+
+groupEnd :: Sequential c => CountOf (Element c) -> c -> [c]
+groupEnd n xs
+    | null xs = []
+    | otherwise =
+        uncurry (flip (<>)) $ bimap (: []) (groupEnd n) $ revSplitAt n xs
+
+dropPatternEnd :: (Eq (Element c), Sequential c) => c -> c -> c
+dropPatternEnd p xs
+    | p `isSuffixOf` xs = revDrop (length p) xs
+    | otherwise = xs
+
+padStart :: Sequential c => CountOf (Element c) -> Element c -> c -> c
+padStart n p xs = replicate (fromMaybe 0 (n - length xs)) p <> xs
+
+padEnd :: Sequential c => CountOf (Element c) -> Element c -> c -> c
+padEnd n p xs = xs <> replicate (fromMaybe 0 (n - length xs)) p
 
 {- Haskoin helper functions -}
 

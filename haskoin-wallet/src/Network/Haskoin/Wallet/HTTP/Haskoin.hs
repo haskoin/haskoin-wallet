@@ -64,7 +64,7 @@ instance BlockchainService HaskoinService where
     httpBestHeight _ = getBestHeight
 
 getBalance :: [Address] -> IO Satoshi
-getBalance = (sum <$>) . mapM getBalance_ . splitIn 50
+getBalance = (sum <$>) . mapM getBalance_ . groupIn 50
 
 getBalance_ :: [Address] -> IO Satoshi
 getBalance_ addrs = do
@@ -79,7 +79,7 @@ getBalance_ addrs = do
     err = consoleError $ formatError "Balance was negative"
 
 getUnspent :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
-getUnspent = (mconcat <$>) . mapM getUnspent_ . splitIn 50
+getUnspent = (mconcat <$>) . mapM getUnspent_ . groupIn 50
 
 getUnspent_ :: [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 getUnspent_ addrs = do
@@ -115,7 +115,7 @@ getTxInformation addrs = do
     addData (tx, fee) txInf = txInfoFillTx tx txInf {txInfoFee = Just fee}
 
 getAddressTxs :: [Address] -> IO [AddressTx]
-getAddressTxs = (mconcat <$>) . mapM getAddressTxs_ . splitIn 50
+getAddressTxs = (mconcat <$>) . mapM getAddressTxs_ . groupIn 50
 
 getAddressTxs_ :: [Address] -> IO [AddressTx]
 getAddressTxs_ addrs = do
@@ -174,7 +174,7 @@ mergeAddressTxs as =
 
 
 getTxs :: [TxHash] -> IO [(Tx, Natural)]
-getTxs = (mconcat <$>) . mapM getTxs_ . splitIn 50
+getTxs = (mconcat <$>) . mapM getTxs_ . groupIn 50
 
 getTxs_ :: [TxHash] -> IO [(Tx, Natural)]
 getTxs_ [] = return []
