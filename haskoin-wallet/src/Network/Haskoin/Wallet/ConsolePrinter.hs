@@ -36,7 +36,10 @@ text :: ConsoleFormat -> ConsolePrinter
 text = ConsoleText
 
 (<+>) :: ConsolePrinter -> ConsolePrinter -> ConsolePrinter
-p1 <+> p2 = p1 <> text (FormatStatic " ") <> p2
+p1 <+> p2
+    | isEmptyPrinter p1 = p2
+    | isEmptyPrinter p2 = p1
+    | otherwise = p1 <> text (FormatStatic " ") <> p2
 
 vcat :: [ConsolePrinter] -> ConsolePrinter
 vcat = go . filter (not . isEmptyPrinter)

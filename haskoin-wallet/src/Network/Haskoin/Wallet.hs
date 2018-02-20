@@ -13,6 +13,7 @@ import           Data.List                                  (sortOn)
 import           Data.Map.Strict                            (Map)
 import qualified Data.Map.Strict                            as Map
 import           Data.Text                                  (Text)
+import           Data.Tree                                  (Tree (Node))
 import           Foundation
 import           Foundation.Collection
 import           Foundation.Compat.Text
@@ -39,9 +40,8 @@ import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.TxInformation
 import           Network.Haskoin.Wallet.UsageInfo
 import qualified System.Console.Argument                    as Argument
-import           System.Console.Command
 import qualified System.Console.Haskeline                   as Haskeline
-import           System.Console.Program
+import qualified System.Console.Program                     as Program
 import qualified System.Directory                           as D
 
 data DocStructure a = DocStructure
@@ -51,26 +51,117 @@ data DocStructure a = DocStructure
 
 $(deriveJSON (dropFieldLabel 12) ''DocStructure)
 
-clientMain :: IO ()
-clientMain = single hwCommands
-
 {- Options -}
 
-toOpt :: ConsoleOption a -> Argument.Type a -> Argument.Option a
-toOpt (ConsoleOption short long _ def desc) t =
-    Argument.option [short] [toLString long] t def (toLString desc)
+diceOpt :: Option Bool
+diceOpt =
+    option
+        'd'
+        "dice"
+        ["True"]
+        False
+        Argument.boolean
+        "Provide additional entropy using 6-sided dice."
 
-entOpt :: Argument.Option Natural
-entOpt = toOpt getEntOpt (fromIntegral <$> Argument.natural)
+entOpt :: Option Natural
+entOpt =
+    option
+        'e'
+        "entropy"
+        ["[16,20..32]"]
+        16
+        (fromIntegral <$> Argument.natural)
+        "Use more entropy to generate a mnemonic."
 
-diceOpt :: Argument.Option Bool
-diceOpt = toOpt getDiceOpt Argument.boolean
+derivOpt :: Option Natural
+derivOpt =
+    option
+        'd'
+        "deriv"
+        ["1"]
+        0
+        (fromIntegral <$> Argument.natural)
+        "Specify a different bip44 account derivation."
 
-derOpt :: Argument.Option Natural
-derOpt = toOpt getDerOpt (fromIntegral <$> Argument.natural)
+netOpt :: Option String
+netOpt =
+    option
+        'n'
+        "network"
+        ["bitcoin", "testnet3", "bitcoincash", "cashtest"]
+        "bitcoin"
+        (fromLString <$> Argument.string)
+        ""
 
-netOpt :: Argument.Option String
-netOpt = toOpt getNetOpt (fromLString <$> Argument.string)
+accOpt :: Option String
+accOpt =
+    option
+        'a'
+        "account"
+        ["main"]
+        ""
+        (fromLString <$> Argument.string)
+        "Specify a different account to use for this command."
+
+cntOpt :: Option Natural
+cntOpt =
+    option
+        'c'
+        "count"
+        ["10"]
+        5
+        (fromIntegral <$> Argument.natural)
+        "Number of addresses to display."
+
+feeOpt :: Option Natural
+feeOpt =
+    option
+        'f'
+        "fee"
+        ["50"]
+        200
+        (fromIntegral <$> Argument.natural)
+        "Fee to pay in sat/bytes"
+
+dustOpt :: Option Natural
+dustOpt =
+    option
+        'd'
+        "dust"
+        ["8000"]
+        5430
+        (fromIntegral <$> Argument.natural)
+        "Smallest allowed satoshi value for change outputs."
+
+unitOpt :: Option String
+unitOpt =
+    option
+        'u'
+        "unit"
+        ["bitcoin", "bit", "satoshi"]
+        "bitcoin"
+        (fromLString <$> Argument.string)
+        "Specify the unit for displayed amounts."
+
+serviceOpt :: Option String
+serviceOpt =
+    option
+        's'
+        "service"
+        ["haskoin", "blockchain", "insight"]
+        "haskoin"
+        (fromLString <$> Argument.string)
+        "HTTP data service."
+
+verboseOpt :: Option Bool
+verboseOpt =
+    option
+        'v'
+        "verbose"
+        ["True"]
+        False
+        Argument.boolean
+        "Produce a more detailed output for this command."
 
 setOptNet :: String -> IO ()
 setOptNet name
@@ -101,9 +192,6 @@ setOptNet name
                   ]
             ]
 
-unitOpt :: Argument.Option String
-unitOpt = toOpt getUnitOpt (fromLString <$> Argument.string)
-
 parseUnit :: String -> AmountUnit
 parseUnit unit =
     case unit of
@@ -117,9 +205,6 @@ parseUnit unit =
                 , nest 4 $
                   vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
                 ]
-
-serOpt :: Argument.Option String
-serOpt = toOpt getSerOpt (fromLString <$> Argument.string)
 
 parseBlockchainService :: String -> Service
 parseBlockchainService service =
@@ -140,51 +225,48 @@ parseBlockchainService service =
 defaultBlockchainService :: Service
 defaultBlockchainService = Service HaskoinService
 
-accOpt :: Argument.Option String
-accOpt = toOpt getAccOpt (fromLString <$> Argument.string)
-
-cntOpt :: Argument.Option Natural
-cntOpt = toOpt getCntOpt (fromIntegral <$> Argument.natural)
-
-feeOpt :: Argument.Option Satoshi
-feeOpt = toOpt getFeeOpt (fromIntegral <$> Argument.natural)
-
-dustOpt :: Argument.Option Satoshi
-dustOpt = toOpt getDustOpt (fromIntegral <$> Argument.natural)
-
-verbOpt :: Argument.Option Bool
-verbOpt = toOpt getVerbOpt Argument.boolean
-
 {- Commands -}
+
+clientMain :: IO ()
+clientMain = Program.single (wrappedCommand <$> hwCommands)
 
 hwCommands :: Commands IO
 hwCommands =
     Node
         hw
-        [ Node mnemonic []
+        [ Node help []
+        , Node mnemonic []
         , Node createacc []
         , Node importacc []
         , Node renameacc []
+        , Node preparetx []
+        , Node signtx []
+        , Node prepareswipetx []
+        , Node signswipetx []
+        , Node sendtx []
         , Node receive []
         , Node addresses []
         , Node balance []
         , Node transactions []
-        , Node preparetx []
-        , Node prepareswipetx []
-        , Node signtx []
-        , Node sendtx []
-        , Node help []
         ]
 
 hw :: Command IO
-hw = command "hw" "bitcoin wallet management" $ io $ renderIO usage
+hw =
+    command "hw" "Lightweight Bitcoin and Bitcoin Cash Wallet" Nothing [] $
+    io $ renderIO (usage hwCommands)
 
 help :: Command IO
-help = command (cmdNameL cmdHelp) (cmdDescL cmdHelp) $ io $ renderIO usage
+help =
+    command "help" "Display this information" Nothing [] $
+    io $ renderIO (usage hwCommands)
 
 mnemonic :: Command IO
 mnemonic =
-    command (cmdNameL cmdMnemonic) (cmdDescL cmdMnemonic) $
+    command
+        "mnemonic"
+        "Generate a mnemonic using your systems entropy"
+        (Just CommandOffline)
+        [createacc, signtx] $
     withOption entOpt $ \reqEnt ->
     withOption diceOpt $ \useDice ->
         io $ do
@@ -222,8 +304,12 @@ mnemonicPrinter n ws =
 
 createacc :: Command IO
 createacc =
-    command (cmdNameL cmdCreateAcc) (cmdDescL cmdCreateAcc) $
-    withOption derOpt $ \deriv ->
+    command
+        "createacc"
+        "Create a new account from a mnemonic"
+        (Just CommandOffline)
+        [importacc] $
+    withOption derivOpt $ \deriv ->
     withOption netOpt $ \network ->
         io $ do
             setOptNet network
@@ -246,9 +332,13 @@ createacc =
 
 importacc :: Command IO
 importacc =
-    command (cmdNameL cmdImportAcc) (cmdDescL cmdImportAcc) $
+    command
+        "importacc"
+        "Import an account file into the wallet"
+        Nothing
+        [receive] $
     withOption netOpt $ \network ->
-    withNonOption Argument.file $ \fp ->
+    withNonOption Argument.file "Filename" $ \fp ->
         io $ do
             setOptNet network
             xpub <- readDoc $ fromString fp :: IO XPubKey
@@ -276,10 +366,14 @@ importacc =
 
 renameacc :: Command IO
 renameacc =
-    command (cmdNameL cmdRenameAcc) (cmdDescL cmdRenameAcc) $
+    command
+        "renameacc"
+        "Rename an account"
+        Nothing
+        [] $
     withOption netOpt $ \network ->
-    withNonOption Argument.string $ \oldName ->
-    withNonOption Argument.string $ \newName ->
+    withNonOption Argument.string "OldName" $ \oldName ->
+    withNonOption Argument.string "NewName" $ \newName ->
         io $ do
             setOptNet network
             renameAccountStore
@@ -291,9 +385,187 @@ renameacc =
                 formatStatic "renamed to" <+>
                 formatAccount (fromLString newName)
 
+preparetx :: Command IO
+preparetx =
+    command
+        "preparetx"
+        "Prepare a new unsigned transaction"
+        (Just CommandOnline)
+        [signtx] $
+    withOption accOpt $ \acc ->
+    withOption feeOpt $ \feeByte ->
+    withOption dustOpt $ \dust ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withOption serviceOpt $ \s ->
+    withNonOptions Argument.string "Address Value [Address2 Value2 ...]" $ \as ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+                !rcps =
+                    Map.fromList $
+                    fromMaybe rcptErr $ mapM (toRecipient unit) $
+                    groupIn 2 $ fmap fromLString as
+                !service = parseBlockchainService s
+            withAccountStore acc $ \(k, store) -> do
+                resE <- buildTxSignData service store rcps feeByte dust
+                case resE of
+                    Right (signDat, store') -> do
+                        savePrepareTx store unit "tx" signDat
+                        when (store /= store') $
+                            updateAccountStore k $ const store'
+                    Left err  -> consoleError $ formatError err
+  where
+    rcptErr = consoleError $ formatError "Could not parse the recipients"
+    toRecipient :: AmountUnit -> [String] -> Maybe (Address, Satoshi)
+    toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
+    toRecipient _ _         = Nothing
+
+savePrepareTx ::
+       AccountStore
+    -> AmountUnit
+    -> LString
+    -> TxSignData
+    -> IO ()
+savePrepareTx store unit str signDat =
+    case pubTxInfo signDat (accountStoreXPubKey store) of
+        Right info -> do
+            let chsum = txChksum $ txSignDataTx signDat
+                fname =
+                    fromString $ str <> "-" <> toLString chsum <> "-unsigned"
+            path <- writeDoc fname signDat
+            renderIO $
+                vcat
+                    [ txInfoFormat
+                          (accountStoreDeriv store)
+                          unit
+                          (Just False)
+                          Nothing
+                          info
+                    , formatTitle "Unsigned Tx Data File"
+                    , nest 4 $ formatFilePath $ filePathToString path
+                    ]
+        Left err -> consoleError $ formatError err
+
+txChksum :: Tx -> String
+txChksum = take 16 . txHashToHex . nosigTxHash
+
+signtx :: Command IO
+signtx =
+    command
+        "signtx"
+        "Sign a transaction that was created with preparetx"
+        (Just CommandOffline)
+        [sendtx] $
+    withOption derivOpt $ \d ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withNonOption Argument.file "Filename" $ \fp ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+            dat <- readDoc $ fromString fp :: IO TxSignData
+            signKey <- askSigningKey $ fromIntegral d
+            case signWalletTx dat signKey of
+                Right res -> saveSignedTx d unit "tx" res
+                Left err  -> consoleError $ formatError err
+
+prepareswipetx :: Command IO
+prepareswipetx =
+    command
+        "prepareswipetx"
+        "Prepare a transaction that swipes all the funds from a list of addresses"
+        (Just CommandOnline)
+        [signswipetx] $
+    withOption accOpt $ \acc ->
+    withOption feeOpt $ \feeByte ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withOption serviceOpt $ \s ->
+    withNonOptions Argument.string "Address [Address2 ...]" $ \as ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+                !rcps =
+                    fromMaybe
+                        rcptErr $
+                        mapM base58ToAddr (fromLString <$> as)
+                !service = parseBlockchainService s
+            withAccountStore acc $ \(k, store) -> do
+                resE <- buildSwipeTx service store rcps feeByte
+                case resE of
+                    Right (signDat, store') -> do
+                        savePrepareTx store unit "swipetx" signDat
+                        when (store /= store') $
+                            updateAccountStore k $ const store'
+                    Left err  -> consoleError $ formatError err
+  where
+    rcptErr = consoleError $ formatError "Could not parse addresses"
+
+signswipetx :: Command IO
+signswipetx =
+    command
+        "signswipetx"
+        "Sign a transaction that was created with prepareswipetx"
+        (Just CommandOffline)
+        [sendtx] $
+    withOption derivOpt $ \d ->
+    withOption unitOpt $ \u ->
+    withOption netOpt $ \network ->
+    withNonOption Argument.file "Filename" $ \fp ->
+    withNonOptions Argument.string "WIF1 [WIF2 ...]" $ \wifStr ->
+        io $ do
+            setOptNet network
+            let !unit = parseUnit u
+                !prvKeys = fromMaybe badKeys $ mapM (fromWif . fromString) wifStr
+            dat <- readDoc $ fromString fp :: IO TxSignData
+            case signSwipeTx dat prvKeys of
+                Right res -> saveSignedTx d unit "swipetx" res
+                Left err  -> consoleError $ formatError err
+  where
+    badKeys = consoleError $ formatError "Could not decode WIF keys"
+
+saveSignedTx ::
+       Natural -> AmountUnit -> LString -> (TxInformation, Tx, Bool) -> IO ()
+saveSignedTx d unit str (info, signedTx, isSigned) = do
+    renderIO $ txInfoFormat (bip44Deriv d) unit (Just isSigned) Nothing info
+    let signedHex = encodeHexText $ encodeBytes signedTx
+        chsum = txChksum signedTx
+        fname = fromString $ str <> "-" <> toLString chsum <> "-signed"
+    path <- writeDoc fname signedHex
+    renderIO $
+        vcat
+            [ formatTitle "Signed Tx File"
+            , nest 4 $ formatFilePath $ filePathToString path
+            ]
+
+sendtx :: Command IO
+sendtx =
+    command
+        "sendtx"
+        "Broadcast a signed transaction"
+        (Just CommandOnline)
+        [] $
+    withOption netOpt $ \network ->
+    withOption serviceOpt $ \s ->
+    withNonOption Argument.file "Filename" $ \fp ->
+        io $ do
+            setOptNet network
+            let !service = parseBlockchainService s
+            tx <- readDoc $ fromString fp :: IO Tx
+            httpBroadcast service tx
+            renderIO $
+                formatStatic "Tx" <+>
+                formatTxHash (txHashToHex $ txHash tx) <+>
+                formatStatic "has been broadcast"
+
 receive :: Command IO
 receive =
-    command (cmdNameL cmdReceive) (cmdDescL cmdReceive) $
+    command
+        "receive"
+        "Generate a new address for receiving a payment"
+        Nothing
+        [] $
     withOption accOpt $ \acc ->
     withOption netOpt $ \network ->
         io $ do
@@ -306,7 +578,11 @@ receive =
 
 addresses :: Command IO
 addresses =
-    command (cmdNameL cmdAddresses) (cmdDescL cmdAddresses) $
+    command
+        "addresses"
+        "List the latest receiving addresses in your account"
+        Nothing
+        [] $
     withOption accOpt $ \acc ->
     withOption cntOpt $ \cnt ->
     withOption netOpt $ \network ->
@@ -342,150 +618,17 @@ addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
             ]
     n = length $ show $ maximum $ nonEmptyFmap fst as
 
-preparetx :: Command IO
-preparetx =
-    command (cmdNameL cmdPrepareTx) (cmdDescL cmdPrepareTx) $
-    withOption accOpt $ \acc ->
-    withOption feeOpt $ \feeByte ->
-    withOption dustOpt $ \dust ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
-    withOption serOpt $ \s ->
-    withNonOptions Argument.string $ \as ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-                !rcps =
-                    Map.fromList $
-                    fromMaybe rcptErr $ mapM (toRecipient unit) $
-                    groupIn 2 $ fmap fromLString as
-                !service = parseBlockchainService s
-            withAccountStore acc $ \(k, store) -> do
-                resE <- buildTxSignData service store rcps feeByte dust
-                case resE of
-                    Right (signDat, store') -> do
-                        savePrepareTx store unit "tx" signDat
-                        when (store /= store') $
-                            updateAccountStore k $ const store'
-                    Left err  -> consoleError $ formatError err
-  where
-    rcptErr = consoleError $ formatError "Could not parse the recipients"
-
-prepareswipetx :: Command IO
-prepareswipetx =
-    command (cmdNameL cmdPrepareSwipeTx) (cmdDescL cmdPrepareSwipeTx) $
-    withOption accOpt $ \acc ->
-    withOption feeOpt $ \feeByte ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
-    withOption serOpt $ \s ->
-    withNonOptions Argument.string $ \as ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-                !rcps =
-                    fromMaybe
-                        rcptErr $
-                        mapM base58ToAddr (fromLString <$> as)
-                !service = parseBlockchainService s
-            withAccountStore acc $ \(k, store) -> do
-                resE <- buildSwipeTx service store rcps feeByte
-                case resE of
-                    Right (signDat, store') -> do
-                        savePrepareTx store unit "swipetx" signDat
-                        when (store /= store') $
-                            updateAccountStore k $ const store'
-                    Left err  -> consoleError $ formatError err
-  where
-    rcptErr = consoleError $ formatError "Could not parse addresses"
-
-savePrepareTx ::
-       AccountStore
-    -> AmountUnit
-    -> LString
-    -> TxSignData
-    -> IO ()
-savePrepareTx store unit str signDat =
-    case pubTxInfo signDat (accountStoreXPubKey store) of
-        Right info -> do
-            let chsum = txChksum $ txSignDataTx signDat
-                fname =
-                    fromString $ str <> "-" <> toLString chsum <> "-unsigned"
-            path <- writeDoc fname signDat
-            renderIO $
-                vcat
-                    [ txInfoFormat
-                          (accountStoreDeriv store)
-                          unit
-                          (Just False)
-                          Nothing
-                          info
-                    , formatTitle "Unsigned Tx Data File"
-                    , nest 4 $ formatFilePath $ filePathToString path
-                    ]
-        Left err -> consoleError $ formatError err
-
-txChksum :: Tx -> String
-txChksum = take 16 . txHashToHex . nosigTxHash
-
-toRecipient :: AmountUnit -> [String] -> Maybe (Address, Satoshi)
-toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
-toRecipient _ _         = Nothing
-
-signtx :: Command IO
-signtx = command (cmdNameL cmdSignTx) (cmdDescL cmdSignTx) $
-    withOption derOpt $ \d ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
-    withNonOption Argument.file $ \fp ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-            dat <- readDoc $ fromString fp :: IO TxSignData
-            signKey <- askSigningKey $ fromIntegral d
-            case signWalletTx dat signKey of
-                Right res -> saveSignedTx d unit "tx" res
-                Left err  -> consoleError $ formatError err
-
-signswipetx :: Command IO
-signswipetx = command (cmdNameL cmdSignTx) (cmdDescL cmdSignTx) $
-    withOption derOpt $ \d ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
-    withNonOption Argument.file $ \fp ->
-    withNonOptions Argument.string $ \wifStr ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-                !prvKeys = fromMaybe badKeys $ mapM (fromWif . fromString) wifStr
-            dat <- readDoc $ fromString fp :: IO TxSignData
-            case signSwipeTx dat prvKeys of
-                Right res -> saveSignedTx d unit "swipetx" res
-                Left err  -> consoleError $ formatError err
-  where
-    badKeys = consoleError $ formatError "Could not decode WIF keys"
-
-saveSignedTx ::
-       Natural -> AmountUnit -> LString -> (TxInformation, Tx, Bool) -> IO ()
-saveSignedTx d unit str (info, signedTx, isSigned) = do
-    renderIO $ txInfoFormat (bip44Deriv d) unit (Just isSigned) Nothing info
-    let signedHex = encodeHexText $ encodeBytes signedTx
-        chsum = txChksum signedTx
-        fname = fromString $ str <> "-" <> toLString chsum <> "-signed"
-    path <- writeDoc fname signedHex
-    renderIO $
-        vcat
-            [ formatTitle "Signed Tx File"
-            , nest 4 $ formatFilePath $ filePathToString path
-            ]
-
 balance :: Command IO
 balance =
-    command (cmdNameL cmdBalance) (cmdDescL cmdBalance) $
+    command
+        "balance"
+        "Display the account balance"
+        (Just CommandOnline)
+        [] $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serOpt $ \s ->
+    withOption serviceOpt $ \s ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -500,12 +643,17 @@ balance =
                         ]
 
 transactions :: Command IO
-transactions = command (cmdNameL cmdTransactions) (cmdDescL cmdTransactions) $
+transactions =
+    command
+        "transactions"
+        "Display the account transactions"
+        (Just CommandOnline)
+        [] $
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serOpt $ \s ->
-    withOption verbOpt $ \verbose ->
+    withOption serviceOpt $ \s ->
+    withOption verboseOpt $ \verbose ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -528,21 +676,6 @@ transactions = command (cmdNameL cmdTransactions) (cmdDescL cmdTransactions) $
                             Nothing
                             (Just currHeight)
                             txInfPath
-
-sendtx :: Command IO
-sendtx = command (cmdNameL cmdSendTx) (cmdDescL cmdSendTx) $
-    withOption netOpt $ \network ->
-    withOption serOpt $ \s ->
-    withNonOption Argument.file $ \fp ->
-        io $ do
-            setOptNet network
-            let !service = parseBlockchainService s
-            tx <- readDoc $ fromString fp :: IO Tx
-            httpBroadcast service tx
-            renderIO $
-                formatStatic "Tx" <+>
-                formatTxHash (txHashToHex $ txHash tx) <+>
-                formatStatic "has been broadcast"
 
 {- Command Line Helpers -}
 
