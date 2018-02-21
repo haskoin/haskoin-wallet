@@ -513,17 +513,28 @@ signswipetx =
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
     withNonOption Argument.file "Filename" $ \fp ->
-    withNonOptions Argument.string "WIF1 [WIF2 ...]" $ \wifStr ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
-                !prvKeys = fromMaybe badKeys $ mapM (fromWif . fromString) wifStr
             dat <- readDoc $ fromString fp :: IO TxSignData
+            prvKeys <- askInputs "WIF Key" (fromWif . stringToBS)
             case signSwipeTx dat prvKeys of
                 Right res -> saveSignedTx d unit "swipetx" res
                 Left err  -> consoleError $ formatError err
+
+askInputs :: String -> (String -> Maybe a) -> IO [a]
+askInputs msg f = go []
   where
-    badKeys = consoleError $ formatError "Could not decode WIF keys"
+    go acc = do
+        inputM <-
+            Haskeline.runInputT Haskeline.defaultSettings $
+            Haskeline.getPassword (Just '*') (toLString msg <> " (Enter when done):")
+        case inputM of
+            Just input ->
+                maybe noParse (go . (:acc)) (f $ fromLString input)
+            _ -> if null acc then noInput else return acc
+    noInput = consoleError $ formatError "No input provided"
+    noParse = consoleError $ formatError "Could not parse the input"
 
 saveSignedTx ::
        Natural -> AmountUnit -> LString -> (TxInformation, Tx, Bool) -> IO ()
