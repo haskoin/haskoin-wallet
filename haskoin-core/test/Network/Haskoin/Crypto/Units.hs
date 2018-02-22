@@ -82,6 +82,7 @@ tests =
     , testGroup "bitcoind /src/test/key_tests.cpp" $
         [ testCase "Decode Valid WIF" checkPrivkey
         , testCase "Decode Invalid WIF" checkInvalidKey
+        , testCase "Decode MiniKey format" checkMiniKey
         , testCase "Check private key compression" checkPrvKeyCompressed
         , testCase "Check public key compression" checkKeyCompressed
         , testCase "Check matching address" checkMatchingAddress
@@ -127,6 +128,17 @@ checkPrivkey = do
 checkInvalidKey :: Assertion
 checkInvalidKey =
     assertBool "Bad key" $ isNothing $ fromWif strAddressBad
+
+checkMiniKey :: Assertion
+checkMiniKey =
+    assertBool "Bad mini key" $
+    isJust res && fromMiniKey "S6c56bnXQiBjk9mqSYE7ykVQ7NzrRy" == res
+  where
+    res = do
+        bs <-
+            decodeHex
+                "4C7A9640C72DC2099F23715D0C8A0D8A35F8906E3CAB61DD3F78B67BF887C9AB"
+        decodePrvKey makePrvKeyU bs
 
 checkPrvKeyCompressed :: Assertion
 checkPrvKeyCompressed = do
