@@ -517,10 +517,14 @@ signswipetx =
             setOptNet network
             let !unit = parseUnit u
             dat <- readDoc $ fromString fp :: IO TxSignData
-            prvKeys <- askInputs "WIF Key" (fromWif . stringToBS)
+            prvKeys <- askInputs "WIF or MiniKey" decKey
             case signSwipeTx dat prvKeys of
                 Right res -> saveSignedTx d unit "swipetx" res
                 Left err  -> consoleError $ formatError err
+  where
+    decKey str =
+        fromWif (stringToBS str) <|>
+        (toPrvKeyG <$> fromMiniKey (stringToBS str))
 
 askInputs :: String -> (String -> Maybe a) -> IO [a]
 askInputs msg f = go []
@@ -528,11 +532,17 @@ askInputs msg f = go []
     go acc = do
         inputM <-
             Haskeline.runInputT Haskeline.defaultSettings $
-            Haskeline.getPassword (Just '*') (toLString msg <> " (Enter when done):")
+            Haskeline.getPassword
+                (Just '*')
+                (toLString msg <> " (Enter when done):")
         case inputM of
-            Just input ->
-                maybe noParse (go . (:acc)) (f $ fromLString input)
-            _ -> if null acc then noInput else return acc
+            Just input
+                | not (null input) ->
+                    maybe noParse (go . (: acc)) (f $ fromLString input)
+            _ ->
+                if null acc
+                    then noInput
+                    else return acc
     noInput = consoleError $ formatError "No input provided"
     noParse = consoleError $ formatError "Could not parse the input"
 
