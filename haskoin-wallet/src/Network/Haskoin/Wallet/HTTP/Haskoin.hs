@@ -101,27 +101,27 @@ getUnspent_ addrs = do
 getTxInformation :: [Address] -> IO [TxInformation]
 getTxInformation addrs = do
     txInfs <- mergeAddressTxs <$> getAddressTxs addrs
-    let tids = nub $ mapMaybe txInfoTxHash txInfs
-    txs <- getTxs tids
-    return $ fmap (mergeWith txs) txInfs
+    txs <- getTxs $ nub $ mapMaybe txInfoTxHash txInfs
+    let !tMap = Map.fromList $ (txHash . fst &&& id) <$> txs
+    return $ sortOn txInfoHeight $ mergeWith tMap <$> txInfs
   where
-    findTx :: [(Tx, Natural)] -> TxInformation -> Maybe (Tx, Natural)
-    findTx txs txInf = do
-        tid <- txInfoTxHash txInf
-        find ((== tid) . txHash . fst) txs
-    mergeWith :: [(Tx, Natural)] -> TxInformation -> TxInformation
-    mergeWith txs txInf = maybe txInf (`addData` txInf) $ findTx txs txInf
+    mergeWith :: Map TxHash (Tx, Natural) -> TxInformation -> TxInformation
+    mergeWith tMap txInf =
+        maybe txInf (`addData` txInf) ((`Map.lookup` tMap) =<< txInfoTxHash txInf)
     addData :: (Tx, Natural) -> TxInformation -> TxInformation
     addData (tx, fee) txInf = txInfoFillTx tx txInf {txInfoFee = Just fee}
 
-getAddressTxs :: [Address] -> IO [AddressTx]
-getAddressTxs = (mconcat <$>) . mapM getAddressTxs_ . groupIn 50
+getAddressTxs :: [Address] -> IO (Map TxHash [AddressTx])
+getAddressTxs = (Map.unionsWith (<>) <$>) . mapM getAddressTxs_ . groupIn 50
 
-getAddressTxs_ :: [Address] -> IO [AddressTx]
+getAddressTxs_ :: [Address] -> IO (Map TxHash [AddressTx])
 getAddressTxs_ addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseAddrTx $ v ^.. values
-    maybe (consoleError $ formatError "Could not parse addrTx") return resM
+    maybe
+        (consoleError $ formatError "Could not parse addrTx")
+        (return . Map.fromListWith (<>))
+        resM
   where
     url = getURL <> "/address/transactions"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
@@ -134,22 +134,22 @@ getAddressTxs_ addrs = do
         let heightM = integralToNatural =<< v ^? key "height" . _Integer
             blockM = hexToBlockHash . fromText =<< v ^? key "block" . _String
         return
-            AddressTx
-            { addrTxAddress = addr
-            , addrTxTxHash = tid
-            , addrTxAmount = amnt
-            , addrTxHeight = heightM
-            , addrTxBlockHash = blockM
-            }
+            ( tid
+            , [ AddressTx
+                { addrTxAddress = addr
+                , addrTxTxHash = tid
+                , addrTxAmount = amnt
+                , addrTxHeight = heightM
+                , addrTxBlockHash = blockM
+                }
+              ])
 
-mergeAddressTxs :: [AddressTx] -> [TxInformation]
-mergeAddressTxs as =
-    sortOn txInfoHeight $ mapMaybe toMvt $ Map.assocs aMap
+mergeAddressTxs :: Map TxHash [AddressTx] -> [TxInformation]
+mergeAddressTxs aMap =
+    Map.elems $ Map.mapMaybeWithKey toMvt aMap
   where
-    aMap :: Map TxHash [AddressTx]
-    aMap = Map.fromListWith (<>) $ fmap (addrTxTxHash &&& (: [])) as
-    toMvt :: (TxHash, [AddressTx]) -> Maybe TxInformation
-    toMvt (tid, atxs) =
+    toMvt :: TxHash -> [AddressTx] -> Maybe TxInformation
+    toMvt tid atxs =
         case head <$> nonEmpty atxs of
             Just a ->
                 let (os, is) = partition ((< 0) . addrTxAmount) atxs
@@ -172,9 +172,8 @@ mergeAddressTxs as =
     toAddrVal :: AddressTx -> (Address, Satoshi)
     toAddrVal = addrTxAddress &&& fromIntegral . abs . addrTxAmount
 
-
 getTxs :: [TxHash] -> IO [(Tx, Natural)]
-getTxs = (mconcat <$>) . mapM getTxs_ . groupIn 50
+getTxs = (mconcat <$>) . mapM getTxs_ . groupIn 100
 
 getTxs_ :: [TxHash] -> IO [(Tx, Natural)]
 getTxs_ [] = return []

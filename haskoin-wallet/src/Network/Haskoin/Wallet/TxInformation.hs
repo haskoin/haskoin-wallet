@@ -1,6 +1,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE TupleSections   #-}
 module Network.Haskoin.Wallet.TxInformation where
 
 import           Control.Arrow                           ((&&&))
@@ -32,6 +33,15 @@ data TxInformation = TxInformation
     , txInfoBlockHash   :: Maybe BlockHash
     } deriving (Eq, Show)
 
+data AddressTx = AddressTx
+    { addrTxAddress   :: !Address
+    , addrTxTxHash    :: !TxHash
+    , addrTxAmount    :: !Integer
+    , addrTxHeight    :: Maybe Natural
+    , addrTxBlockHash :: Maybe BlockHash
+    }
+    deriving (Eq, Show)
+
 emptyTxInfo :: TxInformation
 emptyTxInfo =
     TxInformation
@@ -46,6 +56,35 @@ emptyTxInfo =
     , txInfoHeight = Nothing
     , txInfoBlockHash = Nothing
     }
+
+mergeAddressTxs :: [AddressTx] -> [TxInformation]
+mergeAddressTxs as =
+    Map.elems $ Map.mapMaybeWithKey toMvt aMap
+  where
+    aMap = Map.fromListWith (<>) $ (addrTxTxHash &&& (:[])) <$> as
+    toMvt :: TxHash -> [AddressTx] -> Maybe TxInformation
+    toMvt tid atxs =
+        case head <$> nonEmpty atxs of
+            Just a ->
+                let (os, is) = partition ((< 0) . addrTxAmount) atxs
+                in Just
+                       TxInformation
+                       { txInfoTxHash = Just tid
+                       , txInfoTxSize = Nothing
+                       , txInfoOutbound = Map.empty
+                       , txInfoNonStd = 0
+                       , txInfoInbound = toAddrMap is
+                       , txInfoMyInputs = toAddrMap os
+                       , txInfoOtherInputs = Map.empty
+                       , txInfoFee = Nothing
+                       , txInfoHeight = addrTxHeight a
+                       , txInfoBlockHash = addrTxBlockHash a
+                       }
+            _ -> Nothing
+    toAddrMap :: [AddressTx] -> Map Address (Satoshi, Maybe SoftPath)
+    toAddrMap = Map.map (, Nothing) . Map.fromListWith (+) . fmap toAddrVal
+    toAddrVal :: AddressTx -> (Address, Satoshi)
+    toAddrVal = addrTxAddress &&& fromIntegral . abs . addrTxAmount
 
 txInfoAmount :: TxInformation -> Integer
 txInfoAmount TxInformation {..} =

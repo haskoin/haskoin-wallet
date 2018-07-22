@@ -5,15 +5,15 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet where
 
-import           Control.Arrow                              (right, (&&&))
-import           Control.Monad                              (unless, when)
-import qualified Data.Aeson                                 as Json
+import           Control.Arrow                           (right, (&&&))
+import           Control.Monad                           (unless, when)
+import qualified Data.Aeson                              as Json
 import           Data.Aeson.TH
-import           Data.List                                  (sortOn)
-import           Data.Map.Strict                            (Map)
-import qualified Data.Map.Strict                            as Map
-import           Data.Text                                  (Text)
-import           Data.Tree                                  (Tree (Node))
+import           Data.List                               (sortOn)
+import           Data.Map.Strict                         (Map)
+import qualified Data.Map.Strict                         as Map
+import           Data.Text                               (Text)
+import           Data.Tree                               (Tree (Node))
 import           Foundation
 import           Foundation.Collection
 import           Foundation.Compat.Text
@@ -21,28 +21,24 @@ import           Foundation.IO
 import           Foundation.String
 import           Foundation.VFS
 import           Network.Haskoin.Constants
-import           Network.Haskoin.Crypto                     hiding
-                                                             (addrToBase58,
-                                                             base58ToAddr,
-                                                             xPubExport)
-import           Network.Haskoin.Transaction                hiding (txHashToHex)
-import           Network.Haskoin.Util                       (dropFieldLabel)
+import           Network.Haskoin.Crypto                  hiding (addrToBase58,
+                                                          base58ToAddr,
+                                                          xPubExport)
+import           Network.Haskoin.Transaction             hiding (txHashToHex)
+import           Network.Haskoin.Util                    (dropFieldLabel)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.ConsolePrinter
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
-import           Network.Haskoin.Wallet.HTTP.BlockchainInfo
-import           Network.Haskoin.Wallet.HTTP.Haskoin
-import           Network.Haskoin.Wallet.HTTP.Insight
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.TxInformation
 import           Network.Haskoin.Wallet.UsageInfo
-import qualified System.Console.Argument                    as Argument
-import qualified System.Console.Haskeline                   as Haskeline
-import qualified System.Console.Program                     as Program
-import qualified System.Directory                           as D
+import qualified System.Console.Argument                 as Argument
+import qualified System.Console.Haskeline                as Haskeline
+import qualified System.Console.Program                  as Program
+import qualified System.Directory                        as D
 
 data DocStructure a = DocStructure
     { docStructureNetwork :: !Text
@@ -143,16 +139,6 @@ unitOpt =
         (fromLString <$> Argument.string)
         "Specify the unit for displayed amounts."
 
-serviceOpt :: Option String
-serviceOpt =
-    option
-        's'
-        "service"
-        ["haskoin", "blockchain", "insight"]
-        "haskoin"
-        (fromLString <$> Argument.string)
-        "HTTP data service."
-
 verboseOpt :: Option Bool
 verboseOpt =
     option
@@ -205,25 +191,6 @@ parseUnit unit =
                 , nest 4 $
                   vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
                 ]
-
-parseBlockchainService :: String -> Service
-parseBlockchainService service =
-    case service of
-        "" -> defaultBlockchainService
-        "haskoin" -> Service HaskoinService
-        "blockchain" -> Service BlockchainInfoService
-        "insight" -> Service InsightService
-        _ ->
-            consoleError $
-            vcat
-                [ formatError
-                      "Invalid service name. Select one of the following:"
-                , nest 4 $
-                  vcat $ fmap formatStatic ["haskoin", "blockchain", "insight"]
-                ]
-
-defaultBlockchainService :: Service
-defaultBlockchainService = Service HaskoinService
 
 {- Commands -}
 
@@ -397,7 +364,6 @@ preparetx =
     withOption dustOpt $ \dust ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serviceOpt $ \s ->
     withNonOptions Argument.string "Address Value [Address2 Value2 ...]" $ \as ->
         io $ do
             setOptNet network
@@ -406,9 +372,8 @@ preparetx =
                     Map.fromList $
                     fromMaybe rcptErr $ mapM (toRecipient unit) $
                     groupIn 2 $ fmap fromLString as
-                !service = parseBlockchainService s
             withAccountStore acc $ \(k, store) -> do
-                resE <- buildTxSignData service store rcps feeByte dust
+                resE <- buildTxSignData store rcps feeByte dust
                 case resE of
                     Right (signDat, store') -> do
                         savePrepareTx store unit "tx" signDat
@@ -481,7 +446,6 @@ prepareswipetx =
     withOption feeOpt $ \feeByte ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serviceOpt $ \s ->
     withNonOptions Argument.string "Address [Address2 ...]" $ \as ->
         io $ do
             setOptNet network
@@ -490,9 +454,8 @@ prepareswipetx =
                     fromMaybe
                         rcptErr $
                         mapM base58ToAddr (fromLString <$> as)
-                !service = parseBlockchainService s
             withAccountStore acc $ \(k, store) -> do
-                resE <- buildSwipeTx service store rcps feeByte
+                resE <- buildSwipeTx store rcps feeByte
                 case resE of
                     Right (signDat, store') -> do
                         savePrepareTx store unit "swipetx" signDat
@@ -568,13 +531,11 @@ sendtx =
         (Just CommandOnline)
         [] $
     withOption netOpt $ \network ->
-    withOption serviceOpt $ \s ->
     withNonOption Argument.file "Filename" $ \fp ->
         io $ do
             setOptNet network
-            let !service = parseBlockchainService s
             tx <- readDoc $ fromString fp :: IO Tx
-            httpBroadcast service tx
+            httpBroadcastTx tx
             renderIO $
                 formatStatic "Tx" <+>
                 formatTxHash (txHashToHex $ txHash tx) <+>
@@ -649,14 +610,12 @@ balance =
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serviceOpt $ \s ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
-                !service = parseBlockchainService s
             withAccountStore acc $ \(_, store) -> do
                 let addrs = allExtAddresses store <> allIntAddresses store
-                bal <- httpBalance service $ fmap fst addrs
+                bal <- httpBalance $ fmap fst addrs
                 renderIO $
                     vcat
                         [ formatTitle "Account Balance"
@@ -673,17 +632,15 @@ transactions =
     withOption accOpt $ \acc ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withOption serviceOpt $ \s ->
     withOption verboseOpt $ \verbose ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
-                !service = parseBlockchainService s
             withAccountStore acc $ \(_, store) -> do
                 let walletAddrs = allExtAddresses store <> allIntAddresses store
                     walletAddrMap = Map.fromList walletAddrs
-                txInfs <- httpTxInformation service $ fmap fst walletAddrs
-                currHeight <- httpBestHeight service
+                txInfs <- httpTxInformation $ fmap fst walletAddrs
+                currHeight <- httpBestHeight
                 forM_ (sortOn txInfoHeight txInfs) $ \txInf -> do
                     let format =
                             if verbose

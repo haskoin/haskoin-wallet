@@ -2,11 +2,10 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.Spec where
 
-import           Control.Lens                               ((^.), _1, _2, _3,
-                                                             _4)
-import           Data.Either                                (isLeft)
-import           Data.List                                  (sum)
-import qualified Data.Map.Strict                            as Map
+import           Control.Lens                            ((^.), _1, _2, _3, _4)
+import           Data.Either                             (isLeft)
+import           Data.List                               (sum)
+import qualified Data.Map.Strict                         as Map
 import           Foundation
 import           Foundation.Collection
 import           Foundation.Compat.ByteString
@@ -14,16 +13,13 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Crypto
 import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
-import           Network.Haskoin.Util                       (integerToBS)
+import           Network.Haskoin.Util                    (integerToBS)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.Arbitrary           ()
+import           Network.Haskoin.Wallet.Arbitrary        ()
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
-import           Network.Haskoin.Wallet.HTTP.BlockchainInfo
-import           Network.Haskoin.Wallet.HTTP.Haskoin
-import           Network.Haskoin.Wallet.HTTP.Insight
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.TxInformation
 import           Numeric
@@ -39,9 +35,7 @@ walletSpec = do
     buildSpec
     signingSpec
     mergeAddressTxsSpec
-    serviceSpec "blockchain.info" (Service BlockchainInfoService)
-    serviceSpec "insight" (Service InsightService)
-    serviceSpec "haskoin" (Service HaskoinService)
+    httpSpec
 
 diceSpec :: Spec
 diceSpec =
@@ -696,22 +690,21 @@ mergeAddressTxsSpec =
                   }
                 ]
 
-serviceSpec :: LString -> Service -> Spec
-serviceSpec name service =
-    describe (name <> " (online test)") $ do
+httpSpec :: Spec
+httpSpec =
+    describe "HTTP service (online test)" $ do
         it "can receive balance (online test)" $ do
-            res <- httpBalance service ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
-            res `shouldSatisfy` (>= 1600000000)
+            res <- httpBalance ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            res `shouldSatisfy` (>= 6687607502)
         it "can receive coins (online test)" $ do
-            res <- httpUnspent service ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
-            length res `shouldSatisfy` (> 9)
+            res <- httpUnspent ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            length res `shouldSatisfy` (>= 1290)
             (outputAddress . snd) <$>
                 res `shouldSatisfy`
                 all (== Right "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
         it "can receive a transaction information (online test)" $ do
-            res <-
-                httpTxInformation service ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
-            length res `shouldSatisfy` (> 9)
+            res <- httpTxInformation ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            length res `shouldSatisfy` (>= 1290)
             let res1 = head $ nonEmpty_ res
                 as =
                     Map.keys (txInfoInbound res1) <>
@@ -720,10 +713,10 @@ serviceSpec name service =
         it "can receive a transaction (online test)" $ do
             let tid =
                     "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098"
-            res <- httpTx service tid
-            txHash res `shouldBe` tid
+            res <- httpTxs [tid]
+            (first txHash <$> res) `shouldBe` [(tid, 0)]
         it "can get the best block height (online test)" $ do
-            res <- httpBestHeight service
+            res <- httpBestHeight
             res `shouldSatisfy` (> 500000)
 
 {- Test Constants -}

@@ -30,9 +30,6 @@ library
                    , Network.Haskoin.Wallet.AccountStore
                    , Network.Haskoin.Wallet.Signing
                    , Network.Haskoin.Wallet.HTTP
-                   , Network.Haskoin.Wallet.HTTP.BlockchainInfo
-                   , Network.Haskoin.Wallet.HTTP.Insight
-                   , Network.Haskoin.Wallet.HTTP.Haskoin
                    , Network.Haskoin.Wallet.Amounts
                    , Network.Haskoin.Wallet.ConsolePrinter
                    , Network.Haskoin.Wallet.FoundationCompat

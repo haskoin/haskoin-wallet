@@ -155,15 +155,19 @@ columns: 80
 #
 # No language extensions are enabled by default.
 language_extensions:
+  - BangPatterns
   - DeriveDataTypeable
   - EmptyDataDecls
+  - ExistentialQuantification
   - FlexibleContexts
   - FlexibleInstances
   - GADTs
   - GeneralizedNewtypeDeriving
   - MultiParamTypeClasses
+  - NoImplicitPrelude
   - OverloadedStrings
   - QuasiQuotes
   - RecordWildCards
   - TemplateHaskell
+  - TupleSections
   - TypeFamilies

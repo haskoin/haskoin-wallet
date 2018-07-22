@@ -42,21 +42,19 @@ instance Ord WalletCoin where
 toWalletCoin :: (OutPoint, ScriptOutput, Satoshi) -> WalletCoin
 toWalletCoin (op, so, v) = WalletCoin op so v
 
-buildTxSignData :: BlockchainService s
-                => s
-                -> AccountStore
+buildTxSignData :: AccountStore
                 -> Map Address Satoshi
                 -> Satoshi
                 -> Satoshi
                 -> IO (Either String (TxSignData, AccountStore))
-buildTxSignData service store rcpMap feeByte dust
+buildTxSignData store rcpMap feeByte dust
     | Map.null rcpMap = return $ Left "No recipients provided"
     | otherwise = do
         allCoins <-
-            fmap toWalletCoin <$> httpUnspent service (Map.keys walletAddrMap)
+            fmap toWalletCoin <$> httpUnspent (Map.keys walletAddrMap)
         case buildWalletTx walletAddrMap allCoins change rcpMap feeByte dust of
             Right (tx, depTxHash, inDeriv, outDeriv) -> do
-                depTxs <- httpTxs service depTxHash
+                depTxs <- (fst <$>) <$> httpTxs depTxHash
                 return $
                     Right
                         ( TxSignData
@@ -116,14 +114,12 @@ buildWalletTx walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte dust =
     descCoins = sortBy (comparing Down) coins
 
 buildSwipeTx ::
-       BlockchainService s
-    => s
-    -> AccountStore
+       AccountStore
     -> [Address]
     -> Satoshi -- Fee per byte
     -> IO (Either String (TxSignData, AccountStore))
-buildSwipeTx service store addrs feeByte = do
-    coins <- fmap toWalletCoin <$> httpUnspent service addrs
+buildSwipeTx store addrs feeByte = do
+    coins <- fmap toWalletCoin <$> httpUnspent addrs
     let tot = sum $ walletCoinValue <$> coins
         fee = guessTxFee (fromIntegral feeByte) 1 (fromCount $ length coins)
         ops = walletCoinOutPoint <$> coins
@@ -131,7 +127,7 @@ buildSwipeTx service store addrs feeByte = do
     if null coins
         then return $ Left "No coins were found in the given addresses"
         else do
-            depTxs <- httpTxs service depTxHash
+            depTxs <- (fst <$>) <$> httpTxs depTxHash
             return $
                 eitherString $ do
                     amnt <-
