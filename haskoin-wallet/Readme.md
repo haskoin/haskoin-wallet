@@ -149,12 +149,62 @@ The network will affect the constants being used to derive addresses and keys.
 It will also affect how transactions are signed so they are valid in their
 respective networks.
 
+### unit
+
+```console
+-u --unit=[bitcoin,bit,satoshi] (Default: "bitcoin")
+```
+
+Specify the unit to use when entering or displaying amounts.
+
+Example:
+
+```console
+hw balance --unit=bitcoin
+0.62592590 bitcoins
+
+hw balance --unit=bit
+625'925.90 bits
+
+hw balance --unit=satoshi
+62'592'590 satoshi
+```
+
+The apostrophe are not required when entering amounts.
+
+### account
+
+```console
+-a --account=main (Default: "")
+```
+
+Specify which account to use for a command. Unless otherwise specified, the
+*main* account will be used.
+
+### fee
+
+```console
+-f --fee=50 (Default: 200)
+```
+
+The transaction fee to pay (in satoshi/byte).
+
+### dust
+
+```console
+-d --dust=8000 (Default: 5430)
+```
+
+The smallest allowed value for change outputs (in satoshi).
+
 [mnemonic]: #mnemonic
 [createacc]: #createacc 
 [importacc]: #importacc
+[preparetx]: #preparetx
 [signtx]: #signtx
 [receive]: #receive
 [network]: #network
+[unit]: #unit
 [deriv]: #deriv
 [BIP32]: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
