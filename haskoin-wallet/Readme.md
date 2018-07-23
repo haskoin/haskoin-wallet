@@ -11,7 +11,7 @@ very fast and responsive but requires trust in the indexer. In sensitive
 environments, it is recommended to run Haskoin Wallet behind your own trusted
 indexer.
 
-## Commands Documentation
+## Commands
 
 ```console
 hw command args [--options]
@@ -19,9 +19,7 @@ hw command args [--options]
 
 ### mnemonic
 
-```console
-hw mnemonic [--dice] [--entropy=20]
-```
+`hw mnemonic [--dice] [--entropy=20]`
 
 - **Offline Command** (Should be run on an offline computer)
 - Follow up commands: [createacc], [signtx]
@@ -32,8 +30,6 @@ it in a safe place. If you loose your mnemonic you will loose all the funds in
 your wallet. You will be asked for your mnemonic while creating new accounts
 with createacc and signing transactions with the signtx command. Haskoin Wallet
 does not store the mnemonic or any private keys generated from it on disk.
-
-#### mnemonic options
 
 ```console
 -d --dice=True (default False)
@@ -55,9 +51,7 @@ throws to match the entropy.
 
 ### createacc
 
-```console
-hw createacc [--deriv=1] [--network=bitcoincash]
-```
+`hw createacc` --[deriv] --[network]
 
 - **Offline Command** (Should be run on an offline computer)
 - Follow up commands: [importacc]
@@ -86,7 +80,51 @@ use the same mnemonic with different passphrases to generate different account
 keys. To recover your funds successfully, it is important that you use the same
 combination of mnemonic, passphrase and account index (the `--deriv` option).
 
-#### createacc options
+### importacc
+
+`hw importacc filename` --[network]
+
+- Follow up commands: [receive]
+
+Create a new account using the public key that was generated through the
+[createacc] command. This will allow you to monitor the balances and
+transactions related to this account without having the ability of spending any
+funds. [importacc] should typically be run on an online computer.
+
+### renameacc
+
+`hw renameacc OldName NewName` --[network]
+
+Rename an account.
+
+### preparetx
+
+`hw preparetx Address Value [Address2 Value2 ...]` --[account] --[fee] --[dust] --[unit] --[network]
+
+- **Online Command** (Should be run on an online computer)
+- Follow up commands: [signtx]
+
+Create a new unsigned transaction using the given addresses and values as
+recipients. The resulting transaction will be saved in a file in your home
+directory which can be further signed in an offline computer using the [signtx]
+command.
+
+The [preparetx] command needs to be run on an online computer as it needs to
+retrieve the list of available coins in your account. Your mnemonic (or private
+keys) is not required to prepare a transaction.
+
+### signtx
+### prepareswipetx
+### signswipetx
+### sendtx
+### receive
+### addresses
+### balance
+### transactions
+    
+## Options
+
+### deriv
 
 ```console
 -d --deriv=1 (default 0)
@@ -94,6 +132,8 @@ combination of mnemonic, passphrase and account index (the `--deriv` option).
 Choose a different account in the [BIP44] derivation scheme. By default, the account
 `0` will be used. You could, for example, create a spending and a savings account 
 with the same [mnemonic] and passphrase using accounts `0` and `1`. 
+
+### network
 
 ```console
 -n --network=[bitcoin,testnet3,bitcoincash,cashtest] (default 0)
@@ -108,10 +148,13 @@ Specify the network. The following are supported:
 The network will affect the constants being used to derive addresses and keys.
 It will also affect how transactions are signed so they are valid in their
 respective networks.
-    
+
 [mnemonic]: #mnemonic
 [createacc]: #createacc 
 [importacc]: #importacc
 [signtx]: #signtx
+[receive]: #receive
+[network]: #network
+[deriv]: #deriv
 [BIP32]: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
