@@ -53,7 +53,7 @@ throws to match the entropy.
 
 `hw createacc` --[deriv] --[network]
 
-- **Offline Command** (Should be run on an offline computer)
+- **Offline Command** (This command requires your mnemonic)
 - Follow up commands: [importacc]
 
 Haskoin Wallet uses the [BIP44] hierarchical deterministic key generation
@@ -101,7 +101,7 @@ Rename an account.
 
 `hw preparetx Address Value [Address2 Value2 ...]` --[account] --[fee] --[dust] --[unit] --[network]
 
-- **Online Command** (Should be run on an online computer)
+- **Online Command** (This command requires network connectivity)
 - Follow up commands: [signtx]
 
 Create a new unsigned transaction using the given addresses and values as
@@ -114,8 +114,47 @@ retrieve the list of available coins in your account. Your mnemonic (or private
 keys) is not required to prepare a transaction.
 
 ### signtx
+
+`hw signtx Filename` --[deriv] --[unit] --[network]
+
+- **Offline Command** (This command requires your mnemonic)
+- Follow up commands: [sendtx]
+
+Sign a transaction that was created with the [preparetx] command. Ideally, you
+want to do this on an offline computer as this command will require your
+mnemonic. This command will create a new file in your home directory containing
+the signed transaction. When you are ready, you can then broadcast that
+transaction on a computer that has network connectivity using the [sendtx]
+command.
+
 ### prepareswipetx
+
+`hw prepareswipetx Address [Address2 ...]` --[account] --[fee] --[unit] --[network]
+
+- **Online Command** (This command requires network connectivity)
+- Follow up commands: [signswipetx]
+
+This command allows you to build an unsigned transaction that spends all the
+unspent coins of the given addresses. [prepareswipetx] is useful if you want to
+swipe all the funds out of a paper wallet or physical coins. The funds (minus
+the network [fee]) will be sent into your [account].
+
+The command will output a file containing the unsigned transaction in your home
+directory. You can then sign it with [signswipetx].
+
 ### signswipetx
+
+`hw signswipetx Filename` --[deriv] --[unit] --[network]
+
+- **Offline Command** (This command requires private keys)
+- Follow up commands: [sendtx]
+
+Sign a transaction that was prepare using [prepareswipetx]. You will be
+requested to input the private keys in either WIF or MiniKey format.
+
+The command will output the signed transaction in a file in your home directory.
+You can then broadcast that transaction using the [sendtx] command.
+
 ### sendtx
 ### receive
 ### addresses
@@ -201,10 +240,17 @@ The smallest allowed value for change outputs (in satoshi).
 [createacc]: #createacc 
 [importacc]: #importacc
 [preparetx]: #preparetx
+[prepareswipetx]: #prepareswipetx
 [signtx]: #signtx
+[signswipetx]: #signswipetx
 [receive]: #receive
+[sendtx]: #sendtx
 [network]: #network
 [unit]: #unit
 [deriv]: #deriv
+[account]: #account
+[fee]: #fee
+[dust]: #dust
 [BIP32]: https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki
 [BIP44]: https://github.com/bitcoin/bips/blob/master/bip-0044.mediawiki
+
