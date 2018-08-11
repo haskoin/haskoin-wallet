@@ -1,0 +1,98 @@
+name: haskoin-wallet
+version: '0.6.0.0'
+synopsis: Lightweight command-line Bitcoin wallet
+description: ! 'haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics
+
+  and BIP32 key derivations. It requires a full blockchain index such as
+
+  haskoin-store to query balances and unspent outputs. The wallet can both
+
+  build transactions in read-only (xpub-only) mode and sign them in an
+
+  offline environment.'
+category: Bitcoin, Finance, Network
+author:
+- Philippe Laprade
+- Jean-Pierre Rupp
+maintainer: xenog@protonmail.com
+license: PublicDomain
+license-file: UNLICENSE
+homepage: http://github.com/haskoin/haskoin
+git: git://github.com/haskoin/haskoin.git
+bug-reports: http://github.com/haskoin/haskoin/issues
+tested-with: GHC==8.0.2
+library:
+  source-dirs: src
+  ghc-options: -Wall
+  exposed-modules:
+  - Network.Haskoin.Wallet
+  - Network.Haskoin.Wallet.Entropy
+  - Network.Haskoin.Wallet.AccountStore
+  - Network.Haskoin.Wallet.Signing
+  - Network.Haskoin.Wallet.HTTP
+  - Network.Haskoin.Wallet.Amounts
+  - Network.Haskoin.Wallet.ConsolePrinter
+  - Network.Haskoin.Wallet.FoundationCompat
+  - Network.Haskoin.Wallet.TxInformation
+  - Network.Haskoin.Wallet.UsageInfo
+  dependencies:
+  - base >=4.7 && <5
+  - aeson
+  - ansi-terminal
+  - aeson-pretty
+  - base16-bytestring
+  - base64-bytestring
+  - bytestring
+  - cereal
+  - containers
+  - console-program
+  - directory
+  - Decimal
+  - entropy
+  - foundation
+  - foundation-edge
+  - haskeline
+  - haskoin-core
+  - http-types
+  - lens
+  - lens-aeson
+  - pretty
+  - string-conversions
+  - text
+  - transformers
+  - wreq
+executables:
+  hw:
+    main: Main.hs
+    source-dirs: app
+    ghc-options:
+    - -Wall
+    - -O3
+    - -threaded
+    - -eventlog
+    - -rtsopts
+    - -with-rtsopts=-N4
+    dependencies:
+    - base >=4.7 && <5
+    - haskoin-wallet
+tests:
+  test-haskoin-wallet:
+    main: Main.hs
+    source-dirs: test
+    ghc-options: -Wall
+    dependencies:
+    - base >=4.7 && <5
+    - aeson
+    - bytestring
+    - cereal
+    - containers
+    - foundation
+    - foundation-edge
+    - haskoin-core
+    - haskoin-wallet
+    - hspec
+    - lens
+    - string-conversions
+    - text
+    - HUnit
+    - QuickCheck

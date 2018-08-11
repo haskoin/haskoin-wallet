@@ -1,0 +1,114 @@
+-- This file has been generated from package.yaml by hpack version 0.20.0.
+--
+-- see: https://github.com/sol/hpack
+--
+-- hash: aa2f434286abab06ce46c5480dd90a0731b3c96a23abf3248978ef63364f1848
+
+name:           haskoin-wallet
+version:        0.6.0.0
+synopsis:       Lightweight command-line Bitcoin wallet
+description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics
+                and BIP32 key derivations. It requires a full blockchain index such as
+                haskoin-store to query balances and unspent outputs. The wallet can both
+                build transactions in read-only (xpub-only) mode and sign them in an
+                offline environment.
+category:       Bitcoin, Finance, Network
+homepage:       http://github.com/haskoin/haskoin
+bug-reports:    http://github.com/haskoin/haskoin/issues
+author:         Philippe Laprade,
+                Jean-Pierre Rupp
+maintainer:     xenog@protonmail.com
+license:        PublicDomain
+license-file:   UNLICENSE
+tested-with:    GHC==8.0.2
+build-type:     Simple
+cabal-version:  >= 1.10
+
+source-repository head
+  type: git
+  location: git://github.com/haskoin/haskoin.git
+
+library
+  hs-source-dirs:
+      src
+  ghc-options: -Wall
+  build-depends:
+      Decimal
+    , aeson
+    , aeson-pretty
+    , ansi-terminal
+    , base >=4.7 && <5
+    , base16-bytestring
+    , base64-bytestring
+    , bytestring
+    , cereal
+    , console-program
+    , containers
+    , directory
+    , entropy
+    , foundation
+    , foundation-edge
+    , haskeline
+    , haskoin-core
+    , http-types
+    , lens
+    , lens-aeson
+    , pretty
+    , string-conversions
+    , text
+    , transformers
+    , wreq
+  exposed-modules:
+      Network.Haskoin.Wallet
+      Network.Haskoin.Wallet.Entropy
+      Network.Haskoin.Wallet.AccountStore
+      Network.Haskoin.Wallet.Signing
+      Network.Haskoin.Wallet.HTTP
+      Network.Haskoin.Wallet.Amounts
+      Network.Haskoin.Wallet.ConsolePrinter
+      Network.Haskoin.Wallet.FoundationCompat
+      Network.Haskoin.Wallet.TxInformation
+      Network.Haskoin.Wallet.UsageInfo
+  other-modules:
+      Paths_haskoin_wallet
+  default-language: Haskell2010
+
+executable hw
+  main-is: Main.hs
+  hs-source-dirs:
+      app
+  ghc-options: -Wall -O3 -threaded -eventlog -rtsopts -with-rtsopts=-N4
+  build-depends:
+      base >=4.7 && <5
+    , haskoin-wallet
+  other-modules:
+      Paths_haskoin_wallet
+  default-language: Haskell2010
+
+test-suite test-haskoin-wallet
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  hs-source-dirs:
+      test
+  ghc-options: -Wall
+  build-depends:
+      HUnit
+    , QuickCheck
+    , aeson
+    , base >=4.7 && <5
+    , bytestring
+    , cereal
+    , containers
+    , foundation
+    , foundation-edge
+    , haskoin-core
+    , haskoin-wallet
+    , hspec
+    , lens
+    , string-conversions
+    , text
+  other-modules:
+      Network.Haskoin.Wallet.Arbitrary
+      Network.Haskoin.Wallet.Spec
+      Paths_haskoin_wallet
+  default-language: Haskell2010
