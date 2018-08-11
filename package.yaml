@@ -21,6 +21,8 @@ homepage: http://github.com/haskoin/haskoin
 git: git://github.com/haskoin/haskoin.git
 bug-reports: http://github.com/haskoin/haskoin/issues
 tested-with: GHC==8.0.2
+dependencies:
+  - base >=4.7 && <5
 library:
   source-dirs: src
   ghc-options: -Wall
@@ -36,7 +38,6 @@ library:
   - Network.Haskoin.Wallet.TxInformation
   - Network.Haskoin.Wallet.UsageInfo
   dependencies:
-  - base >=4.7 && <5
   - aeson
   - ansi-terminal
   - aeson-pretty
@@ -73,7 +74,6 @@ executables:
     - -rtsopts
     - -with-rtsopts=-N4
     dependencies:
-    - base >=4.7 && <5
     - haskoin-wallet
 tests:
   test-haskoin-wallet:
@@ -81,7 +81,6 @@ tests:
     source-dirs: test
     ghc-options: -Wall
     dependencies:
-    - base >=4.7 && <5
     - aeson
     - bytestring
     - cereal
