@@ -1,6 +1,6 @@
 # Haskoin Wallet
 
-Haskoin Wallet (hw) is a lightweight Bitcoin and Bitcoin Cash command line wallet. It can be used to manage cold storage funds in an online/offline environment. An online computer can query balances and prepare transactions that can be signed securely by an offline (air gapped) computer.
+Haskoin Wallet (`hw`) is a lightweight Bitcoin and Bitcoin Cash command line wallet. It can be used to manage cold storage funds in an online/offline environment. An online computer can query balances and prepare transactions that can be signed securely by an offline (air gapped) computer.
 
 Haskoin Wallet doesn't store blockchain information locally and relies on information provided by a blockchain indexer. This allows Haskoin Wallet to be very fast and responsive but requires trust in the indexer. In sensitive environments, it is recommended to run Haskoin Wallet behind your own trusted indexer.
 
@@ -52,7 +52,7 @@ As all the derivations below this level are non-hardened, this public key can be
 
 ### `importacc`
 
-`hw` `importacc` `{``filename``}` [`--network`](#network)
+`hw` `importacc` `{filename}` [`--network`](#network)
 
 - Follow up commands: [`receive`](#receive)
 
@@ -60,13 +60,13 @@ Create a new account using the public key that was generated through the [`creat
 
 ### `renameacc`
 
-`hw` `renameacc` `{``oldname``}` `{``newname``}` [`--network`](#network)
+`hw` `renameacc` `{oldname}` `{newname}` [`--network`](#network)
 
 Rename an account.
 
 ### `preparetx`
 
-`hw` `preparetx` `{``address` `value` `...``}` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
+`hw` `preparetx` `{address value ...}` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signtx`](#signtx)
@@ -77,7 +77,7 @@ The [`preparetx`](#preparetx) command needs to be run on an online computer as i
 
 ### `signtx`
 
-`hw` `signtx` `{``filename``}` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
+`hw` `signtx` `{filename}` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
 
 - **Offline Command** (This command requires your mnemonic)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -86,7 +86,7 @@ Sign a transaction that was created with the [`preparetx`](#preparetx) command. 
 
 ### `prepareswipetx`
 
-`hw` `prepareswipetx` `{``address` `...``}` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
+`hw` `prepareswipetx` `{address...}` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signswipetx`](#signswipetx)
@@ -97,7 +97,7 @@ The command will output a file containing the unsigned transaction in your home 
 
 ### `signswipetx`
 
-`hw` `signswipetx` `{``filename``}` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
+`hw` `signswipetx` `{filename}` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
 
 - **Offline Command** (This command requires private keys)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -163,7 +163,7 @@ The apostrophe are not required when entering amounts.
 ### `account`
 
 ```console
--a --account=main (default: "")
+-a --account=main (default: '')
 ```
 
 Specify which account to use for a command. Unless otherwise specified, the
