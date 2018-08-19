@@ -7,7 +7,7 @@ Haskoin Wallet doesn't store blockchain information locally and relies on inform
 ## Commands
 
 ```console
-hw command args [--options]
+hw {command} [args] [--options]
 ```
 
 ### `mnemonic`
@@ -20,12 +20,12 @@ hw command args [--options]
 Generate a 12 word human readable english [`mnemonic`](#mnemonic) using your systems entropy (typically /dev/random). You have to write down your mnemonic on paper and keep it in a safe place. If you loose your mnemonic you will loose all the funds in your wallet. You will be asked for your mnemonic while creating new accounts with createacc and signing transactions with the signtx command. Haskoin Wallet does not store the mnemonic or any private keys generated from it on disk.
 
 ```console
--d --dice=True (default False)
+-d --dice=true (default: false)
 ```
 Complement the system entropy by providing your own entropy using 6-sided dice. You will be prompted for an exact amount of dice throws depending on how much entropy is required. If you want to benefit from this feature fully, you must throw real dice and not computer simulated dice. The result has to be entered as a sequence of numbers from 1 to 6. The entropy used to generate the [`mnemonic`](#mnemonic) will be the bitwise xor of the system and dice entropy.
     
 ```console
--e 20 --entropy=20 (default 16)
+-e 20 --entropy=20 (default: 16)
 ```
 Specify the amount of entropy that you want to use to generate a [`mnemonic`](#mnemonic). By default, 16 bytes are used. You can increase this amount to 20, 24, 28 or 32. If used together with the `--dice` flag, you will be prompted for additional dice throws to match the entropy.
 
@@ -52,7 +52,7 @@ As all the derivations below this level are non-hardened, this public key can be
 
 ### `importacc`
 
-`hw` `importacc` `filename` [`--network`](#network)
+`hw` `importacc` `{``filename``}` [`--network`](#network)
 
 - Follow up commands: [`receive`](#receive)
 
@@ -60,13 +60,13 @@ Create a new account using the public key that was generated through the [`creat
 
 ### `renameacc`
 
-`hw` `renameacc` `OldName` `NewName` [`--network`](#network)
+`hw` `renameacc` `{``oldname``}` `{``newname``}` [`--network`](#network)
 
 Rename an account.
 
 ### `preparetx`
 
-`hw` `preparetx` `Address` `Value` `[Address2 Value2 ...]` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
+`hw` `preparetx` `{``address` `value` `...``}` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signtx`](#signtx)
@@ -77,7 +77,7 @@ The [`preparetx`](#preparetx) command needs to be run on an online computer as i
 
 ### `signtx`
 
-`hw` `signtx` `Filename` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
+`hw` `signtx` `{``filename``}` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
 
 - **Offline Command** (This command requires your mnemonic)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -86,7 +86,7 @@ Sign a transaction that was created with the [`preparetx`](#preparetx) command. 
 
 ### `prepareswipetx`
 
-`hw` `prepareswipetx` `Address` `[Address2 ...]` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
+`hw` `prepareswipetx` `{``address` `...``}` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signswipetx`](#signswipetx)
@@ -97,7 +97,7 @@ The command will output a file containing the unsigned transaction in your home 
 
 ### `signswipetx`
 
-`hw` `signswipetx` `Filename` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
+`hw` `signswipetx` `{``filename``}` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
 
 - **Offline Command** (This command requires private keys)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -117,14 +117,14 @@ The command will output the signed transaction in a file in your home directory.
 ### `deriv`
 
 ```console
--d --deriv=1 (default 0)
+-d --deriv=1 (default: 0)
 ```
 Choose a different account in the [BIP44] derivation scheme. By default, the account `0` will be used. You could, for example, create a spending and a savings account with the same [`mnemonic`](#mnemonic) and passphrase using accounts `0` and `1`. 
 
 ### `network`
 
 ```console
--n --network=[bitcoin,testnet3,bitcoincash,cashtest] (default 0)
+-n --network={btc|btc-test|bch|bch-cash} (default: btc)
 ```
 Specify the network. The following are supported:
 
@@ -140,7 +140,7 @@ respective networks.
 ### `unit`
 
 ```console
--u --unit=[bitcoin,bit,satoshi] (Default: "bitcoin")
+-u --unit={bitcoin|bit|satoshi} (default: bitcoin)
 ```
 
 Specify the unit to use when entering or displaying amounts.
@@ -163,7 +163,7 @@ The apostrophe are not required when entering amounts.
 ### `account`
 
 ```console
--a --account=main (Default: "")
+-a --account=main (default: "")
 ```
 
 Specify which account to use for a command. Unless otherwise specified, the
@@ -172,7 +172,7 @@ Specify which account to use for a command. Unless otherwise specified, the
 ### `fee`
 
 ```console
--f --fee=50 (Default: 200)
+-f --fee=50 (default: 200)
 ```
 
 The transaction fee to pay (in satoshi/byte).
@@ -180,7 +180,7 @@ The transaction fee to pay (in satoshi/byte).
 ### `dust`
 
 ```console
--d --dust=8000 (Default: 5430)
+-d --dust=8000 (default: 5430)
 ```
 
 The smallest allowed value for change outputs (in satoshi).
