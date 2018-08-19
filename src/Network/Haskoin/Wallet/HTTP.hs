@@ -42,10 +42,10 @@ import           Network.Wreq.Types                      (ResponseChecker)
 
 rootUrl :: LString
 rootUrl
-    | getNetwork == testnet3Network = "https://testnet3.haskoin.com/api"
-    | getNetwork == cashTestNetwork = "https://cashtest.haskoin.com/api"
-    | getNetwork == bitcoinCashNetwork = "https://bitcoincash.haskoin.com/api"
-    | getNetwork == bitcoinNetwork = "https://bitcoin.haskoin.com/api"
+    | getNetwork == btcTest = "https://testnet3.haskoin.com/api"
+    | getNetwork == bchTest = "https://cashtest.haskoin.com/api"
+    | getNetwork == bch = "https://bitcoincash.haskoin.com/api"
+    | getNetwork == btc = "https://bitcoin.haskoin.com/api"
     | otherwise =
         consoleError $
         formatError $

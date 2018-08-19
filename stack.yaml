@@ -1,7 +1,7 @@
 resolver: lts-12.5
 extra-deps:
 - git: https://github.com/haskoin/haskoin-core.git
-  commit: c9fa7c3a24256d712b2baa8606f4e09dac722d85
+  commit: f2c8d75c44fbdd88a194d3753df395eb0e5b8fd6
 - rocksdb-haskell-1.0.1
 - murmur3-1.0.3
 - secp256k1-0.5.3

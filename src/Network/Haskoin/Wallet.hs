@@ -151,17 +151,17 @@ verboseOpt =
 
 setOptNet :: String -> IO ()
 setOptNet name
-    | name == fromLString (getNetworkName bitcoinNetwork) = do
-        setBitcoinNetwork
+    | name == fromLString (getNetworkName btc) = do
+        setBTC
         renderIO $ formatBitcoin "--- Bitcoin ---"
-    | name == fromLString (getNetworkName bitcoinCashNetwork) = do
-        setBitcoinCashNetwork
+    | name == fromLString (getNetworkName bch) = do
+        setBCH
         renderIO $ formatCash "--- Bitcoin Cash ---"
-    | name == fromLString (getNetworkName testnet3Network) = do
-        setTestnet3Network
+    | name == fromLString (getNetworkName btcTest) = do
+        setBTCtest
         renderIO $ formatTestnet "--- Testnet ---"
-    | name == fromLString (getNetworkName cashTestNetwork) = do
-        setCashTestNetwork
+    | name == fromLString (getNetworkName bchTest) = do
+        setBCHtest
         renderIO $ formatTestnet "--- Bitcoin Cash Testnet ---"
     | otherwise =
         consoleError $
@@ -171,10 +171,10 @@ setOptNet name
               vcat $
               fmap
                   (formatStatic . fromLString)
-                  [ getNetworkName bitcoinNetwork
-                  , getNetworkName bitcoinCashNetwork
-                  , getNetworkName testnet3Network
-                  , getNetworkName cashTestNetwork
+                  [ getNetworkName btc
+                  , getNetworkName bch
+                  , getNetworkName btcTest
+                  , getNetworkName bchTest
                   ]
             ]
 
