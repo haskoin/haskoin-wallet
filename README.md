@@ -31,7 +31,7 @@ Specify the amount of entropy that you want to use to generate a [`mnemonic`](#m
 
 ### `createacc`
 
-`hw createacc` [`--deriv`](#deriv) [`--network`](#network)
+`hw` `createacc` [`--deriv`](#deriv) [`--network`](#network)
 
 - **Offline Command** (This command requires your mnemonic)
 - Follow up commands: [`importacc`](#importacc)
@@ -52,7 +52,7 @@ As all the derivations below this level are non-hardened, this public key can be
 
 ### `importacc`
 
-`hw importacc filename` [`--network`](#network)
+`hw` `importacc` `filename` [`--network`](#network)
 
 - Follow up commands: [`receive`](#receive)
 
@@ -60,13 +60,13 @@ Create a new account using the public key that was generated through the [`creat
 
 ### `renameacc`
 
-`hw renameacc OldName NewName` [`--network`](#network)
+`hw` `renameacc` `OldName` `NewName` [`--network`](#network)
 
 Rename an account.
 
 ### `preparetx`
 
-`hw preparetx Address Value [Address2 Value2 ...]` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
+`hw` `preparetx` `Address` `Value` `[Address2 Value2 ...]` [`--account`](#account) [`--fee`](#fee) [`--dust`](#dust) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signtx`](#signtx)
@@ -77,7 +77,7 @@ The [`preparetx`](#preparetx) command needs to be run on an online computer as i
 
 ### `signtx`
 
-`hw signtx Filename` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
+`hw` `signtx` `Filename` [`--deriv`](#deriv) [`--unit`](#unit) [`--network`](#network)
 
 - **Offline Command** (This command requires your mnemonic)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -86,7 +86,7 @@ Sign a transaction that was created with the [`preparetx`](#preparetx) command. 
 
 ### `prepareswipetx`
 
-`hw prepareswipetx Address [Address2 ...]` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
+`hw` `prepareswipetx` `Address` `[Address2 ...]` [`--account`](#account) [`--fee`](#fee) [`--unit`](#unit) [`--network`](#network)
 
 - **Online Command** (This command requires network connectivity)
 - Follow up commands: [`signswipetx`](#signswipetx)
@@ -97,7 +97,7 @@ The command will output a file containing the unsigned transaction in your home 
 
 ### `signswipetx`
 
-`hw signswipetx Filename` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
+`hw` `signswipetx` `Filename` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
 
 - **Offline Command** (This command requires private keys)
 - Follow up commands: [`sendtx`](#sendtx)
@@ -119,9 +119,7 @@ The command will output the signed transaction in a file in your home directory.
 ```console
 -d --deriv=1 (default 0)
 ```
-Choose a different account in the [BIP44] derivation scheme. By default, the account
-`0` will be used. You could, for example, create a spending and a savings account 
-with the same [`mnemonic`](#mnemonic) and passphrase using accounts `0` and `1`. 
+Choose a different account in the [BIP44] derivation scheme. By default, the account `0` will be used. You could, for example, create a spending and a savings account with the same [`mnemonic`](#mnemonic) and passphrase using accounts `0` and `1`. 
 
 ### `network`
 
@@ -130,10 +128,10 @@ with the same [`mnemonic`](#mnemonic) and passphrase using accounts `0` and `1`.
 ```
 Specify the network. The following are supported:
 
-- `bitcoin` Production Bitcoin network
-- `testnet3` Testnet3 Bitcoin network
-- `bitcoincash` Production Bitcoin Cash network
-- `cashtest` Testnet Bitcoin Cash network
+- `btc` Production Bitcoin network
+- `btc-test` Testnet3 Bitcoin network
+- `bch` Production Bitcoin Cash network
+- `bch-test` Testnet Bitcoin Cash network
 
 The network will affect the constants being used to derive addresses and keys.
 It will also affect how transactions are signed so they are valid in their
