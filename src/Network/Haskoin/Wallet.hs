@@ -54,7 +54,7 @@ diceOpt =
     option
         'd'
         "dice"
-        ["True"]
+        ["true"]
         False
         Argument.boolean
         "Provide additional entropy using 6-sided dice."
@@ -84,8 +84,8 @@ netOpt =
     option
         'n'
         "network"
-        ["bitcoin", "testnet3", "bitcoincash", "cashtest"]
-        "bitcoin"
+        ["btc", "btc-test", "bch", "bch-test"]
+        "btc"
         (fromLString <$> Argument.string)
         ""
 
@@ -144,7 +144,7 @@ verboseOpt =
     option
         'v'
         "verbose"
-        ["True"]
+        ["true"]
         False
         Argument.boolean
         "Produce a more detailed output for this command."
@@ -305,7 +305,7 @@ importacc =
         Nothing
         [receive] $
     withOption netOpt $ \network ->
-    withNonOption Argument.file "Filename" $ \fp ->
+    withNonOption Argument.file "{filename}" $ \fp ->
         io $ do
             setOptNet network
             xpub <- readDoc $ fromString fp :: IO XPubKey
@@ -339,8 +339,8 @@ renameacc =
         Nothing
         [] $
     withOption netOpt $ \network ->
-    withNonOption Argument.string "OldName" $ \oldName ->
-    withNonOption Argument.string "NewName" $ \newName ->
+    withNonOption Argument.string "{oldname}" $ \oldName ->
+    withNonOption Argument.string "{newname}" $ \newName ->
         io $ do
             setOptNet network
             renameAccountStore
@@ -364,7 +364,7 @@ preparetx =
     withOption dustOpt $ \dust ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withNonOptions Argument.string "Address Value [Address2 Value2 ...]" $ \as ->
+    withNonOptions Argument.string "{address value ...}" $ \as ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -425,7 +425,7 @@ signtx =
     withOption derivOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withNonOption Argument.file "Filename" $ \fp ->
+    withNonOption Argument.file "{filename}" $ \fp ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -446,7 +446,7 @@ prepareswipetx =
     withOption feeOpt $ \feeByte ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withNonOptions Argument.string "Address [Address2 ...]" $ \as ->
+    withNonOptions Argument.string "{address...}" $ \as ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -475,7 +475,7 @@ signswipetx =
     withOption derivOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
-    withNonOption Argument.file "Filename" $ \fp ->
+    withNonOption Argument.file "{filename}" $ \fp ->
         io $ do
             setOptNet network
             let !unit = parseUnit u
@@ -531,7 +531,7 @@ sendtx =
         (Just CommandOnline)
         [] $
     withOption netOpt $ \network ->
-    withNonOption Argument.file "Filename" $ \fp ->
+    withNonOption Argument.file "{filename}" $ \fp ->
         io $ do
             setOptNet network
             tx <- readDoc $ fromString fp :: IO Tx
