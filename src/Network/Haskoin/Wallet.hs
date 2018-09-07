@@ -472,7 +472,6 @@ signswipetx =
         "Sign a transaction that was created with prepareswipetx"
         (Just CommandOffline)
         [sendtx] $
-    withOption derivOpt $ \d ->
     withOption unitOpt $ \u ->
     withOption netOpt $ \network ->
     withNonOption Argument.file "{filename}" $ \fp ->
@@ -482,7 +481,7 @@ signswipetx =
             dat <- readDoc $ fromString fp :: IO TxSignData
             prvKeys <- askInputs "WIF or MiniKey" decKey
             case signSwipeTx dat prvKeys of
-                Right res -> saveSignedTx d unit "swipetx" res
+                Right res -> saveSignedTx 0 unit "swipetx" res
                 Left err  -> consoleError $ formatError err
   where
     decKey str =

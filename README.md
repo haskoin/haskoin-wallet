@@ -97,7 +97,7 @@ The command will output a file containing the unsigned transaction in your home 
 
 ### `signswipetx`
 
-`hw` `signswipetx` `{filename}` [`--deriv`](#deriv) [`--unit`](#deriv) [`--network`](#network)
+`hw` `signswipetx` `{filename}` [`--unit`](#unit) [`--network`](#network)
 
 - **Offline Command** (This command requires private keys)
 - Follow up commands: [`sendtx`](#sendtx)
