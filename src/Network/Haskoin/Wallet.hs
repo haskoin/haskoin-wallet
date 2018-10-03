@@ -9,6 +9,7 @@ import           Control.Arrow                           (right, (&&&))
 import           Control.Monad                           (unless, when)
 import qualified Data.Aeson                              as Json
 import           Data.Aeson.TH
+import           Data.Aeson.Types
 import           Data.List                               (sortOn)
 import           Data.Map.Strict                         (Map)
 import qualified Data.Map.Strict                         as Map
@@ -20,11 +21,10 @@ import           Foundation.Compat.Text
 import           Foundation.IO
 import           Foundation.String
 import           Foundation.VFS
+import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
-import           Network.Haskoin.Crypto                  hiding (addrToBase58,
-                                                          base58ToAddr,
-                                                          xPubExport)
-import           Network.Haskoin.Transaction             hiding (txHashToHex)
+import           Network.Haskoin.Keys
+import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util                    (dropFieldLabel)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
@@ -149,34 +149,32 @@ verboseOpt =
         Argument.boolean
         "Produce a more detailed output for this command."
 
-setOptNet :: String -> IO ()
-setOptNet name
-    | name == fromLString (getNetworkName btc) = do
-        setBTC
-        renderIO $ formatBitcoin "--- Bitcoin ---"
-    | name == fromLString (getNetworkName bch) = do
-        setBCH
-        renderIO $ formatCash "--- Bitcoin Cash ---"
-    | name == fromLString (getNetworkName btcTest) = do
-        setBTCtest
-        renderIO $ formatTestnet "--- Testnet ---"
-    | name == fromLString (getNetworkName bchTest) = do
-        setBCHtest
-        renderIO $ formatTestnet "--- Bitcoin Cash Testnet ---"
-    | otherwise =
-        consoleError $
-        vcat
-            [ formatError "Invalid network name. Select one of the following:"
-            , nest 4 $
-              vcat $
-              fmap
-                  (formatStatic . fromLString)
-                  [ getNetworkName btc
-                  , getNetworkName bch
-                  , getNetworkName btcTest
-                  , getNetworkName bchTest
-                  ]
-            ]
+parseNetwork :: String -> Network
+parseNetwork str =
+    case netByName (toLString str) of
+        Just net -> net
+        _ ->
+            consoleError $
+            vcat
+                [ formatError
+                      "Invalid network name. Select one of the following:"
+                , nest 4 $
+                  vcat $
+                  fmap (formatStatic . fromLString . getNetworkName) allNets
+                ]
+
+withNetwork :: (Network -> IO ()) -> Action IO
+withNetwork f =
+    withOption netOpt $ \netStr -> do
+        let !net = parseNetwork netStr
+        io $ do
+            printNetworkHeader net
+            f net
+
+printNetworkHeader :: Network -> IO ()
+printNetworkHeader net =
+    renderIO $
+    formatNetwork $ "--- " <> fromLString (getNetworkIdent net) <> " ---"
 
 parseUnit :: String -> AmountUnit
 parseUnit unit =
@@ -191,6 +189,12 @@ parseUnit unit =
                 , nest 4 $
                   vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
                 ]
+
+withUnit :: (AmountUnit -> Action IO) -> Action IO
+withUnit f =
+    withOption unitOpt $ \u -> do
+        let !unit = parseUnit u
+        f unit
 
 {- Commands -}
 
@@ -242,8 +246,8 @@ mnemonic =
                 if useDice
                     then genMnemonicDice ent =<< askDiceRolls ent
                     else genMnemonic ent
-            case right (second bsToString) mnemE of
-                Right (orig, Just ms) ->
+            case right (second fromText) mnemE of
+                Right (orig, ms) ->
                     renderIO $
                     vcat
                         [ formatTitle "System Entropy Source"
@@ -251,9 +255,6 @@ mnemonic =
                         , formatTitle "Private Mnemonic"
                         , nest 4 $ mnemonicPrinter 4 (words ms)
                         ]
-                Right _ ->
-                    consoleError $
-                    formatError "There was a problem generating the mnemonic"
                 Left err -> consoleError $ formatError err
   where
     askDiceRolls reqEnt =
@@ -277,25 +278,23 @@ createacc =
         (Just CommandOffline)
         [importacc] $
     withOption derivOpt $ \deriv ->
-    withOption netOpt $ \network ->
-        io $ do
-            setOptNet network
-            xpub <- deriveXPubKey <$> askSigningKey (fromIntegral deriv)
-            let fname = fromString $ "key-" <> toLString (xPubChecksum xpub)
-            path <- writeDoc fname $ toText $ xPubExport xpub
-            renderIO $
-                vcat
-                    [ formatTitle "Public Key"
-                    , nest 4 $ formatPubKey $ xPubExport xpub
-                    , formatTitle "Derivation"
-                    , nest 4 $
-                      formatDeriv $
-                      show $
-                      ParsedPrv $
-                      toGeneric $ bip44Deriv deriv
-                    , formatTitle "Public Key File"
-                    , nest 4 $ formatFilePath $ filePathToString path
-                    ]
+    withNetwork $ \net -> do
+        xpub <- deriveXPubKey <$> askSigningKey net (fromIntegral deriv)
+        let fname = fromString $ "key-" <> toLString (xPubChecksum xpub)
+        path <- writeDoc net fname $ xPubExport xpub
+        renderIO $
+            vcat
+                [ formatTitle "Public Key"
+                , nest 4 $ formatPubKey $ fromText $ xPubExport xpub
+                , formatTitle "Derivation"
+                , nest 4 $
+                  formatDeriv $
+                  show $
+                  ParsedPrv $
+                  toGeneric $ bip44Deriv net deriv
+                , formatTitle "Public Key File"
+                , nest 4 $ formatFilePath $ filePathToString path
+                ]
 
 importacc :: Command IO
 importacc =
@@ -304,32 +303,30 @@ importacc =
         "Import an account file into the wallet"
         Nothing
         [receive] $
-    withOption netOpt $ \network ->
     withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            setOptNet network
-            xpub <- readDoc $ fromString fp :: IO XPubKey
-            let store =
-                    AccountStore
-                        xpub
-                        0
-                        0
-                        (bip44Deriv $ fromIntegral $ xPubChild xpub)
-            name <- newAccountStore store
-            renderIO $
-                vcat
-                    [ formatTitle "New Account Created"
-                    , nest 4 $
-                      vcat
-                          [ formatKey (block 13 "Name:") <>
-                            formatAccount name
-                          , formatKey (block 13 "Derivation:") <>
-                            formatDeriv
-                                (show $
-                                  ParsedPrv $
-                                  toGeneric $ accountStoreDeriv store)
-                          ]
-                    ]
+    withNetwork $ \net -> do
+        xpub <- readDoc net (fromString fp) (xPubFromJSON net)
+        let store =
+                AccountStore
+                    xpub
+                    0
+                    0
+                    (bip44Deriv net $ fromIntegral $ xPubChild xpub)
+        name <- newAccountStore net store
+        renderIO $
+            vcat
+                [ formatTitle "New Account Created"
+                , nest 4 $
+                  vcat
+                      [ formatKey (block 13 "Name:") <>
+                        formatAccount name
+                      , formatKey (block 13 "Derivation:") <>
+                        formatDeriv
+                            (show $
+                              ParsedPrv $
+                              toGeneric $ accountStoreDeriv store)
+                      ]
+                ]
 
 renameacc :: Command IO
 renameacc =
@@ -338,19 +335,18 @@ renameacc =
         "Rename an account"
         Nothing
         [] $
-    withOption netOpt $ \network ->
     withNonOption Argument.string "{oldname}" $ \oldName ->
     withNonOption Argument.string "{newname}" $ \newName ->
-        io $ do
-            setOptNet network
-            renameAccountStore
-                (fromLString oldName)
-                (fromLString newName)
-            renderIO $
-                formatStatic "Account" <+>
-                formatAccount (fromLString oldName) <+>
-                formatStatic "renamed to" <+>
-                formatAccount (fromLString newName)
+    withNetwork $ \net -> do
+        renameAccountStore
+            net
+            (fromLString oldName)
+            (fromLString newName)
+        renderIO $
+            formatStatic "Account" <+>
+            formatAccount (fromLString oldName) <+>
+            formatStatic "renamed to" <+>
+            formatAccount (fromLString newName)
 
 preparetx :: Command IO
 preparetx =
@@ -362,43 +358,37 @@ preparetx =
     withOption accOpt $ \acc ->
     withOption feeOpt $ \feeByte ->
     withOption dustOpt $ \dust ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
+    withUnit $ \unit ->
     withNonOptions Argument.string "{address value ...}" $ \as ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-                !rcps =
-                    Map.fromList $
-                    fromMaybe rcptErr $ mapM (toRecipient unit) $
-                    groupIn 2 $ fmap fromLString as
-            withAccountStore acc $ \(k, store) -> do
-                resE <- buildTxSignData store rcps feeByte dust
-                case resE of
-                    Right (signDat, store') -> do
-                        savePrepareTx store unit "tx" signDat
-                        when (store /= store') $
-                            updateAccountStore k $ const store'
-                    Left err  -> consoleError $ formatError err
+    withNetwork $ \net -> do
+        let !rcps =
+                Map.fromList $
+                fromMaybe rcptErr $ mapM (toRecipient net unit) $
+                groupIn 2 $ fmap fromLString as
+        withAccountStore net acc $ \(k, store) -> do
+            resE <- buildTxSignData net store rcps feeByte dust
+            case resE of
+                Right (signDat, store') -> do
+                    savePrepareTx net store unit "tx" signDat
+                    when (store /= store') $
+                        updateAccountStore net k $ const store'
+                Left err  -> consoleError $ formatError err
   where
     rcptErr = consoleError $ formatError "Could not parse the recipients"
-    toRecipient :: AmountUnit -> [String] -> Maybe (Address, Satoshi)
-    toRecipient unit [a, v] = (,) <$> base58ToAddr a <*> readAmount unit v
-    toRecipient _ _         = Nothing
+    toRecipient :: Network -> AmountUnit -> [String] -> Maybe (Address, Satoshi)
+    toRecipient net unit [a, v] =
+        (,) <$> stringToAddr net (toText a) <*> readAmount unit v
+    toRecipient _ _ _ = Nothing
 
 savePrepareTx ::
-       AccountStore
-    -> AmountUnit
-    -> LString
-    -> TxSignData
-    -> IO ()
-savePrepareTx store unit str signDat =
-    case pubTxInfo signDat (accountStoreXPubKey store) of
+       Network -> AccountStore -> AmountUnit -> LString -> TxSignData -> IO ()
+savePrepareTx net store unit str signDat =
+    case pubTxInfo net signDat (accountStoreXPubKey store) of
         Right info -> do
             let chsum = txChksum $ txSignDataTx signDat
                 fname =
                     fromString $ str <> "-" <> toLString chsum <> "-unsigned"
-            path <- writeDoc fname signDat
+            path <- writeDoc net fname signDat
             renderIO $
                 vcat
                     [ txInfoFormat
@@ -413,7 +403,7 @@ savePrepareTx store unit str signDat =
         Left err -> consoleError $ formatError err
 
 txChksum :: Tx -> String
-txChksum = take 16 . txHashToHex . nosigTxHash
+txChksum = take 16 . fromText . txHashToHex . nosigTxHash
 
 signtx :: Command IO
 signtx =
@@ -423,17 +413,14 @@ signtx =
         (Just CommandOffline)
         [sendtx] $
     withOption derivOpt $ \d ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
+    withUnit $ \unit ->
     withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-            dat <- readDoc $ fromString fp :: IO TxSignData
-            signKey <- askSigningKey $ fromIntegral d
-            case signWalletTx dat signKey of
-                Right res -> saveSignedTx d unit "tx" res
-                Left err  -> consoleError $ formatError err
+    withNetwork $ \net -> do
+        dat <- readDoc net (fromString fp) Json.parseJSON
+        signKey <- askSigningKey net $ fromIntegral d
+        case signWalletTx net dat signKey of
+            Right res -> saveSignedTx net d unit "tx" res
+            Left err  -> consoleError $ formatError err
 
 prepareswipetx :: Command IO
 prepareswipetx =
@@ -444,24 +431,21 @@ prepareswipetx =
         [signswipetx] $
     withOption accOpt $ \acc ->
     withOption feeOpt $ \feeByte ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
+    withUnit $ \unit ->
     withNonOptions Argument.string "{address...}" $ \as ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-                !rcps =
-                    fromMaybe
-                        rcptErr $
-                        mapM base58ToAddr (fromLString <$> as)
-            withAccountStore acc $ \(k, store) -> do
-                resE <- buildSwipeTx store rcps feeByte
-                case resE of
-                    Right (signDat, store') -> do
-                        savePrepareTx store unit "swipetx" signDat
-                        when (store /= store') $
-                            updateAccountStore k $ const store'
-                    Left err  -> consoleError $ formatError err
+    withNetwork $ \net -> do
+        let !rcps =
+                fromMaybe
+                    rcptErr $
+                    mapM (stringToAddr net) (fromString <$> as)
+        withAccountStore net acc $ \(k, store) -> do
+            resE <- buildSwipeTx net store rcps feeByte
+            case resE of
+                Right (signDat, store') -> do
+                    savePrepareTx net store unit "swipetx" signDat
+                    when (store /= store') $
+                        updateAccountStore net k $ const store'
+                Left err  -> consoleError $ formatError err
   where
     rcptErr = consoleError $ formatError "Could not parse addresses"
 
@@ -472,21 +456,17 @@ signswipetx =
         "Sign a transaction that was created with prepareswipetx"
         (Just CommandOffline)
         [sendtx] $
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
+    withUnit $ \unit ->
     withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-            dat <- readDoc $ fromString fp :: IO TxSignData
-            prvKeys <- askInputs "WIF or MiniKey" decKey
-            case signSwipeTx dat prvKeys of
-                Right res -> saveSignedTx 0 unit "swipetx" res
-                Left err  -> consoleError $ formatError err
+    withNetwork $ \net -> do
+        dat <- readDoc net (fromString fp) Json.parseJSON
+        prvKeys <- askInputs "WIF or MiniKey" (decKey net)
+        case signSwipeTx net dat prvKeys of
+            Right res -> saveSignedTx net 0 unit "swipetx" res
+            Left err  -> consoleError $ formatError err
   where
-    decKey str =
-        fromWif (stringToBS str) <|>
-        (toPrvKeyG <$> fromMiniKey (stringToBS str))
+    decKey net str =
+        fromWif net (toText str) <|> fromMiniKey (stringToBS str)
 
 askInputs :: String -> (String -> Maybe a) -> IO [a]
 askInputs msg f = go []
@@ -509,13 +489,18 @@ askInputs msg f = go []
     noParse = consoleError $ formatError "Could not parse the input"
 
 saveSignedTx ::
-       Natural -> AmountUnit -> LString -> (TxInformation, Tx, Bool) -> IO ()
-saveSignedTx d unit str (info, signedTx, isSigned) = do
-    renderIO $ txInfoFormat (bip44Deriv d) unit (Just isSigned) Nothing info
+       Network
+    -> Natural
+    -> AmountUnit
+    -> LString
+    -> (TxInformation, Tx, Bool)
+    -> IO ()
+saveSignedTx net d unit str (info, signedTx, isSigned) = do
+    renderIO $ txInfoFormat (bip44Deriv net d) unit (Just isSigned) Nothing info
     let signedHex = encodeHexText $ encodeBytes signedTx
         chsum = txChksum signedTx
         fname = fromString $ str <> "-" <> toLString chsum <> "-signed"
-    path <- writeDoc fname signedHex
+    path <- writeDoc net fname signedHex
     renderIO $
         vcat
             [ formatTitle "Signed Tx File"
@@ -529,16 +514,14 @@ sendtx =
         "Broadcast a signed transaction"
         (Just CommandOnline)
         [] $
-    withOption netOpt $ \network ->
     withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            setOptNet network
-            tx <- readDoc $ fromString fp :: IO Tx
-            httpBroadcastTx tx
-            renderIO $
-                formatStatic "Tx" <+>
-                formatTxHash (txHashToHex $ txHash tx) <+>
-                formatStatic "has been broadcast"
+    withNetwork $ \net -> do
+        tx <- readDoc net (fromString fp) Json.parseJSON
+        httpBroadcastTx net tx
+        renderIO $
+            formatStatic "Tx" <+>
+            formatTxHash (fromText $ txHashToHex $ txHash tx) <+>
+            formatStatic "has been broadcast"
 
 receive :: Command IO
 receive =
@@ -548,14 +531,11 @@ receive =
         Nothing
         [] $
     withOption accOpt $ \acc ->
-    withOption netOpt $ \network ->
-        io $ do
-            setOptNet network
-            withAccountStore acc $ \(k, store) -> do
-                let (addr, store') = nextExtAddress store
-                updateAccountStore k $ const store'
-                renderIO $
-                    addressFormat $ nonEmpty_ [(thd &&& fst) addr]
+    withNetwork $ \net ->
+        withAccountStore net acc $ \(k, store) -> do
+            let (addr, store') = nextExtAddress store
+            updateAccountStore net k $ const store'
+            renderIO $ addressFormat $ nonEmpty_ [(thd &&& fst) addr]
 
 addresses :: Command IO
 addresses =
@@ -566,27 +546,25 @@ addresses =
         [] $
     withOption accOpt $ \acc ->
     withOption cntOpt $ \cnt ->
-    withOption netOpt $ \network ->
-        io $ do
-            setOptNet network
-            withAccountStore acc $ \(_, store) -> do
-                let xpub = accountStoreXPubKey store
-                    idx = accountStoreExternal store
-                    start = fromMaybe 0 (idx - cnt)
-                    count = fromIntegral $ fromMaybe 0 (idx - start)
-                let addrsM =
-                        nonEmpty $
-                        take count $
-                        derivePathAddrs xpub extDeriv $
-                        fromIntegral start
-                case addrsM of
-                    Just addrs ->
-                        renderIO $
-                        addressFormat $
-                        nonEmptyFmap (fromIntegral . thd &&& fst) addrs
-                    _ ->
-                        consoleError $
-                        formatError "No addresses have been generated"
+    withNetwork $ \net ->
+        withAccountStore net acc $ \(_, store) -> do
+            let xpub = accountStoreXPubKey store
+                idx = accountStoreExternal store
+                start = fromMaybe 0 (idx - cnt)
+                count = fromIntegral $ fromMaybe 0 (idx - start)
+            let addrsM =
+                    nonEmpty $
+                    take count $
+                    derivePathAddrs xpub extDeriv $
+                    fromIntegral start
+            case addrsM of
+                Just addrs ->
+                    renderIO $
+                    addressFormat $
+                    nonEmptyFmap (fromIntegral . thd &&& fst) addrs
+                _ ->
+                    consoleError $
+                    formatError "No addresses have been generated"
 
 addressFormat :: NonEmpty [(Natural, Address)] -> ConsolePrinter
 addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
@@ -595,7 +573,7 @@ addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
     toFormat (i, a) =
         mconcat
             [ formatKey $ block (n + 2) $ show i <> ":"
-            , formatAddress $ addrToBase58 a
+            , formatAddress $ fromText $ addrToString a
             ]
     n = length $ show $ maximum $ nonEmptyFmap fst as
 
@@ -607,19 +585,16 @@ balance =
         (Just CommandOnline)
         [] $
     withOption accOpt $ \acc ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-            withAccountStore acc $ \(_, store) -> do
-                let addrs = allExtAddresses store <> allIntAddresses store
-                bal <- httpBalance $ fmap fst addrs
-                renderIO $
-                    vcat
-                        [ formatTitle "Account Balance"
-                        , nest 4 $ formatAmount unit bal
-                        ]
+    withUnit $ \unit ->
+    withNetwork $ \net ->
+        withAccountStore net acc $ \(_, store) -> do
+            let addrs = allExtAddresses store <> allIntAddresses store
+            bal <- httpBalance net $ fst <$> addrs
+            renderIO $
+                vcat
+                    [ formatTitle "Account Balance"
+                    , nest 4 $ formatAmount unit bal
+                    ]
 
 transactions :: Command IO
 transactions =
@@ -629,66 +604,67 @@ transactions =
         (Just CommandOnline)
         [] $
     withOption accOpt $ \acc ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \network ->
+    withUnit $ \unit ->
     withOption verboseOpt $ \verbose ->
-        io $ do
-            setOptNet network
-            let !unit = parseUnit u
-            withAccountStore acc $ \(_, store) -> do
-                let walletAddrs = allExtAddresses store <> allIntAddresses store
-                    walletAddrMap = Map.fromList walletAddrs
-                txInfs <- httpTxInformation $ fmap fst walletAddrs
-                currHeight <- httpBestHeight
-                forM_ (sortOn txInfoHeight txInfs) $ \txInf -> do
-                    let format =
-                            if verbose
-                                then txInfoFormat
-                                else txInfoFormatCompact
-                        txInfPath = txInfoFillPath walletAddrMap txInf
-                    renderIO $
-                        format
-                            (accountStoreDeriv store)
-                            unit
-                            Nothing
-                            (Just currHeight)
-                            txInfPath
+    withNetwork $ \net ->
+        withAccountStore net acc $ \(_, store) -> do
+            let walletAddrs = allExtAddresses store <> allIntAddresses store
+                walletAddrMap = Map.fromList walletAddrs
+            txInfs <- httpTxInformation net $ fmap fst walletAddrs
+            currHeight <- httpBestHeight net
+            forM_ (sortOn txInfoHeight txInfs) $ \txInf -> do
+                let format =
+                        if verbose
+                            then txInfoFormat
+                            else txInfoFormatCompact
+                    txInfPath = txInfoFillPath walletAddrMap txInf
+                renderIO $
+                    format
+                        (accountStoreDeriv store)
+                        unit
+                        Nothing
+                        (Just currHeight)
+                        txInfPath
 
 {- Command Line Helpers -}
 
-writeDoc :: Json.ToJSON a => FileName -> a -> IO FilePath
-writeDoc fileName dat = do
+writeDoc :: Json.ToJSON a => Network -> FileName -> a -> IO FilePath
+writeDoc net fileName dat = do
     dir <- fromString <$> D.getUserDocumentsDirectory
-    let path = dir </> (fromString networkName <> "-" <> fileName <> ".json")
-        val = encodeJsonPretty $ DocStructure (fromString networkName) dat
+    let path = dir </> (fromString network <> "-" <> fileName <> ".json")
+        val = encodeJsonPretty $ DocStructure (fromString network) dat
     withFile path WriteMode (`hPut` (val <> stringToBytes "\n"))
     return path
+  where
+    network = getNetworkName net
 
-readDoc :: Json.FromJSON a => FilePath -> IO a
-readDoc fileName = do
+readDoc :: Network -> FilePath -> (Json.Value -> Parser a) -> IO a
+readDoc net fileName parser = do
     bytes <- readFile fileName
     let m = fromMaybe err $ decodeJson bytes :: Map Text Json.Value
     case m Map.!? toText "network" of
-        Just (Json.String net) ->
-            if net == fromString networkName
+        Just (Json.String fileNet) ->
+            if fileNet == fromString (getNetworkName net)
                 then case decodeJson bytes of
-                         Just (DocStructure _ res) -> return res
-                         _                         -> err
-                else badNetErr $ fromText net
+                         Just (DocStructure _ val) ->
+                             maybe err return $ parseMaybe parser val
+                         _ -> err
+                else badNetErr $ fromText fileNet
         _ -> err
   where
     err =
         consoleError $
         formatError $ "Could not read file " <> filePathToString fileName
-    badNetErr net =
+    badNetErr fileNet =
         consoleError $
         formatError $
-        "Bad network. This file has to be used on the network: " <> net
+        "Bad network. This file has to be used on the network: " <> fileNet
 
-withAccountStore :: String -> ((String, AccountStore) -> IO ()) -> IO ()
-withAccountStore name f
+withAccountStore ::
+       Network -> String -> ((String, AccountStore) -> IO ()) -> IO ()
+withAccountStore net name f
     | null name = do
-        accMap <- readAccountsFile
+        accMap <- readAccountsFile net
         case Map.assocs accMap of
             [val] -> f (first fromText val)
             _ ->
@@ -696,10 +672,10 @@ withAccountStore name f
                     Just val -> f ("main", val)
                     _        -> err $ fromText <$> Map.keys accMap
     | otherwise = do
-        accM <- getAccountStore name
+        accM <- getAccountStore net name
         case accM of
             Just acc -> f (name, acc)
-            _        -> err . fmap fromText . Map.keys =<< readAccountsFile
+            _        -> err . fmap fromText . Map.keys =<< readAccountsFile net
   where
     err :: [String] -> IO ()
     err [] = consoleError $ formatError "No accounts have been created"
@@ -731,14 +707,14 @@ askInputLine msg = do
         (return . fromLString)
         inputM
 
-askSigningKey :: Natural -> IO XPrvKey
-askSigningKey acc = do
+askSigningKey :: Network -> Natural -> IO XPrvKey
+askSigningKey net acc = do
     str <- askInputLineHidden "Enter your private mnemonic: "
-    case mnemonicToSeed "" (stringToBS str) of
+    case mnemonicToSeed "" (toText str) of
         Right _ -> do
             passStr <- askPassword
             either (consoleError . formatError) return $
-                signingKey passStr str acc
+                signingKey net passStr str acc
         Left err -> consoleError $ formatError $ fromLString err
 
 askPassword :: IO String

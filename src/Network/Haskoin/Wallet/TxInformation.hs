@@ -1,7 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE TupleSections   #-}
 module Network.Haskoin.Wallet.TxInformation where
 
 import           Control.Arrow                           ((&&&))
@@ -11,36 +10,31 @@ import           Data.Map.Strict                         (Map)
 import qualified Data.Map.Strict                         as Map
 import           Foundation
 import           Foundation.Collection
-import           Network.Haskoin.Block                   hiding (blockHashToHex)
-import           Network.Haskoin.Crypto                  hiding (addrToBase58)
+import           Foundation.Compat.Text
+import           Network.Haskoin.Address
+import           Network.Haskoin.Block
+import           Network.Haskoin.Constants
+import           Network.Haskoin.Keys
 import           Network.Haskoin.Script
-import           Network.Haskoin.Transaction             hiding (txHashToHex)
+import           Network.Haskoin.Transaction
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.ConsolePrinter
 import           Network.Haskoin.Wallet.FoundationCompat
 import qualified Prelude
 
 data TxInformation = TxInformation
-    { txInfoTxHash      :: Maybe TxHash
-    , txInfoTxSize      :: Maybe (CountOf (Element (UArray Word8)))
-    , txInfoOutbound    :: Map Address Satoshi
-    , txInfoNonStd      :: Satoshi
-    , txInfoInbound     :: Map Address (Satoshi, Maybe SoftPath)
-    , txInfoMyInputs    :: Map Address (Satoshi, Maybe SoftPath)
-    , txInfoOtherInputs :: Map Address Satoshi
-    , txInfoFee         :: Maybe Satoshi
-    , txInfoHeight      :: Maybe Natural
-    , txInfoBlockHash   :: Maybe BlockHash
+    { txInfoTxHash        :: Maybe TxHash
+    , txInfoTxSize        :: Maybe (CountOf (Element (UArray Word8)))
+    , txInfoOutbound      :: Map Address Satoshi
+    , txInfoNonStdOutputs :: Satoshi
+    , txInfoInbound       :: Map Address (Satoshi, Maybe SoftPath)
+    , txInfoMyInputs      :: Map Address (Satoshi, Maybe SoftPath)
+    , txInfoOtherInputs   :: Map Address Satoshi
+    , txInfoNonStdInputs  :: Satoshi
+    , txInfoFee           :: Maybe Satoshi
+    , txInfoHeight        :: Maybe Natural
+    , txInfoBlockHash     :: Maybe BlockHash
     } deriving (Eq, Show)
-
-data AddressTx = AddressTx
-    { addrTxAddress   :: !Address
-    , addrTxTxHash    :: !TxHash
-    , addrTxAmount    :: !Integer
-    , addrTxHeight    :: Maybe Natural
-    , addrTxBlockHash :: Maybe BlockHash
-    }
-    deriving (Eq, Show)
 
 emptyTxInfo :: TxInformation
 emptyTxInfo =
@@ -48,43 +42,15 @@ emptyTxInfo =
     { txInfoTxHash = Nothing
     , txInfoTxSize = Nothing
     , txInfoOutbound = Map.empty
-    , txInfoNonStd = 0
+    , txInfoNonStdOutputs = 0
     , txInfoInbound = Map.empty
     , txInfoMyInputs = Map.empty
     , txInfoOtherInputs = Map.empty
+    , txInfoNonStdInputs = 0
     , txInfoFee = Nothing
     , txInfoHeight = Nothing
     , txInfoBlockHash = Nothing
     }
-
-mergeAddressTxs :: [AddressTx] -> [TxInformation]
-mergeAddressTxs as =
-    Map.elems $ Map.mapMaybeWithKey toMvt aMap
-  where
-    aMap = Map.fromListWith (<>) $ (addrTxTxHash &&& (:[])) <$> as
-    toMvt :: TxHash -> [AddressTx] -> Maybe TxInformation
-    toMvt tid atxs =
-        case head <$> nonEmpty atxs of
-            Just a ->
-                let (os, is) = partition ((< 0) . addrTxAmount) atxs
-                in Just
-                       TxInformation
-                       { txInfoTxHash = Just tid
-                       , txInfoTxSize = Nothing
-                       , txInfoOutbound = Map.empty
-                       , txInfoNonStd = 0
-                       , txInfoInbound = toAddrMap is
-                       , txInfoMyInputs = toAddrMap os
-                       , txInfoOtherInputs = Map.empty
-                       , txInfoFee = Nothing
-                       , txInfoHeight = addrTxHeight a
-                       , txInfoBlockHash = addrTxBlockHash a
-                       }
-            _ -> Nothing
-    toAddrMap :: [AddressTx] -> Map Address (Satoshi, Maybe SoftPath)
-    toAddrMap = Map.map (, Nothing) . Map.fromListWith (+) . fmap toAddrVal
-    toAddrVal :: AddressTx -> (Address, Satoshi)
-    toAddrVal = addrTxAddress &&& fromIntegral . abs . addrTxAmount
 
 txInfoAmount :: TxInformation -> Integer
 txInfoAmount TxInformation {..} =
@@ -121,9 +87,9 @@ txInfoFillPath addrMap txInfo =
     mergeSoftPath = Map.intersectionWith f addrMap
     f path (amnt, _) = (amnt, Just path)
 
-txInfoFillUnsignedTx :: Tx -> TxInformation -> TxInformation
-txInfoFillUnsignedTx tx txInfo =
-    (txInfoFillTx tx txInfo)
+txInfoFillUnsignedTx :: Network -> Tx -> TxInformation -> TxInformation
+txInfoFillUnsignedTx net tx txInfo =
+    (txInfoFillTx net tx txInfo)
     { txInfoTxHash = Nothing
     , txInfoTxSize =
           Just $
@@ -135,19 +101,19 @@ txInfoFillUnsignedTx tx txInfo =
               0
     }
 
-txInfoFillTx :: Tx -> TxInformation -> TxInformation
-txInfoFillTx tx txInfo =
+txInfoFillTx :: Network -> Tx -> TxInformation -> TxInformation
+txInfoFillTx net tx txInfo =
     txInfo
     { txInfoOutbound = outbound
-    , txInfoNonStd = nonStd
+    , txInfoNonStdOutputs = nonStd
     , txInfoTxHash = Just $ txHash tx
     , txInfoTxSize = Just $ length $ encodeBytes tx
     , txInfoFee = txInfoFee txInfo <|> feeM
     }
   where
-    (outAddrMap, nonStd) = txOutAddressMap $ txOut tx
+    (outAddrMap, nonStd) = txOutAddressMap net $ txOut tx
     outbound = Map.difference outAddrMap (txInfoInbound txInfo)
-    outSum = sum $ (toNatural . outValue) <$> txOut tx :: Natural
+    outSum = sum $ toNatural . outValue <$> txOut tx :: Natural
     myInSum =
         sum $ fst <$> Map.elems (txInfoMyInputs txInfo) :: Natural
     othInSum =
@@ -155,39 +121,44 @@ txInfoFillTx tx txInfo =
     feeM = myInSum + othInSum - outSum :: Maybe Natural
 
 txInfoFillInputs ::
-       Map Address SoftPath
+       Network
+    -> Map Address SoftPath
     -> [TxOut]
     -> TxInformation
     -> TxInformation
-txInfoFillInputs walletAddrs txOs txInf =
+txInfoFillInputs net walletAddrs txOs txInf =
     txInf
     { txInfoMyInputs = Map.map (second Just) myValMap
     , txInfoOtherInputs = othValMap
     }
   where
-    valMap = fst $ txOutAddressMap txOs
+    valMap = fst $ txOutAddressMap net txOs
     myValMap = Map.intersectionWith (,) valMap walletAddrs
     othValMap = Map.difference valMap myValMap
 
 txInfoFillInbound ::
-       Map Address SoftPath -> [TxOut] -> TxInformation -> TxInformation
-txInfoFillInbound walletAddrs txOs txInf =
+       Network
+    -> Map Address SoftPath
+    -> [TxOut]
+    -> TxInformation
+    -> TxInformation
+txInfoFillInbound net walletAddrs txOs txInf =
     txInf { txInfoInbound = Map.map (second Just) inboundMap }
   where
-    (outValMap, _) = txOutAddressMap txOs
+    (outValMap, _) = txOutAddressMap net txOs
     inboundMap = Map.intersectionWith (,) outValMap walletAddrs
 
-txOutAddressMap :: [TxOut] -> (Map Address Satoshi, Satoshi)
-txOutAddressMap txout =
+txOutAddressMap :: Network -> [TxOut] -> (Map Address Satoshi, Satoshi)
+txOutAddressMap net txout =
     (Map.fromListWith (+) rs, sum ls)
   where
-    xs = fmap (decodeTxOutAddr &&& toNatural . outValue) txout
+    xs = fmap (decodeTxOutAddr net &&& toNatural . outValue) txout
     (ls, rs) = partitionEithers $ fmap partE xs
     partE (Right a, v) = Right (a, v)
     partE (Left _, v)  = Left v
 
-decodeTxOutAddr :: TxOut -> Either String Address
-decodeTxOutAddr = decodeTxOutSO >=> eitherString . outputAddress
+decodeTxOutAddr :: Network -> TxOut -> Either String Address
+decodeTxOutAddr net = decodeTxOutSO >=> eitherString . outputAddress net
 
 decodeTxOutSO :: TxOut -> Either String ScriptOutput
 decodeTxOutSO = eitherString . decodeOutputBS . scriptOutput
@@ -221,19 +192,19 @@ txInfoFormatCompact _ unit _ heightM s@TxInformation {..} =
                         "(" <> show (conf + 1) <> " confirmations)"
                     _ -> formatStatic "(Pending)"
             _ -> mempty
-    txid = maybe mempty (formatTxHash . txHashToHex) txInfoTxHash
+    txid = maybe mempty (formatTxHash . fromText . txHashToHex) txInfoTxHash
     outbound
         | txInfoTxType s /= "Outbound" = mempty
-        | txInfoNonStd == 0 && Map.null txInfoOutbound = mempty
+        | txInfoNonStdOutputs == 0 && Map.null txInfoOutbound = mempty
         | otherwise =
             vcat $
             [feeKey] <> fmap (addrFormat negate) (Map.assocs txInfoOutbound) <>
             [nonStdRcp]
     nonStdRcp
-        | txInfoNonStd == 0 = mempty
+        | txInfoNonStdOutputs == 0 = mempty
         | otherwise =
             formatStatic "Non-standard recipients:" <+>
-            formatIntegerAmount unit (fromIntegral txInfoNonStd)
+            formatIntegerAmount unit (fromIntegral txInfoNonStdOutputs)
     feeKey =
         case txInfoFee of
             Just fee ->
@@ -255,7 +226,7 @@ txInfoFormatCompact _ unit _ heightM s@TxInformation {..} =
             ] <>
             fmap (addrFormat id) (Map.assocs $ Map.map fst txInfoInbound)
     addrFormat f (a, v) =
-        formatAddress (addrToBase58 a) <> formatStatic ":" <+>
+        formatAddress (fromText $ addrToString a) <> formatStatic ":" <+>
         formatIntegerAmount unit (f $ fromIntegral v)
 
 txInfoFormat ::
@@ -278,7 +249,7 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   , case txInfoTxHash of
                         Just tid ->
                             formatKey (block 15 "Tx hash:") <>
-                            formatTxHash (txHashToHex tid)
+                            formatTxHash (fromText $ txHashToHex tid)
                         _ -> mempty
                   , formatKey (block 15 "Amount:") <>
                     formatIntegerAmount unit (txInfoAmount s)
@@ -308,7 +279,7 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   , case txInfoBlockHash of
                         Just bh ->
                             formatKey (block 15 "Block Hash:") <>
-                            formatBlockHash (blockHashToHex bh)
+                            formatBlockHash (fromText $ blockHashToHex bh)
                         _ -> mempty
                   , case heightM of
                         Just currHeight ->
@@ -328,7 +299,7 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
             ]
     outbound
         | txInfoTxType s /= "Outbound" = mempty
-        | txInfoNonStd == 0 && Map.null txInfoOutbound = mempty
+        | txInfoNonStdOutputs == 0 && Map.null txInfoOutbound = mempty
         | otherwise =
             vcat
                 [ formatTitle "Outbound"
@@ -338,14 +309,14 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   [nonStdRcp]
                 ]
     nonStdRcp
-        | txInfoNonStd == 0 = mempty
+        | txInfoNonStdOutputs == 0 = mempty
         | otherwise =
             formatAddrVal
                 unit
                 accDeriv
                 (formatStatic "Non-standard recipients")
                 Nothing
-                (negate $ fromIntegral txInfoNonStd)
+                (negate $ fromIntegral txInfoNonStdOutputs)
     inbound
         | Map.null txInfoInbound = mempty
         | otherwise =
@@ -381,28 +352,28 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
             ((if maybe False isExternal pM
                   then formatAddress
                   else formatInternalAddress) $
-             addrToBase58 a)
+             fromText $ addrToString a)
             pM
             (fromIntegral v)
     addrFormatMyInputs (a, (v, pM)) =
         formatAddrVal
             unit
             accDeriv
-            (formatInternalAddress $ addrToBase58 a)
+            (formatInternalAddress $ fromText $ addrToString a)
             pM
             (negate $ fromIntegral v)
     addrFormatOtherInputs (a, v) =
         formatAddrVal
             unit
             accDeriv
-            (formatInternalAddress $ addrToBase58 a)
+            (formatInternalAddress $ fromText $ addrToString a)
             Nothing
             (negate $ fromIntegral v)
     addrFormatOutbound (a, v) =
         formatAddrVal
             unit
             accDeriv
-            (formatAddress $ addrToBase58 a)
+            (formatAddress $ fromText $ addrToString a)
             Nothing
             (negate $ fromIntegral v)
 

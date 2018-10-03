@@ -3,20 +3,24 @@
 module Network.Haskoin.Wallet.Spec where
 
 import           Control.Lens                            ((^.), _1, _2, _3, _4)
+import           Data.Aeson.Types
 import           Data.Either                             (isLeft)
 import           Data.List                               (sum)
 import qualified Data.Map.Strict                         as Map
 import           Foundation
 import           Foundation.Collection
 import           Foundation.Compat.ByteString
+import           Foundation.Compat.Text
+import           Network.Haskoin.Address
 import           Network.Haskoin.Block
-import           Network.Haskoin.Crypto
+import           Network.Haskoin.Constants
+import           Network.Haskoin.Keys
 import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util                    (integerToBS)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.Arbitrary        ()
+import           Network.Haskoin.Wallet.Arbitrary
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
@@ -34,7 +38,6 @@ walletSpec = do
     amountSpec
     buildSpec
     signingSpec
-    mergeAddressTxsSpec
     httpSpec
 
 diceSpec :: Spec
@@ -133,14 +136,17 @@ mnemonicSpec =
             let m =
                     "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
                 p = "banana"
-                xpub = deriveXPubKey $ right $ signingKey p m 0
+                xpub = deriveXPubKey $ right $ signingKey btc p m 0
                 (addr0, _) = derivePathAddr xpub extDeriv 0
-            addr0 `shouldBe` "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
+                resAddr =
+                    fromMaybe (error "Bad address") $
+                    stringToAddr btc "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
+            addr0 `shouldBe` resAddr
         it "can derive a prvkey from a mnemonic" $ do
-            let xprv = right $ signingKey pwd mnem 0
+            let xprv = right $ signingKey btc pwd mnem 0
             xprv `shouldBe` fst keys
         it "can derive a pubkey from a mnemonic" $ do
-            let xpub = deriveXPubKey $ right $ signingKey pwd mnem 0
+            let xpub = deriveXPubKey $ right $ signingKey btc pwd mnem 0
             xpub `shouldBe` snd keys
         it "can derive addresses from a mnemonic" $ do
             let addrs = take 5 $ derivePathAddrs (snd keys) extDeriv 0
@@ -150,11 +156,15 @@ jsonSpec :: Spec
 jsonSpec =
     describe "Json encoding and decoding" $ do
         it "can encode TxSignData type" $
-            property $ \t ->
-                Just t `shouldBe` decodeJson (encodeJson (t :: TxSignData))
+            property $
+            forAll (arbitraryTxSignData btc) $ \t ->
+                Just t `shouldBe` decodeJson (encodeJson t)
         it "can encode AccountStore type" $
-            property $ \t ->
-                Just t `shouldBe` decodeJson (encodeJson (t :: AccountStore))
+            property $
+            forAll (arbitraryAccountStore btc) $ \t ->
+                Just t `shouldBe`
+                  (parseMaybe (accountStoreFromJSON btc)
+                    =<< decodeJson (encodeJson t))
 
 amountSpec :: Spec
 amountSpec =
@@ -231,19 +241,19 @@ buildSpec =
         let coins =
                 [ WalletCoin
                       (OutPoint dummyTid1 0)
-                      (PayPKHash $ getAddrHash $ just $ extAddrs ! 0)
+                      (PayPKHash $ getAddrHash160 $ just $ extAddrs ! 0)
                       100000000
                 , WalletCoin
                       (OutPoint dummyTid1 1)
-                      (PayPKHash $ getAddrHash $ just $ extAddrs ! 1)
+                      (PayPKHash $ getAddrHash160 $ just $ extAddrs ! 1)
                       200000000
                 , WalletCoin
                       (OutPoint dummyTid1 2)
-                      (PayPKHash $ getAddrHash $ just $ extAddrs ! 1)
+                      (PayPKHash $ getAddrHash160 $ just $ extAddrs ! 1)
                       300000000
                 , WalletCoin
                       (OutPoint dummyTid1 3)
-                      (PayPKHash $ getAddrHash $ just $ extAddrs ! 2)
+                      (PayPKHash $ getAddrHash160 $ just $ extAddrs ! 2)
                       400000000
                 ]
             change = (just $ intAddrs ! 0, intDeriv :/ 0, 0)
@@ -253,7 +263,7 @@ buildSpec =
                     , (just $ othAddrs ! 1, 200000000)
                     ]
             allAddrs = Map.fromList $ zip extAddrs $ fmap (extDeriv :/) [0 ..]
-            resE = buildWalletTx allAddrs coins change rcps 314 10000
+            resE = buildWalletTx btc allAddrs coins change rcps 314 10000
         (fmap prevOutput . txIn . (^. _1) <$> resE) `shouldBe`
             Right [OutPoint dummyTid1 2, OutPoint dummyTid1 3]
         (sum . fmap outValue . txOut . (^. _1) <$> resE) `shouldBe`
@@ -274,15 +284,15 @@ signingSpec =
                         , (just $ intAddrs ! 0, 40000000)
                         ]
                 dat = TxSignData newTx [fundTx] [extDeriv :/ 0] [intDeriv :/ 0]
-                xPrv = right $ signingKey pwd mnem 0
-                (res, tx, isSigned) = right $ signWalletTx dat xPrv
+                xPrv = right $ signingKey btc pwd mnem 0
+                (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
                 TxInformation
                 { txInfoTxHash = Just $ txHash tx
                 , txInfoTxSize = Just $ length $ encodeBytes tx
                 , txInfoOutbound =
                       Map.fromList [(just $ othAddrs ! 0, 50000000)]
-                , txInfoNonStd = 0
+                , txInfoNonStdOutputs = 0
                 , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
@@ -294,6 +304,7 @@ signingSpec =
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
                 , txInfoOtherInputs = Map.empty
+                , txInfoNonStdInputs = 0
                 , txInfoFee = Just 10000000
                 , txInfoHeight = Nothing
                 , txInfoBlockHash = Nothing
@@ -315,15 +326,15 @@ signingSpec =
                         , (just $ intAddrs ! 1, 50000000)
                         ]
                 dat = TxSignData newTx [fundTx] [extDeriv :/ 2] [intDeriv :/ 1]
-                xPrv = right $ signingKey pwd mnem 0
-                (res, _, isSigned) = right $ signWalletTx dat xPrv
+                xPrv = right $ signingKey btc pwd mnem 0
+                (res, _, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
                 TxInformation
                 { txInfoTxHash = Nothing
                 , txInfoTxSize = Just $ fromIntegral $ guessTxSize 2 [] 2 0
                 , txInfoOutbound =
                       Map.fromList [(just $ othAddrs ! 1, 200000000)]
-                , txInfoNonStd = 0
+                , txInfoNonStdOutputs = 0
                 , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 1
@@ -336,6 +347,7 @@ signingSpec =
                           ]
                 , txInfoOtherInputs =
                       Map.fromList [(just $ extAddrs ! 0, 100000000)]
+                , txInfoNonStdInputs = 0
                 , txInfoFee = Just 50000000
                 , txInfoHeight = Nothing
                 , txInfoBlockHash = Nothing
@@ -362,14 +374,14 @@ signingSpec =
                         [fundTx]
                         [extDeriv :/ 0, extDeriv :/ 1]
                         [intDeriv :/ 0, extDeriv :/ 2]
-                xPrv = right $ signingKey pwd mnem 0
-                (res, tx, isSigned) = right $ signWalletTx dat xPrv
+                xPrv = right $ signingKey btc pwd mnem 0
+                (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
                 TxInformation
                 { txInfoTxHash = Just $ txHash tx
                 , txInfoTxSize = Just $ length $ encodeBytes tx
                 , txInfoOutbound = Map.empty
-                , txInfoNonStd = 0
+                , txInfoNonStdOutputs = 0
                 , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
@@ -385,6 +397,7 @@ signingSpec =
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
                 , txInfoOtherInputs = Map.empty
+                , txInfoNonStdInputs = 0
                 , txInfoFee = Just 50000000
                 , txInfoHeight = Nothing
                 , txInfoBlockHash = Nothing
@@ -427,8 +440,8 @@ signingSpec =
                         [fundTx1, fundTx2]
                         [extDeriv :/ 0, extDeriv :/ 1, extDeriv :/ 2]
                         [intDeriv :/ 0, intDeriv :/ 1]
-                xPrv = right $ signingKey pwd mnem 0
-                (res, tx, isSigned) = right $ signWalletTx dat xPrv
+                xPrv = right $ signingKey btc pwd mnem 0
+                (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
                 TxInformation
                 { txInfoTxHash = Just $ txHash tx
@@ -438,7 +451,7 @@ signingSpec =
                           [ (just $ othAddrs ! 0, 1000000000)
                           , (just $ othAddrs ! 1, 300000000)
                           ]
-                , txInfoNonStd = 0
+                , txInfoNonStdOutputs = 0
                 , txInfoInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
@@ -456,6 +469,7 @@ signingSpec =
                             , (600000000, Just $ extDeriv :/ 0))
                           ]
                 , txInfoOtherInputs = Map.empty
+                , txInfoNonStdInputs = 0
                 , txInfoFee = Just 100000000
                 , txInfoHeight = Nothing
                 , txInfoBlockHash = Nothing
@@ -471,20 +485,21 @@ signingSpec =
                         [(txHash fundTx, 0)]
                         [(just $ extAddrs ! 1, 50000000)]
                 dat = TxSignData newTx [fundTx] [] [extDeriv :/ 1]
-                prv = just $ fromWif $ stringToBS $ wifKey 0
-                (res, tx, isSigned) = right $ signSwipeTx dat [prv]
+                prv = just $ fromWif btc $ toText $ wifKey 0
+                (res, tx, isSigned) = right $ signSwipeTx btc dat [prv]
             res `shouldBe`
                 TxInformation
                 { txInfoTxHash = Just $ txHash tx
                 , txInfoTxSize = Just $ length $ encodeBytes tx
                 , txInfoOutbound =
                       Map.fromList [(just $ extAddrs ! 1, 50000000)]
-                , txInfoNonStd = 0
+                , txInfoNonStdOutputs = 0
                 , txInfoInbound = Map.empty
                 , txInfoMyInputs =
                       Map.empty
                 , txInfoOtherInputs =
                       Map.fromList [(just $ extAddrs ! 0, 100000000)]
+                , txInfoNonStdInputs = 0
                 , txInfoFee = Just 50000000
                 , txInfoHeight = Nothing
                 , txInfoBlockHash = Nothing
@@ -507,8 +522,8 @@ signingSpec =
                         [fundTx1]
                         [extDeriv :/ 0, extDeriv :/ 1]
                         [intDeriv :/ 0]
-                xPrv = right $ signingKey pwd mnem 0
-            signWalletTx dat xPrv `shouldBe`
+                xPrv = right $ signingKey btc pwd mnem 0
+            signWalletTx btc dat xPrv `shouldBe`
                 Left "Tx is missing inputs from private keys"
         it "can show \"Tx is missing change outputs\" error" $ do
             let fundTx = testTx' [(just $ extAddrs ! 0, 100000000)]
@@ -524,8 +539,8 @@ signingSpec =
                         [fundTx]
                         [extDeriv :/ 0]
                         [intDeriv :/ 1, intDeriv :/ 2]
-                xPrv = right $ signingKey pwd mnem 0
-            signWalletTx dat xPrv `shouldBe` Left "Tx is missing change outputs"
+                xPrv = right $ signingKey btc pwd mnem 0
+            signWalletTx btc dat xPrv `shouldBe` Left "Tx is missing change outputs"
         it "can show \"Referenced input transactions are missing\" error" $ do
             let fundTx1 = testTx' [(just $ extAddrs ! 0, 100000000)]
                 fundTx2 = testTx' [(just $ extAddrs ! 1, 200000000)]
@@ -536,187 +551,40 @@ signingSpec =
                         , (just $ intAddrs ! 0, 40000000)
                         ]
                 dat = TxSignData newTx [fundTx2] [extDeriv :/ 0] [intDeriv :/ 0]
-                xPrv = right $ signingKey pwd mnem 0
-            signWalletTx dat xPrv `shouldBe`
+                xPrv = right $ signingKey btc pwd mnem 0
+            signWalletTx btc dat xPrv `shouldBe`
                 Left "Referenced input transactions are missing"
-
-mergeAddressTxsSpec :: Spec
-mergeAddressTxsSpec =
-    describe "mergeAddressTxs" $ do
-        it "Can merge inbound addresses" $ do
-            let as =
-                    [ AddressTx
-                          (just $ extAddrs ! 0)
-                          (dummyTxHash 1)
-                          1000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 0)
-                          (dummyTxHash 1)
-                          2000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 1)
-                          (dummyTxHash 1)
-                          4000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 1)
-                          (dummyTxHash 2)
-                          5000
-                          (Just 2)
-                          (Just $ dummyBlockHash 2)
-                    ]
-            mergeAddressTxs as `shouldBe`
-                [ TxInformation
-                  { txInfoTxHash = Just $ dummyTxHash 1
-                  , txInfoTxSize = Nothing
-                  , txInfoOutbound = Map.empty
-                  , txInfoNonStd = 0
-                  , txInfoInbound =
-                        Map.fromList
-                            [ (just $ extAddrs ! 0, (3000, Nothing))
-                            , (just $ extAddrs ! 1, (4000, Nothing))
-                            ]
-                  , txInfoMyInputs = Map.empty
-                  , txInfoOtherInputs = Map.empty
-                  , txInfoFee = Nothing
-                  , txInfoHeight = Just 1
-                  , txInfoBlockHash = Just $ dummyBlockHash 1
-                  }
-                , TxInformation
-                  { txInfoTxHash = Just $ dummyTxHash 2
-                  , txInfoTxSize = Nothing
-                  , txInfoOutbound = Map.empty
-                  , txInfoNonStd = 0
-                  , txInfoInbound =
-                        Map.fromList [(just $ extAddrs ! 1, (5000, Nothing))]
-                  , txInfoMyInputs = Map.empty
-                  , txInfoOtherInputs = Map.empty
-                  , txInfoFee = Nothing
-                  , txInfoHeight = Just 2
-                  , txInfoBlockHash = Just $ dummyBlockHash 2
-                  }
-                ]
-        it "Can merge input and output addresses" $ do
-            let as =
-                    [ AddressTx
-                          (just $ extAddrs ! 0)
-                          (dummyTxHash 1)
-                          1000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 0)
-                          (dummyTxHash 1)
-                          (-1000)
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 0)
-                          (dummyTxHash 2)
-                          1000
-                          (Just 2)
-                          (Just $ dummyBlockHash 2)
-                    , AddressTx
-                          (just $ extAddrs ! 1)
-                          (dummyTxHash 1)
-                          4000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 2)
-                          (dummyTxHash 1)
-                          (-2000)
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 2)
-                          (dummyTxHash 1)
-                          (-3000)
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    , AddressTx
-                          (just $ extAddrs ! 2)
-                          (dummyTxHash 2)
-                          (-2000)
-                          (Just 2)
-                          (Just $ dummyBlockHash 2)
-                    , AddressTx
-                          (just $ extAddrs ! 2)
-                          (dummyTxHash 1)
-                          6000
-                          (Just 1)
-                          (Just $ dummyBlockHash 1)
-                    ]
-            mergeAddressTxs as `shouldBe`
-                [ TxInformation
-                  { txInfoTxHash = Just $ dummyTxHash 1
-                  , txInfoTxSize = Nothing
-                  , txInfoOutbound = Map.empty
-                  , txInfoNonStd = 0
-                  , txInfoInbound =
-                        Map.fromList
-                            [ (just $ extAddrs ! 0, (1000, Nothing))
-                            , (just $ extAddrs ! 1, (4000, Nothing))
-                            , (just $ extAddrs ! 2, (6000, Nothing))
-                            ]
-                  , txInfoMyInputs =
-                        Map.fromList
-                            [ (just $ extAddrs ! 0, (1000, Nothing))
-                            , (just $ extAddrs ! 2, (5000, Nothing))
-                            ]
-                  , txInfoOtherInputs = Map.empty
-                  , txInfoFee = Nothing
-                  , txInfoHeight = Just 1
-                  , txInfoBlockHash = Just $ dummyBlockHash 1
-                  }
-                , TxInformation
-                  { txInfoTxHash = Just $ dummyTxHash 2
-                  , txInfoTxSize = Nothing
-                  , txInfoOutbound = Map.empty
-                  , txInfoNonStd = 0
-                  , txInfoInbound =
-                        Map.fromList [(just $ extAddrs ! 0, (1000, Nothing))]
-                  , txInfoMyInputs =
-                        Map.fromList [(just $ extAddrs ! 2, (2000, Nothing))]
-                  , txInfoOtherInputs = Map.empty
-                  , txInfoFee = Nothing
-                  , txInfoHeight = Just 2
-                  , txInfoBlockHash = Just $ dummyBlockHash 2
-                  }
-                ]
 
 httpSpec :: Spec
 httpSpec =
     describe "HTTP service (online test)" $ do
+        let addr1 =
+                fromMaybe (error "bad address") $
+                stringToAddr btc "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"
         it "can receive balance (online test)" $ do
-            res <- httpBalance ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            res <- httpBalance btc [addr1]
             res `shouldSatisfy` (>= 6687607502)
         it "can receive coins (online test)" $ do
-            res <- httpUnspent ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            res <- httpUnspent btc [addr1]
             length res `shouldSatisfy` (>= 1290)
-            (outputAddress . snd) <$>
+            outputAddress btc . snd <$>
                 res `shouldSatisfy`
-                all (== Right "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa")
+                all (== Right addr1)
         it "can receive a transaction information (online test)" $ do
-            res <- httpTxInformation ["1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa"]
+            res <- httpTxInformation btc [addr1]
             length res `shouldSatisfy` (>= 1290)
             let res1 = head $ nonEmpty_ res
                 as =
                     Map.keys (txInfoInbound res1) <>
                     Map.keys (txInfoMyInputs res1)
-            as `shouldSatisfy` ("1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa" `elem`)
+            as `shouldSatisfy` (addr1 `elem`)
         it "can receive a transaction (online test)" $ do
             let tid =
                     "0e3e2357e806b6cdb1f70b54c3a3a17b6714ee1f0e68bebb44a74b1efd512098"
-            res <- httpTxs [tid]
-            (first txHash <$> res) `shouldBe` [(tid, 0)]
+            res <- httpRawTxs btc [tid]
+            (txHash <$> res) `shouldBe` [tid]
         it "can get the best block height (online test)" $ do
-            res <- httpBestHeight
+            res <- httpBestHeight btc
             res `shouldSatisfy` (> 500000)
 
 {- Test Constants -}
@@ -729,11 +597,16 @@ mnem = "snow senior nerve virus fabric now fringe clip marble interest analyst c
 
 keys :: (XPrvKey, XPubKey)
 keys =
-    ( "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
-    , "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
+    ( fromMaybe (error "bad XPrvKey") $
+      xPrvImport btc
+      "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
+    , fromMaybe (error "bad XPubKey") $
+      xPubImport btc
+      "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
 
 extAddrs :: [Address]
 extAddrs =
+    fromMaybe (error "extAddrs no parse") . stringToAddr btc <$>
     [ "1KEn7jEXa7KCLeZy59dka5qRJBLnPMmrLj"
     , "1AVj9WSYayTwUd8rS1mTTo4A6CPsS83VTg"
     , "1Dg6Kg7kQuyiZz41HRWXKUWKRu6ZyEf1Nr"
@@ -748,11 +621,14 @@ extAddrs =
 
 wifKey :: Natural -> String
 wifKey i =
-    bsToString_ $
-    toWif $ xPrvKey $ derivePath (extDeriv :/ fromIntegral i) (fst keys)
+    fromText $
+    toWif btc $
+    wrapSecKey True $
+    xPrvKey $ derivePath (extDeriv :/ fromIntegral i) (fst keys)
 
 intAddrs :: [Address]
 intAddrs =
+    fromMaybe (error "intAddrs no parse") . stringToAddr btc <$>
     [ "17KiDLpE3r92gWR8kFGkYDtgHqEVJrznvn"
     , "1NqNFsuS7K3dfF8RnAVr9YYCMvJuF9GCn6"
     , "1MZNPWwFwy2CqVgWBq6unPWBWrZTQ7WTnr"
@@ -767,6 +643,7 @@ intAddrs =
 
 othAddrs :: [Address]
 othAddrs =
+    fromMaybe (error "othAddrs no parse") . stringToAddr btc <$>
     [ "1JCq8Aa9d9rg4T4XV93RV3DMxd5u7GkSSU"
     , "1PxH6Yutj49mRAabGvcTxnLkFZCuXDXvRJ"
     , "191J7K3FaXXyM7C9ceSMRsJNF6aWCvvf1Q"
@@ -790,7 +667,7 @@ testTx xs ys = Tx 1 txi txo [] 0
                  TxIn (OutPoint h p) (toByteString $ fromList [1]) maxBound)
             xs
     f = encodeOutputBS . PayPKHash
-    txo = fmap (\(a, v) -> TxOut v $ f (getAddrHash a)) ys
+    txo = fmap (\(a, v) -> TxOut v $ f (getAddrHash160 a)) ys
 
 testTx' :: [(Address, Word64)] -> Tx
 testTx' = testTx [ (dummyTid1, 0) ]

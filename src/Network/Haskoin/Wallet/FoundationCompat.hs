@@ -16,9 +16,6 @@ import           Foundation.Collection
 import           Foundation.Compat.ByteString
 import           Foundation.Compat.Text
 import           Foundation.String
-import qualified Network.Haskoin.Block        as Block
-import qualified Network.Haskoin.Crypto       as Crypto
-import qualified Network.Haskoin.Transaction  as Transaction
 import           Network.Haskoin.Util         (eitherToMaybe)
 import qualified Prelude
 
@@ -144,29 +141,6 @@ padEnd :: Sequential c => CountOf (Element c) -> Element c -> c -> c
 padEnd n p xs = xs <> replicate (fromMaybe 0 (n - length xs)) p
 
 {- Haskoin helper functions -}
-
--- TODO: Remove those when Network.Haskoin is ported to Foundation
-
-txHashToHex :: Transaction.TxHash -> String
-txHashToHex = fst . fromBytesLenient . asBytes Transaction.txHashToHex
-
-hexToTxHash :: String -> Maybe Transaction.TxHash
-hexToTxHash = Transaction.hexToTxHash . stringToBS
-
-blockHashToHex :: Block.BlockHash -> String
-blockHashToHex = fst . fromBytesLenient . asBytes Block.blockHashToHex
-
-hexToBlockHash :: String -> Maybe Block.BlockHash
-hexToBlockHash = Block.hexToBlockHash . stringToBS
-
-addrToBase58 :: Crypto.Address -> String
-addrToBase58 = fst . fromBytesLenient . asBytes Crypto.addrToBase58
-
-base58ToAddr :: String -> Maybe Crypto.Address
-base58ToAddr = Crypto.base58ToAddr . stringToBS
-
-xPubExport :: Crypto.XPubKey -> String
-xPubExport = fst . fromBytesLenient . asBytes Crypto.xPubExport
 
 integralToNatural :: Prelude.Integral a => a -> Maybe Natural
 integralToNatural i

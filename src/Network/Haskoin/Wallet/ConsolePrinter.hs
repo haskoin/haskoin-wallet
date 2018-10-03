@@ -116,9 +116,7 @@ data ConsoleFormat
     | FormatFalse { getFormat :: !String }
     | FormatOnline { getFormat :: !String }
     | FormatOffline { getFormat :: !String }
-    | FormatCash { getFormat :: !String }
-    | FormatBitcoin { getFormat :: !String }
-    | FormatTestnet { getFormat :: !String }
+    | FormatNetwork { getFormat :: !String }
     | FormatError { getFormat :: !String }
 
 formatTitle :: String -> ConsolePrinter
@@ -190,14 +188,8 @@ formatOnline = text . FormatOnline
 formatOffline :: String -> ConsolePrinter
 formatOffline = text . FormatOffline
 
-formatCash :: String -> ConsolePrinter
-formatCash = text . FormatCash
-
-formatBitcoin :: String -> ConsolePrinter
-formatBitcoin = text . FormatBitcoin
-
-formatTestnet :: String -> ConsolePrinter
-formatTestnet = text . FormatTestnet
+formatNetwork :: String -> ConsolePrinter
+formatNetwork = text . FormatNetwork
 
 formatError :: String -> ConsolePrinter
 formatError = text . FormatError
@@ -255,11 +247,8 @@ formatSGR frm = case frm of
     FormatOffline _         -> [ SetConsoleIntensity BoldIntensity
                                , SetColor Foreground Dull Red
                                ]
-    FormatCash _            -> [ SetColor Foreground Dull Green
+    FormatNetwork _         -> [ SetColor Foreground Dull Green
                                ]
-    FormatBitcoin _         -> [ SetColor Foreground Dull Cyan
-                               ]
-    FormatTestnet _         -> [ SetColor Foreground Vivid Yellow ]
     FormatError _           -> [ SetColor Foreground Dull Red ]
 
 printFormat :: ConsoleFormat -> IO ()

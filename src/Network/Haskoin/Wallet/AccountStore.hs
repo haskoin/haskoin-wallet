@@ -1,10 +1,9 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet.AccountStore where
 
-import           Control.Monad                           (unless, when)
-import           Data.Aeson.TH
+import           Control.Monad
+import           Data.Aeson.Types
 import           Data.Map.Strict                         (Map)
 import qualified Data.Map.Strict                         as Map
 import           Data.Text                               (Text)
@@ -12,55 +11,77 @@ import           Foundation
 import           Foundation.Compat.Text
 import           Foundation.IO
 import           Foundation.VFS
+import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
-import           Network.Haskoin.Crypto
-import           Network.Haskoin.Util
+import           Network.Haskoin.Keys
 import           Network.Haskoin.Wallet.ConsolePrinter
 import           Network.Haskoin.Wallet.FoundationCompat
 import qualified System.Directory                        as D
+
+type AccountsFile = Map Text AccountStore
+
+accountsFileFromJSON :: Network -> Value -> Parser AccountsFile
+accountsFileFromJSON net =
+    withObject "accountsfile" $ \o -> do
+        res <- forM (toList o) $ \(k, v) -> do
+            a <- accountStoreFromJSON net v
+            return (k, a)
+        return $ fromList res
 
 data AccountStore = AccountStore
     { accountStoreXPubKey  :: !XPubKey
     , accountStoreExternal :: !Natural
     , accountStoreInternal :: !Natural
     , accountStoreDeriv    :: !HardPath
-    }
-    deriving (Eq, Show)
+    } deriving (Eq, Show)
 
-$(deriveJSON (dropFieldLabel 12) ''AccountStore)
+accountStoreFromJSON :: Network -> Value -> Parser AccountStore
+accountStoreFromJSON net =
+    withObject "accountstore" $ \o ->
+        AccountStore <$> (xPubFromJSON net =<< o .: "xpubkey") <*>
+        o .: "external" <*>
+        o .: "internal" <*>
+        o .: "deriv"
 
-type AccountsFile = Map Text AccountStore
+instance ToJSON AccountStore where
+    toJSON (AccountStore k e i d) =
+        object
+            [ "xpubkey" .= toJSON k
+            , "external" .= e
+            , "internal" .= i
+            , "deriv" .= d
+            ]
 
 extDeriv, intDeriv :: SoftPath
 extDeriv = Deriv :/ 0
 intDeriv = Deriv :/ 1
 
-accountsFile :: IO FilePath
-accountsFile = do
+accountsFile :: Network -> IO FilePath
+accountsFile net = do
     hwDir <- fromString <$> D.getAppUserDataDirectory "hw"
-    let dir = hwDir </> fromString networkName
+    let dir = hwDir </> fromString (getNetworkName net)
     D.createDirectoryIfMissing True $ filePathToLString dir
     return $ dir </> "accounts.json"
 
-readAccountsFile :: IO AccountsFile
-readAccountsFile = do
-    file <- accountsFile
+readAccountsFile :: Network -> IO AccountsFile
+readAccountsFile net = do
+    file <- accountsFile net
     exists <- D.doesFileExist $ filePathToLString file
-    unless exists $ writeAccountsFile Map.empty
+    unless exists $ writeAccountsFile net Map.empty
     bytes <- readFile file
-    maybe err return $ decodeJson bytes
+    maybe err return $ parseMaybe (accountsFileFromJSON net) =<< decodeJson bytes
   where
     err = consoleError $ formatError "Could not decode accounts file"
 
-writeAccountsFile :: AccountsFile -> IO ()
-writeAccountsFile dat = do
-    file <- accountsFile
+writeAccountsFile :: Network -> AccountsFile -> IO ()
+writeAccountsFile net dat = do
+    file <- accountsFile net
     withFile file WriteMode $ \h ->
         hPut h $ encodeJsonPretty dat <> stringToBytes "\n"
 
-newAccountStore :: AccountStore -> IO String
-newAccountStore store = do
-    accMap <- readAccountsFile
+newAccountStore :: Network -> AccountStore -> IO String
+newAccountStore net store = do
+    accMap <- readAccountsFile net
     let xpubs = accountStoreXPubKey <$> Map.elems accMap
         key
             | Map.null accMap = "main"
@@ -69,31 +90,31 @@ newAccountStore store = do
         consoleError $ formatError "This public key is already being watched"
     let f Nothing = Just store
         f _ = consoleError $ formatError "The account name already exists"
-    writeAccountsFile $ Map.alter f (toText key) accMap
+    writeAccountsFile net $ Map.alter f (toText key) accMap
     return key
 
-getAccountStore :: String -> IO (Maybe AccountStore)
-getAccountStore key = Map.lookup (toText key) <$> readAccountsFile
+getAccountStore :: Network -> String -> IO (Maybe AccountStore)
+getAccountStore net key = Map.lookup (toText key) <$> readAccountsFile net
 
-updateAccountStore :: String -> (AccountStore -> AccountStore) -> IO ()
-updateAccountStore key f = do
-    accMap <- readAccountsFile
+updateAccountStore :: Network -> String -> (AccountStore -> AccountStore) -> IO ()
+updateAccountStore net key f = do
+    accMap <- readAccountsFile net
     let g Nothing  = consoleError $ formatError $
             "The account " <> key <> " does not exist"
         g (Just s) = Just $ f s
-    writeAccountsFile $ Map.alter g (toText key) accMap
+    writeAccountsFile net $ Map.alter g (toText key) accMap
 
-renameAccountStore :: String -> String -> IO ()
-renameAccountStore oldName newName
+renameAccountStore :: Network -> String -> String -> IO ()
+renameAccountStore net oldName newName
     | oldName == newName =
         consoleError $ formatError "Both old and new names are the same"
     | otherwise = do
-        accMap <- readAccountsFile
+        accMap <- readAccountsFile net
         case Map.lookup (toText oldName) accMap of
             Just store -> do
                 when (Map.member (toText newName) accMap) $
                     consoleError $ formatError "New account name already exists"
-                writeAccountsFile $
+                writeAccountsFile net $
                     Map.insert (toText newName) store $
                     Map.delete (toText oldName) accMap
             _ -> consoleError $ formatError "Old account does not exist"

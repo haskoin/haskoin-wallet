@@ -10,7 +10,7 @@ import           Foundation.Collection
 import           Foundation.IO
 import           Foundation.Numerical
 import           Foundation.System.Entropy
-import           Network.Haskoin.Crypto                  (Mnemonic, toMnemonic)
+import           Network.Haskoin.Keys                  (Mnemonic, toMnemonic)
 import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Numeric                                 (readInt)
