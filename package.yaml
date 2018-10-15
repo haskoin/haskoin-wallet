@@ -33,9 +33,9 @@ library:
   - Network.Haskoin.Wallet.Signing
   - Network.Haskoin.Wallet.HTTP
   - Network.Haskoin.Wallet.Amounts
-  - Network.Haskoin.Wallet.ConsolePrinter
+  - Network.Haskoin.Wallet.Printer
   - Network.Haskoin.Wallet.FoundationCompat
-  - Network.Haskoin.Wallet.TxInformation
+  - Network.Haskoin.Wallet.DetailedTx
   - Network.Haskoin.Wallet.UsageInfo
   dependencies:
   - aeson

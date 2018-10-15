@@ -5,7 +5,7 @@ module Network.Haskoin.Wallet.UsageInfo where
 import           Data.Tree                               (Tree(..))
 import           Foundation
 import           Foundation.Monad
-import           Network.Haskoin.Wallet.ConsolePrinter
+import           Network.Haskoin.Wallet.Printer
 import           Network.Haskoin.Wallet.FoundationCompat
 import qualified System.Console.Argument                 as Argument
 import qualified System.Console.Command                  as Command
@@ -15,19 +15,19 @@ type Commands m = Tree (Command m)
 data Command m =
     Command
     { wrappedCommand :: Command.Command m
-    , commandFormat  :: !ConsolePrinter
+    , commandFormat  :: !Printer
     }
 
 data Action m =
     Action
     { wrappedAction :: Command.Action m
-    , actionOptions :: [ConsolePrinter]
-    , actionNonOptions :: [ConsolePrinter]
+    , actionOptions :: [Printer]
+    , actionNonOptions :: [Printer]
     }
 
 data Option a = Option
     { wrappedOption :: Argument.Option a
-    , optionFormat  :: !ConsolePrinter
+    , optionFormat  :: !Printer
     }
 
 data CommandType
@@ -37,7 +37,7 @@ data CommandType
 io :: MonadIO m => m () -> Action m
 io m = Action (Command.io m) [] []
 
-usageTitle :: Command m -> ConsolePrinter
+usageTitle :: Command m -> Printer
 usageTitle cmd = 
     vcat
         [ formatTitle (fromLString $ Command.name $ wrappedCommand cmd) <+>
@@ -47,17 +47,17 @@ usageTitle cmd =
         , formatStatic (fromLString $ Command.description $ wrappedCommand cmd)
         ]
 
-usage :: Commands m -> ConsolePrinter
+usage :: Commands m -> Printer
 usage (Node rootCmd rootNs) =
     vcat
-        [ ConsoleNonEmpty
+        [ PNonEmpty
         , usageTitle rootCmd
-        , ConsoleNonEmpty
+        , PNonEmpty
         , nest 2 $ vcat $ go <$> rootNs
         ]
   where
     go (Node cmd ns) =
-        vcat [commandFormat cmd, ConsoleNonEmpty, nest 2 $ vcat $ go <$> ns]
+        vcat [commandFormat cmd, PNonEmpty, nest 2 $ vcat $ go <$> ns]
 
 command ::
        String
@@ -111,12 +111,12 @@ withNonOptions t str f =
 
 commandPrinter ::
        String
-    -> [ConsolePrinter]
+    -> [Printer]
     -> String
     -> Maybe CommandType
     -> [Command m]
-    -> [ConsolePrinter]
-    -> ConsolePrinter
+    -> [Printer]
+    -> Printer
 commandPrinter name args desc cmdType next opts =
     vcat
         [ formatCommand name <+> hsep args
@@ -159,7 +159,7 @@ option short long examples def t desc =
     , optionFormat = optionPrinter (short, long, examples, def, desc)
     }
 
-optionPrinter :: Show a => (Char, String, [String], a, String) -> ConsolePrinter
+optionPrinter :: Show a => (Char, String, [String], a, String) -> Printer
 optionPrinter (short, long, examples, def, str) =
     hsep
         [ formatStatic "-" <> formatOption (fromLString [short])

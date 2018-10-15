@@ -1,8 +1,8 @@
--- This file has been generated from package.yaml by hpack version 0.20.0.
+-- This file has been generated from package.yaml by hpack version 0.28.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: aa2f434286abab06ce46c5480dd90a0731b3c96a23abf3248978ef63364f1848
+-- hash: 825b194afc3a927f51234c0619fbe8e2449cdcd63b7f9c435bde44f37c0e8e40
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -65,9 +65,9 @@ library
       Network.Haskoin.Wallet.Signing
       Network.Haskoin.Wallet.HTTP
       Network.Haskoin.Wallet.Amounts
-      Network.Haskoin.Wallet.ConsolePrinter
+      Network.Haskoin.Wallet.Printer
       Network.Haskoin.Wallet.FoundationCompat
-      Network.Haskoin.Wallet.TxInformation
+      Network.Haskoin.Wallet.DetailedTx
       Network.Haskoin.Wallet.UsageInfo
   other-modules:
       Paths_haskoin_wallet

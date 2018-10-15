@@ -5,7 +5,7 @@
 module Network.Haskoin.Wallet.HTTP
 ( httpBalance
 , httpUnspent
-, httpTxInformation
+, httpDetailedTx
 , httpTxs
 , httpRawTxs
 , httpBestHeight
@@ -32,22 +32,21 @@ import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util                    (eitherToMaybe)
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.ConsolePrinter
+import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.FoundationCompat
-import           Network.Haskoin.Wallet.TxInformation
+import           Network.Haskoin.Wallet.Printer
 import           Network.HTTP.Types.Status
 import qualified Network.Wreq                            as HTTP
 import           Network.Wreq.Types                      (ResponseChecker)
 
-rootUrl :: Network -> LString
-rootUrl net
+baseUrl :: Network -> LString
+baseUrl net
     | net == btc = "https://btc.haskoin.com/api"
     | net == btcTest = "https://btctest.haskoin.com/api"
     | net == bch = "https://bch.haskoin.com/api"
     | net == bchTest = "https://bchtest.haskoin.com/api"
     | otherwise =
-        consoleError $
-        formatError $
+        printError $
         "Haskoin does not support the network " <>
         fromLString (getNetworkName net)
 
@@ -61,10 +60,10 @@ httpBalance_ net addrs = do
         key "confirmed" .
         _Integer
   where
-    url = rootUrl net <> "/address/balances"
+    url = baseUrl net <> "/address/balances"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
     aList = intercalate "," $ fromText . addrToString <$> addrs
-    err = consoleError $ formatError "Balance was negative"
+    err = printError "Balance was negative"
 
 httpUnspent :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 httpUnspent net = (mconcat <$>) . mapM (httpUnspent_ net) . groupIn 50
@@ -73,9 +72,9 @@ httpUnspent_ :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 httpUnspent_ net addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseCoin $ v ^.. values
-    maybe (consoleError $ formatError "Could not parse coin") return resM
+    maybe (printError "Could not parse coin") return resM
   where
-    url = rootUrl net <> "/address/unspent"
+    url = baseUrl net <> "/address/unspent"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
     aList = intercalate "," $ fromText . addrToString <$> addrs
     parseCoin v = do
@@ -86,26 +85,26 @@ httpUnspent_ net addrs = do
         scp <- eitherToMaybe . withBytes decodeOutputBS =<< decodeHexText scpHex
         return (OutPoint tid pos, scp, val)
 
-httpTxInformation :: Network -> [Address] -> IO [TxInformation]
-httpTxInformation net addrs = do
+httpDetailedTx :: Network -> [Address] -> IO [DetailedTx]
+httpDetailedTx net addrs = do
     aTxs <- httpAddressTxs net addrs
     txVals <- httpTxs net $ nub $ snd <$> aTxs
-    return $ toTxInformation net (fst <$> aTxs) <$> txVals
+    return $ toDetailedTx net (fst <$> aTxs) <$> txVals
 
-toTxInformation :: Network -> [Address] -> Json.Value -> TxInformation
-toTxInformation net addrs v =
-    TxInformation
-    { txInfoTxHash = hexToTxHash =<< v ^? key "txid" . _String
-    , txInfoTxSize = toCount <$> v ^? key "size" . _Integral
-    , txInfoOutbound = othOs
-    , txInfoNonStdOutputs = os Map.! Nothing
-    , txInfoInbound = Map.map (,Nothing) myOs
-    , txInfoMyInputs = Map.map (,Nothing) myIs
-    , txInfoOtherInputs = othIs
-    , txInfoNonStdInputs = is Map.! Nothing
-    , txInfoFee = v ^? key "fee" . _Integral
-    , txInfoHeight = v ^? key "block" . key "height" . _Integral
-    , txInfoBlockHash =
+toDetailedTx :: Network -> [Address] -> Json.Value -> DetailedTx
+toDetailedTx net addrs v =
+    DetailedTx
+    { detailedTxHash = hexToTxHash =<< v ^? key "txid" . _String
+    , detailedTxSize = toCount <$> v ^? key "size" . _Integral
+    , detailedTxOutbound = othOs
+    , detailedTxNonStdOutputs = os Map.! Nothing
+    , detailedTxInbound = Map.map (,Nothing) myOs
+    , detailedTxMyInputs = Map.map (,Nothing) myIs
+    , detailedTxOtherInputs = othIs
+    , detailedTxNonStdInputs = is Map.! Nothing
+    , detailedTxFee = v ^? key "fee" . _Integral
+    , detailedTxHeight = v ^? key "block" . key "height" . _Integral
+    , detailedTxBlockHash =
           hexToBlockHash =<< v ^? key "block" . key "hash" . _String
     }
   where
@@ -129,9 +128,9 @@ httpAddressTxs_ :: Network -> [Address] -> IO [(Address, TxHash)]
 httpAddressTxs_ net addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseAddrTx $ v ^.. values
-    maybe (consoleError $ formatError "Could not parse addrTx") return resM
+    maybe (printError "Could not parse addrTx") return resM
   where
-    url = rootUrl net <> "/address/transactions"
+    url = baseUrl net <> "/address/transactions"
     aList = intercalate "," $ addrToString <$> addrs
     opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
     parseAddrTx v = do
@@ -149,7 +148,7 @@ httpTxs_ net tids = do
     v <- httpJsonGet opts url
     return $ v ^.. values
   where
-    url = rootUrl net <> "/transactions"
+    url = baseUrl net <> "/transactions"
     opts = HTTP.defaults & HTTP.param "txids" .~ [tList]
     tList = intercalate "," $ txHashToHex <$> tids
 
@@ -161,12 +160,9 @@ httpRawTxs_ _ [] = return []
 httpRawTxs_ net tids = do
     v <- httpJsonGet opts url
     let xs = mapM parseTx $ v ^.. values
-    maybe
-        (consoleError $ formatError "Could not decode the transaction")
-        return
-        xs
+    maybe (printError "Could not decode the transaction") return xs
   where
-    url = rootUrl net <> "/transactions/hex"
+    url = baseUrl net <> "/transactions/hex"
     opts = HTTP.defaults & HTTP.param "txids" .~ [tList]
     tList = intercalate "," $ txHashToHex <$> tids
     parseTx = (decodeBytes =<<) . decodeHexText . (^. _String)
@@ -177,15 +173,15 @@ httpBestHeight net = do
     let resM = integralToNatural =<< v ^? key "height" . _Integer
     maybe err return resM
   where
-    url = rootUrl net <> "/block/best"
-    err = consoleError $ formatError "Could not get the best block height"
+    url = baseUrl net <> "/block/best"
+    err = printError "Could not get the best block height"
 
 httpBroadcastTx :: Network -> Tx -> IO ()
 httpBroadcastTx net tx = do
     _ <- HTTP.postWith (addStatusCheck HTTP.defaults) url val
     return ()
   where
-    url = rootUrl net <> "/transaction"
+    url = baseUrl net <> "/transaction"
     val =
         J.object ["transaction" J..= J.String (encodeHexText $ encodeBytes tx)]
 
@@ -205,7 +201,7 @@ checkStatus :: ResponseChecker
 checkStatus _ r
     | statusIsSuccessful status = return ()
     | otherwise =
-        consoleError $
+        printCustomError $
         vcat
             [ formatError "Received an HTTP error response:"
             , nest 4 $

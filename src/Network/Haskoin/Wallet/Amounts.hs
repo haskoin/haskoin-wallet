@@ -8,7 +8,7 @@ import           Control.Monad
 import           Data.Decimal
 import           Foundation
 import           Foundation.String.Read
-import           Network.Haskoin.Wallet.ConsolePrinter
+import           Network.Haskoin.Wallet.Printer
 import           Network.Haskoin.Wallet.FoundationCompat
 
 type Satoshi = Natural
@@ -19,26 +19,26 @@ data AmountUnit
     | UnitSatoshi
     deriving (Eq)
 
-{- ConsolePrinter functions -}
+{- Printer functions -}
 
-formatFeeBytes :: Decimal -> ConsolePrinter
-formatFeeBytes fee = formatFee (show fee) <+> formatStatic "sat/bytes"
+formatFeeBytes :: Decimal -> Printer
+formatFeeBytes fee = formatFee (show fee) <+> text "sat/bytes"
 
-formatAmount :: AmountUnit -> Satoshi -> ConsolePrinter
+formatAmount :: AmountUnit -> Satoshi -> Printer
 formatAmount unit = formatIntegerAmount unit . fromIntegral
 
-formatIntegerAmount :: AmountUnit -> Integer -> ConsolePrinter
+formatIntegerAmount :: AmountUnit -> Integer -> Printer
 formatIntegerAmount unit amnt
     | amnt >= 0 = formatIntegerAmountWith formatPosAmount unit amnt
     | otherwise = formatIntegerAmountWith formatNegAmount unit amnt
 
 formatIntegerAmountWith ::
-       (String -> ConsolePrinter) -> AmountUnit -> Integer -> ConsolePrinter
+       (String -> Printer) -> AmountUnit -> Integer -> Printer
 formatIntegerAmountWith f unit amnt =
     f (showIntegerAmount unit amnt) <+> formatUnit unit amnt
 
-formatUnit :: AmountUnit -> Integer -> ConsolePrinter
-formatUnit unit = formatStatic . showUnit unit
+formatUnit :: AmountUnit -> Integer -> Printer
+formatUnit unit = text . showUnit unit
 
 showUnit :: AmountUnit -> Integer -> String
 showUnit unit amnt

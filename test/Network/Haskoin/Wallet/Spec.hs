@@ -25,7 +25,7 @@ import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Signing
-import           Network.Haskoin.Wallet.TxInformation
+import           Network.Haskoin.Wallet.DetailedTx
 import           Numeric
 import           Test.Hspec
 import           Test.QuickCheck
@@ -287,31 +287,31 @@ signingSpec =
                 xPrv = right $ signingKey btc pwd mnem 0
                 (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
-                TxInformation
-                { txInfoTxHash = Just $ txHash tx
-                , txInfoTxSize = Just $ length $ encodeBytes tx
-                , txInfoOutbound =
+                DetailedTx
+                { detailedTxHash = Just $ txHash tx
+                , detailedTxSize = Just $ length $ encodeBytes tx
+                , detailedTxOutbound =
                       Map.fromList [(just $ othAddrs ! 0, 50000000)]
-                , txInfoNonStdOutputs = 0
-                , txInfoInbound =
+                , detailedTxNonStdOutputs = 0
+                , detailedTxInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (40000000, Just $ intDeriv :/ 0))
                           ]
-                , txInfoMyInputs =
+                , detailedTxMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
-                , txInfoOtherInputs = Map.empty
-                , txInfoNonStdInputs = 0
-                , txInfoFee = Just 10000000
-                , txInfoHeight = Nothing
-                , txInfoBlockHash = Nothing
+                , detailedTxOtherInputs = Map.empty
+                , detailedTxNonStdInputs = 0
+                , detailedTxFee = Just 10000000
+                , detailedTxHeight = Nothing
+                , detailedTxBlockHash = Nothing
                 }
-            txInfoTxType res `shouldBe` "Outbound"
-            txInfoAmount res `shouldBe` -60000000
-            txInfoFeeByte res `shouldBe` Just 44444.44
+            detailedTxType res `shouldBe` TxOutbound
+            detailedTxAmount res `shouldBe` -60000000
+            detailedTxFeeByte res `shouldBe` Just 44444.44
             isSigned `shouldBe` True
         it "can partially sign a transaction" $ do
             let fundTx =
@@ -329,32 +329,32 @@ signingSpec =
                 xPrv = right $ signingKey btc pwd mnem 0
                 (res, _, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
-                TxInformation
-                { txInfoTxHash = Nothing
-                , txInfoTxSize = Just $ fromIntegral $ guessTxSize 2 [] 2 0
-                , txInfoOutbound =
+                DetailedTx
+                { detailedTxHash = Nothing
+                , detailedTxSize = Just $ fromIntegral $ guessTxSize 2 [] 2 0
+                , detailedTxOutbound =
                       Map.fromList [(just $ othAddrs ! 1, 200000000)]
-                , txInfoNonStdOutputs = 0
-                , txInfoInbound =
+                , detailedTxNonStdOutputs = 0
+                , detailedTxInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 1
                             , (50000000, Just $ intDeriv :/ 1))
                           ]
-                , txInfoMyInputs =
+                , detailedTxMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 2
                             , (200000000, Just $ extDeriv :/ 2))
                           ]
-                , txInfoOtherInputs =
+                , detailedTxOtherInputs =
                       Map.fromList [(just $ extAddrs ! 0, 100000000)]
-                , txInfoNonStdInputs = 0
-                , txInfoFee = Just 50000000
-                , txInfoHeight = Nothing
-                , txInfoBlockHash = Nothing
+                , detailedTxNonStdInputs = 0
+                , detailedTxFee = Just 50000000
+                , detailedTxHeight = Nothing
+                , detailedTxBlockHash = Nothing
                 }
-            txInfoTxType res `shouldBe` "Outbound"
-            txInfoAmount res `shouldBe` -150000000
-            txInfoFeeByte res `shouldBe` Just 133689.84
+            detailedTxType res `shouldBe` TxOutbound
+            detailedTxAmount res `shouldBe` -150000000
+            detailedTxFeeByte res `shouldBe` Just 133689.84
             isSigned `shouldBe` False
         it "can send coins to your own wallet only" $ do
             let fundTx =
@@ -377,34 +377,34 @@ signingSpec =
                 xPrv = right $ signingKey btc pwd mnem 0
                 (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
-                TxInformation
-                { txInfoTxHash = Just $ txHash tx
-                , txInfoTxSize = Just $ length $ encodeBytes tx
-                , txInfoOutbound = Map.empty
-                , txInfoNonStdOutputs = 0
-                , txInfoInbound =
+                DetailedTx
+                { detailedTxHash = Just $ txHash tx
+                , detailedTxSize = Just $ length $ encodeBytes tx
+                , detailedTxOutbound = Map.empty
+                , detailedTxNonStdOutputs = 0
+                , detailedTxInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (50000000, Just $ intDeriv :/ 0))
                           , ( just $ extAddrs ! 2
                             , (200000000, Just $ extDeriv :/ 2))
                           ]
-                , txInfoMyInputs =
+                , detailedTxMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 1
                             , (200000000, Just $ extDeriv :/ 1))
                           , ( just $ extAddrs ! 0
                             , (100000000, Just $ extDeriv :/ 0))
                           ]
-                , txInfoOtherInputs = Map.empty
-                , txInfoNonStdInputs = 0
-                , txInfoFee = Just 50000000
-                , txInfoHeight = Nothing
-                , txInfoBlockHash = Nothing
+                , detailedTxOtherInputs = Map.empty
+                , detailedTxNonStdInputs = 0
+                , detailedTxFee = Just 50000000
+                , detailedTxHeight = Nothing
+                , detailedTxBlockHash = Nothing
                 }
-            txInfoTxType res `shouldBe` "Self"
-            txInfoAmount res `shouldBe` -50000000
-            txInfoFeeByte res `shouldBe` Just 134408.60
+            detailedTxType res `shouldBe` TxInternal
+            detailedTxAmount res `shouldBe` -50000000
+            detailedTxFeeByte res `shouldBe` Just 134408.60
             isSigned `shouldBe` True
         it "can sign a complex transaction" $ do
             let fundTx1 =
@@ -443,23 +443,23 @@ signingSpec =
                 xPrv = right $ signingKey btc pwd mnem 0
                 (res, tx, isSigned) = right $ signWalletTx btc dat xPrv
             res `shouldBe`
-                TxInformation
-                { txInfoTxHash = Just $ txHash tx
-                , txInfoTxSize = Just $ length $ encodeBytes tx
-                , txInfoOutbound =
+                DetailedTx
+                { detailedTxHash = Just $ txHash tx
+                , detailedTxSize = Just $ length $ encodeBytes tx
+                , detailedTxOutbound =
                       Map.fromList
                           [ (just $ othAddrs ! 0, 1000000000)
                           , (just $ othAddrs ! 1, 300000000)
                           ]
-                , txInfoNonStdOutputs = 0
-                , txInfoInbound =
+                , detailedTxNonStdOutputs = 0
+                , detailedTxInbound =
                       Map.fromList
                           [ ( just $ intAddrs ! 0
                             , (200000000, Just $ intDeriv :/ 0))
                           , ( just $ intAddrs ! 1
                             , (100000000, Just $ intDeriv :/ 1))
                           ]
-                , txInfoMyInputs =
+                , detailedTxMyInputs =
                       Map.fromList
                           [ ( just $ extAddrs ! 1
                             , (500000000, Just $ extDeriv :/ 1))
@@ -468,15 +468,15 @@ signingSpec =
                           , ( just $ extAddrs ! 0
                             , (600000000, Just $ extDeriv :/ 0))
                           ]
-                , txInfoOtherInputs = Map.empty
-                , txInfoNonStdInputs = 0
-                , txInfoFee = Just 100000000
-                , txInfoHeight = Nothing
-                , txInfoBlockHash = Nothing
+                , detailedTxOtherInputs = Map.empty
+                , detailedTxNonStdInputs = 0
+                , detailedTxFee = Just 100000000
+                , detailedTxHeight = Nothing
+                , detailedTxBlockHash = Nothing
                 }
-            txInfoTxType res `shouldBe` "Outbound"
-            txInfoAmount res `shouldBe` -1400000000
-            txInfoFeeByte res `shouldBe` Just 105152.47
+            detailedTxType res `shouldBe` TxOutbound
+            detailedTxAmount res `shouldBe` -1400000000
+            detailedTxFeeByte res `shouldBe` Just 105152.47
             isSigned `shouldBe` True
         it "can sign a WIF transaction" $ do
             let fundTx = testTx' [(just $ extAddrs ! 0, 100000000)]
@@ -488,25 +488,25 @@ signingSpec =
                 prv = just $ fromWif btc $ toText $ wifKey 0
                 (res, tx, isSigned) = right $ signSwipeTx btc dat [prv]
             res `shouldBe`
-                TxInformation
-                { txInfoTxHash = Just $ txHash tx
-                , txInfoTxSize = Just $ length $ encodeBytes tx
-                , txInfoOutbound =
+                DetailedTx
+                { detailedTxHash = Just $ txHash tx
+                , detailedTxSize = Just $ length $ encodeBytes tx
+                , detailedTxOutbound =
                       Map.fromList [(just $ extAddrs ! 1, 50000000)]
-                , txInfoNonStdOutputs = 0
-                , txInfoInbound = Map.empty
-                , txInfoMyInputs =
+                , detailedTxNonStdOutputs = 0
+                , detailedTxInbound = Map.empty
+                , detailedTxMyInputs =
                       Map.empty
-                , txInfoOtherInputs =
+                , detailedTxOtherInputs =
                       Map.fromList [(just $ extAddrs ! 0, 100000000)]
-                , txInfoNonStdInputs = 0
-                , txInfoFee = Just 50000000
-                , txInfoHeight = Nothing
-                , txInfoBlockHash = Nothing
+                , detailedTxNonStdInputs = 0
+                , detailedTxFee = Just 50000000
+                , detailedTxHeight = Nothing
+                , detailedTxBlockHash = Nothing
                 }
-            txInfoTxType res `shouldBe` "Outbound"
-            txInfoAmount res `shouldBe` 0
-            txInfoFeeByte res `shouldBe` Just 261780.10
+            detailedTxType res `shouldBe` TxOutbound
+            detailedTxAmount res `shouldBe` 0
+            detailedTxFeeByte res `shouldBe` Just 261780.10
             isSigned `shouldBe` True
         it "can show \"Tx is missing inputs from private keys\" error" $ do
             let fundTx1 = testTx' [(just $ extAddrs ! 1, 100000000)]
@@ -571,12 +571,12 @@ httpSpec =
                 res `shouldSatisfy`
                 all (== Right addr1)
         it "can receive a transaction information (online test)" $ do
-            res <- httpTxInformation btc [addr1]
+            res <- httpDetailedTx btc [addr1]
             length res `shouldSatisfy` (>= 1290)
             let res1 = head $ nonEmpty_ res
                 as =
-                    Map.keys (txInfoInbound res1) <>
-                    Map.keys (txInfoMyInputs res1)
+                    Map.keys (detailedTxInbound res1) <>
+                    Map.keys (detailedTxMyInputs res1)
             as `shouldSatisfy` (addr1 `elem`)
         it "can receive a transaction (online test)" $ do
             let tid =

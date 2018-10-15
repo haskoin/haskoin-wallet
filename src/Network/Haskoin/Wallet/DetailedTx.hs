@@ -1,7 +1,8 @@
 {-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-module Network.Haskoin.Wallet.TxInformation where
+module Network.Haskoin.Wallet.DetailedTx where
 
 import           Control.Arrow                           ((&&&))
 import           Data.Decimal
@@ -18,80 +19,86 @@ import           Network.Haskoin.Keys
 import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.ConsolePrinter
 import           Network.Haskoin.Wallet.FoundationCompat
+import           Network.Haskoin.Wallet.Printer
 import qualified Prelude
 
-data TxInformation = TxInformation
-    { txInfoTxHash        :: Maybe TxHash
-    , txInfoTxSize        :: Maybe (CountOf (Element (UArray Word8)))
-    , txInfoOutbound      :: Map Address Satoshi
-    , txInfoNonStdOutputs :: Satoshi
-    , txInfoInbound       :: Map Address (Satoshi, Maybe SoftPath)
-    , txInfoMyInputs      :: Map Address (Satoshi, Maybe SoftPath)
-    , txInfoOtherInputs   :: Map Address Satoshi
-    , txInfoNonStdInputs  :: Satoshi
-    , txInfoFee           :: Maybe Satoshi
-    , txInfoHeight        :: Maybe Natural
-    , txInfoBlockHash     :: Maybe BlockHash
+data DetailedTx = DetailedTx
+    { detailedTxHash          :: Maybe TxHash
+    , detailedTxSize          :: Maybe (CountOf (Element (UArray Word8)))
+    , detailedTxOutbound      :: Map Address Satoshi
+    , detailedTxNonStdOutputs :: Satoshi
+    , detailedTxInbound       :: Map Address (Satoshi, Maybe SoftPath)
+    , detailedTxMyInputs      :: Map Address (Satoshi, Maybe SoftPath)
+    , detailedTxOtherInputs   :: Map Address Satoshi
+    , detailedTxNonStdInputs  :: Satoshi
+    , detailedTxFee           :: Maybe Satoshi
+    , detailedTxHeight        :: Maybe Natural
+    , detailedTxBlockHash     :: Maybe BlockHash
     } deriving (Eq, Show)
 
-emptyTxInfo :: TxInformation
-emptyTxInfo =
-    TxInformation
-    { txInfoTxHash = Nothing
-    , txInfoTxSize = Nothing
-    , txInfoOutbound = Map.empty
-    , txInfoNonStdOutputs = 0
-    , txInfoInbound = Map.empty
-    , txInfoMyInputs = Map.empty
-    , txInfoOtherInputs = Map.empty
-    , txInfoNonStdInputs = 0
-    , txInfoFee = Nothing
-    , txInfoHeight = Nothing
-    , txInfoBlockHash = Nothing
+data TxType = TxInbound | TxInternal | TxOutbound
+    deriving (Show, Eq)
+
+txTypeString :: TxType -> String
+txTypeString =
+    \case
+        TxInbound -> "Inbound"
+        TxInternal -> "Internal"
+        TxOutbound -> "Outbound"
+
+emptyDetailedTx :: DetailedTx
+emptyDetailedTx =
+    DetailedTx
+    { detailedTxHash = Nothing
+    , detailedTxSize = Nothing
+    , detailedTxOutbound = Map.empty
+    , detailedTxNonStdOutputs = 0
+    , detailedTxInbound = Map.empty
+    , detailedTxMyInputs = Map.empty
+    , detailedTxOtherInputs = Map.empty
+    , detailedTxNonStdInputs = 0
+    , detailedTxFee = Nothing
+    , detailedTxHeight = Nothing
+    , detailedTxBlockHash = Nothing
     }
 
-txInfoAmount :: TxInformation -> Integer
-txInfoAmount TxInformation {..} =
+detailedTxAmount :: DetailedTx -> Integer
+detailedTxAmount DetailedTx {..} =
     toInteger inboundSum - toInteger myCoinsSum
   where
-    inboundSum = sum $ fmap fst $ Map.elems txInfoInbound :: Satoshi
-    myCoinsSum = sum $ fmap fst $ Map.elems txInfoMyInputs :: Satoshi
+    inboundSum = sum $ fst <$> Map.elems detailedTxInbound
+    myCoinsSum = sum $ fst <$> Map.elems detailedTxMyInputs
 
-txInfoFeeByte :: TxInformation -> Maybe Decimal
-txInfoFeeByte TxInformation {..} = do
-    sat <- feeDecimalM
-    bytes <- sizeDecimalM
+detailedTxFeeByte :: DetailedTx -> Maybe Decimal
+detailedTxFeeByte DetailedTx {..} = do
+    sat <- fromIntegral <$> detailedTxFee
+    bytes <- fromIntegral . fromCount <$> detailedTxSize
     return $ roundTo 2 $ sat Prelude./ bytes
-  where
-    feeDecimalM = fromIntegral <$> txInfoFee :: Maybe Decimal
-    sizeDecimalM =
-        fromIntegral . fromCount <$> txInfoTxSize :: Maybe Decimal
 
-txInfoTxType :: TxInformation -> String
-txInfoTxType s
-    | amnt > 0 = "Inbound"
-    | Just (fromIntegral $ abs amnt) == txInfoFee s = "Self"
-    | otherwise = "Outbound"
+detailedTxType :: DetailedTx -> TxType
+detailedTxType s
+    | amnt > 0 = TxInbound
+    | Just (fromIntegral $ abs amnt) == detailedTxFee s = TxInternal
+    | otherwise = TxOutbound
   where
-    amnt = txInfoAmount s
+    amnt = detailedTxAmount s
 
-txInfoFillPath :: Map Address SoftPath -> TxInformation -> TxInformation
-txInfoFillPath addrMap txInfo =
-    txInfo
-    { txInfoInbound = mergeSoftPath (txInfoInbound txInfo)
-    , txInfoMyInputs = mergeSoftPath (txInfoMyInputs txInfo)
+detailedTxFillPath :: Map Address SoftPath -> DetailedTx -> DetailedTx
+detailedTxFillPath addrMap detailedTx =
+    detailedTx
+    { detailedTxInbound = mergeSoftPath (detailedTxInbound detailedTx)
+    , detailedTxMyInputs = mergeSoftPath (detailedTxMyInputs detailedTx)
     }
   where
     mergeSoftPath = Map.intersectionWith f addrMap
     f path (amnt, _) = (amnt, Just path)
 
-txInfoFillUnsignedTx :: Network -> Tx -> TxInformation -> TxInformation
-txInfoFillUnsignedTx net tx txInfo =
-    (txInfoFillTx net tx txInfo)
-    { txInfoTxHash = Nothing
-    , txInfoTxSize =
+detailedTxFillUnsignedTx :: Network -> Tx -> DetailedTx -> DetailedTx
+detailedTxFillUnsignedTx net tx detailedTx =
+    (detailedTxFillTx net tx detailedTx)
+    { detailedTxHash = Nothing
+    , detailedTxSize =
           Just $
           toCount $
           guessTxSize
@@ -101,49 +108,49 @@ txInfoFillUnsignedTx net tx txInfo =
               0
     }
 
-txInfoFillTx :: Network -> Tx -> TxInformation -> TxInformation
-txInfoFillTx net tx txInfo =
-    txInfo
-    { txInfoOutbound = outbound
-    , txInfoNonStdOutputs = nonStd
-    , txInfoTxHash = Just $ txHash tx
-    , txInfoTxSize = Just $ length $ encodeBytes tx
-    , txInfoFee = txInfoFee txInfo <|> feeM
+detailedTxFillTx :: Network -> Tx -> DetailedTx -> DetailedTx
+detailedTxFillTx net tx detailedTx =
+    detailedTx
+    { detailedTxOutbound = outbound
+    , detailedTxNonStdOutputs = nonStd
+    , detailedTxHash = Just $ txHash tx
+    , detailedTxSize = Just $ length $ encodeBytes tx
+    , detailedTxFee = detailedTxFee detailedTx <|> feeM
     }
   where
     (outAddrMap, nonStd) = txOutAddressMap net $ txOut tx
-    outbound = Map.difference outAddrMap (txInfoInbound txInfo)
+    outbound = Map.difference outAddrMap (detailedTxInbound detailedTx)
     outSum = sum $ toNatural . outValue <$> txOut tx :: Natural
     myInSum =
-        sum $ fst <$> Map.elems (txInfoMyInputs txInfo) :: Natural
+        sum $ fst <$> Map.elems (detailedTxMyInputs detailedTx) :: Natural
     othInSum =
-        sum $ Map.elems (txInfoOtherInputs txInfo) :: Natural
+        sum $ Map.elems (detailedTxOtherInputs detailedTx) :: Natural
     feeM = myInSum + othInSum - outSum :: Maybe Natural
 
-txInfoFillInputs ::
+detailedTxFillInputs ::
        Network
     -> Map Address SoftPath
     -> [TxOut]
-    -> TxInformation
-    -> TxInformation
-txInfoFillInputs net walletAddrs txOs txInf =
+    -> DetailedTx
+    -> DetailedTx
+detailedTxFillInputs net walletAddrs txOs txInf =
     txInf
-    { txInfoMyInputs = Map.map (second Just) myValMap
-    , txInfoOtherInputs = othValMap
+    { detailedTxMyInputs = Map.map (second Just) myValMap
+    , detailedTxOtherInputs = othValMap
     }
   where
     valMap = fst $ txOutAddressMap net txOs
     myValMap = Map.intersectionWith (,) valMap walletAddrs
     othValMap = Map.difference valMap myValMap
 
-txInfoFillInbound ::
+detailedTxFillInbound ::
        Network
     -> Map Address SoftPath
     -> [TxOut]
-    -> TxInformation
-    -> TxInformation
-txInfoFillInbound net walletAddrs txOs txInf =
-    txInf { txInfoInbound = Map.map (second Just) inboundMap }
+    -> DetailedTx
+    -> DetailedTx
+detailedTxFillInbound net walletAddrs txOs txInf =
+    txInf { detailedTxInbound = Map.map (second Just) inboundMap }
   where
     (outValMap, _) = txOutAddressMap net txOs
     inboundMap = Map.intersectionWith (,) outValMap walletAddrs
@@ -167,76 +174,75 @@ isExternal :: SoftPath -> Bool
 isExternal (Deriv :/ 0 :/ _) = True
 isExternal _                 = False
 
-txInfoFormatCompact ::
+detailedTxFormatCompact ::
        HardPath
     -> AmountUnit
     -> Maybe Bool
     -> Maybe Natural
-    -> TxInformation
-    -> ConsolePrinter
-txInfoFormatCompact _ unit _ heightM s@TxInformation {..} =
+    -> DetailedTx
+    -> Printer
+detailedTxFormatCompact _ unit _ heightM s@DetailedTx {..} =
     vcat [title <+> confs, nest 4 $ vcat [txid, outbound, self, inbound]]
   where
     title =
-        case txInfoTxType s of
-            "Outbound" -> formatTitle "Outbound Payment"
-            "Inbound"  -> formatTitle "Inbound Payment"
-            "Self"     -> formatTitle "Payment To Yourself"
-            _          -> consoleError $ formatError "Invalid tx type"
+        case detailedTxType s of
+            TxOutbound -> formatTitle "Outbound Payment"
+            TxInbound  -> formatTitle "Inbound Payment"
+            TxInternal -> formatTitle "Payment To Yourself"
     confs =
         case heightM of
             Just currHeight ->
-                case (currHeight -) =<< txInfoHeight of
+                case (currHeight -) =<< detailedTxHeight of
                     Just conf ->
                         formatStatic $
                         "(" <> show (conf + 1) <> " confirmations)"
                     _ -> formatStatic "(Pending)"
             _ -> mempty
-    txid = maybe mempty (formatTxHash . fromText . txHashToHex) txInfoTxHash
+    txid = maybe mempty (formatTxHash . fromText . txHashToHex) detailedTxHash
     outbound
-        | txInfoTxType s /= "Outbound" = mempty
-        | txInfoNonStdOutputs == 0 && Map.null txInfoOutbound = mempty
+        | detailedTxType s /= TxOutbound = mempty
+        | detailedTxNonStdOutputs == 0 && Map.null detailedTxOutbound = mempty
         | otherwise =
             vcat $
-            [feeKey] <> fmap (addrFormat negate) (Map.assocs txInfoOutbound) <>
+            [feeKey] <> fmap (addrFormat negate) (Map.assocs detailedTxOutbound) <>
             [nonStdRcp]
     nonStdRcp
-        | txInfoNonStdOutputs == 0 = mempty
+        | detailedTxNonStdOutputs == 0 = mempty
         | otherwise =
             formatStatic "Non-standard recipients:" <+>
-            formatIntegerAmount unit (fromIntegral txInfoNonStdOutputs)
+            formatIntegerAmount unit (fromIntegral detailedTxNonStdOutputs)
     feeKey =
-        case txInfoFee of
+        case detailedTxFee of
             Just fee ->
                 formatKey "Fees:" <+>
                 formatIntegerAmountWith formatFee unit (fromIntegral fee)
             _ -> mempty
     self
-        | txInfoTxType s /= "Self" = mempty
+        | detailedTxType s /= TxInternal = mempty
         | otherwise = feeKey
     inbound
-        | txInfoTxType s /= "Inbound" = mempty
-        | Map.null txInfoInbound = mempty
+        | detailedTxType s /= TxInbound = mempty
+        | Map.null detailedTxInbound = mempty
         | otherwise =
             vcat $
-            [ if Map.size txInfoInbound > 1
+            [ if Map.size detailedTxInbound > 1
                   then formatKey "Total amount:" <+>
-                       formatIntegerAmount unit (txInfoAmount s)
+                       formatIntegerAmount unit (detailedTxAmount s)
                   else mempty
             ] <>
-            fmap (addrFormat id) (Map.assocs $ Map.map fst txInfoInbound)
+            fmap (addrFormat id) (Map.assocs $ Map.map fst detailedTxInbound)
     addrFormat f (a, v) =
         formatAddress (fromText $ addrToString a) <> formatStatic ":" <+>
         formatIntegerAmount unit (f $ fromIntegral v)
 
-txInfoFormat ::
+detailedTxFormat ::
        HardPath
     -> AmountUnit
     -> Maybe Bool
     -> Maybe Natural
-    -> TxInformation
-    -> ConsolePrinter
-txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
+    -> DetailedTx
+    -> Printer
+detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
     vcat [information, nest 2 $ vcat [outbound, inbound, myInputs, otherInputs]]
   where
     information =
@@ -245,15 +251,15 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
             , nest 4 $
               vcat
                   [ formatKey (block 15 "Tx Type:") <>
-                    formatStatic (txInfoTxType s)
-                  , case txInfoTxHash of
+                    formatStatic (txTypeString $ detailedTxType s)
+                  , case detailedTxHash of
                         Just tid ->
                             formatKey (block 15 "Tx hash:") <>
                             formatTxHash (fromText $ txHashToHex tid)
                         _ -> mempty
                   , formatKey (block 15 "Amount:") <>
-                    formatIntegerAmount unit (txInfoAmount s)
-                  , case txInfoFee of
+                    formatIntegerAmount unit (detailedTxAmount s)
+                  , case detailedTxFee of
                         Just fee ->
                             formatKey (block 15 "Fees:") <>
                             formatIntegerAmountWith
@@ -261,22 +267,22 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                                 unit
                                 (fromIntegral fee)
                         _ -> mempty
-                  , case txInfoFeeByte s of
+                  , case detailedTxFeeByte s of
                         Just feeByte ->
                             formatKey (block 15 "Fee/byte:") <>
                             formatFeeBytes feeByte
                         _ -> mempty
-                  , case txInfoTxSize of
+                  , case detailedTxSize of
                         Just bytes ->
                             formatKey (block 15 "Tx size:") <>
                             formatStatic (show (fromCount bytes) <> " bytes")
                         _ -> mempty
-                  , case txInfoHeight of
+                  , case detailedTxHeight of
                         Just height ->
                             formatKey (block 15 "Block Height:") <>
                             formatStatic (show height)
                         _ -> mempty
-                  , case txInfoBlockHash of
+                  , case detailedTxBlockHash of
                         Just bh ->
                             formatKey (block 15 "Block Hash:") <>
                             formatBlockHash (fromText $ blockHashToHex bh)
@@ -284,7 +290,7 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   , case heightM of
                         Just currHeight ->
                             formatKey (block 15 "Confirmations:") <>
-                            case (currHeight -) =<< txInfoHeight of
+                            case (currHeight -) =<< detailedTxHeight of
                                 Just conf -> formatStatic $ show $ conf + 1
                                 _         -> formatStatic "Pending"
                         _ -> mempty
@@ -298,27 +304,27 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   ]
             ]
     outbound
-        | txInfoTxType s /= "Outbound" = mempty
-        | txInfoNonStdOutputs == 0 && Map.null txInfoOutbound = mempty
+        | detailedTxType s /= TxOutbound = mempty
+        | detailedTxNonStdOutputs == 0 && Map.null detailedTxOutbound = mempty
         | otherwise =
             vcat
                 [ formatTitle "Outbound"
                 , nest 2 $
                   vcat $
-                  fmap addrFormatOutbound (Map.assocs txInfoOutbound) <>
+                  fmap addrFormatOutbound (Map.assocs detailedTxOutbound) <>
                   [nonStdRcp]
                 ]
     nonStdRcp
-        | txInfoNonStdOutputs == 0 = mempty
+        | detailedTxNonStdOutputs == 0 = mempty
         | otherwise =
             formatAddrVal
                 unit
                 accDeriv
                 (formatStatic "Non-standard recipients")
                 Nothing
-                (negate $ fromIntegral txInfoNonStdOutputs)
+                (negate $ fromIntegral detailedTxNonStdOutputs)
     inbound
-        | Map.null txInfoInbound = mempty
+        | Map.null detailedTxInbound = mempty
         | otherwise =
             vcat
                 [ formatTitle "Inbound"
@@ -326,24 +332,24 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
                   vcat $
                   fmap addrFormatInbound $
                   sortOn (((not . isExternal) <$>) . snd . snd) $
-                  Map.assocs txInfoInbound
+                  Map.assocs detailedTxInbound
                 ]
     myInputs
-        | Map.null txInfoMyInputs = mempty
+        | Map.null detailedTxMyInputs = mempty
         | otherwise =
             vcat
                 [ formatTitle "Spent Coins"
                 , nest 2 $
-                  vcat $ fmap addrFormatMyInputs (Map.assocs txInfoMyInputs)
+                  vcat $ fmap addrFormatMyInputs (Map.assocs detailedTxMyInputs)
                 ]
     otherInputs
-        | Map.null txInfoOtherInputs = mempty
+        | Map.null detailedTxOtherInputs = mempty
         | otherwise =
             vcat
                 [ formatTitle "Other Coins"
                 , nest 2 $
                   vcat $
-                  fmap addrFormatOtherInputs (Map.assocs txInfoOtherInputs)
+                  fmap addrFormatOtherInputs (Map.assocs detailedTxOtherInputs)
                 ]
     addrFormatInbound (a, (v, pM)) =
         formatAddrVal
@@ -380,10 +386,10 @@ txInfoFormat accDeriv unit txSignedM heightM s@TxInformation {..} =
 formatAddrVal ::
        AmountUnit
     -> HardPath
-    -> ConsolePrinter
+    -> Printer
     -> Maybe SoftPath
     -> Integer
-    -> ConsolePrinter
+    -> Printer
 formatAddrVal unit accDeriv title pathM amnt =
     vcat
         [ title

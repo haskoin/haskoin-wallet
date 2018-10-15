@@ -25,7 +25,7 @@ import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
-import           Network.Haskoin.Wallet.TxInformation
+import           Network.Haskoin.Wallet.DetailedTx
 
 {- Building Transactions -}
 
@@ -175,20 +175,20 @@ data TxSignData = TxSignData
 
 $(deriveJSON (dropFieldLabel 10) ''TxSignData)
 
-pubTxInfo :: Network -> TxSignData -> XPubKey -> Either String TxInformation
-pubTxInfo net (TxSignData tx inTxs inPaths outPaths) pubKey
+pubDetailedTx :: Network -> TxSignData -> XPubKey -> Either String DetailedTx
+pubDetailedTx net (TxSignData tx inTxs inPaths outPaths) pubKey
     | fromCount (length coins) /= fromCount (length $ txIn tx) =
         Left "Referenced input transactions are missing"
-    | fromCount (length inPaths) /= Map.size (txInfoMyInputs info) =
+    | fromCount (length inPaths) /= Map.size (detailedTxMyInputs info) =
         Left "Tx is missing inputs from private keys"
-    | fromCount (length outPaths) /= Map.size (txInfoInbound info) =
+    | fromCount (length outPaths) /= Map.size (detailedTxInbound info) =
         Left "Tx is missing change outputs"
     | otherwise = return info
   where
     info =
-        txInfoFillUnsignedTx net tx $
-        txInfoFillInbound net outAddrMap (txOut tx) $
-        txInfoFillInputs net inAddrMap (snd <$> coins) emptyTxInfo
+        detailedTxFillUnsignedTx net tx $
+        detailedTxFillInbound net outAddrMap (txOut tx) $
+        detailedTxFillInputs net inAddrMap (snd <$> coins) emptyDetailedTx
     outAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) outPaths
     inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
@@ -197,7 +197,7 @@ signWalletTx ::
        Network
     -> TxSignData
     -> XPrvKey
-    -> Either String (TxInformation, Tx, Bool)
+    -> Either String (DetailedTx, Tx, Bool)
 signWalletTx net tsd@(TxSignData tx _ inPaths _) signKey = do
     sigDat <- mapM g myCoins
     signedTx <-
@@ -205,10 +205,10 @@ signWalletTx net tsd@(TxSignData tx _ inPaths _) signKey = do
         signTx net tx (fmap f sigDat) (wrapSecKey True <$> prvKeys)
     let vDat = rights $ fmap g allCoins
         isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx vDat
-    info <- pubTxInfo net tsd pubKey
+    info <- pubDetailedTx net tsd pubKey
     return
         ( if isSigned
-              then txInfoFillTx net signedTx info
+              then detailedTxFillTx net signedTx info
               else info
         , signedTx
         , isSigned)
@@ -224,19 +224,19 @@ signSwipeTx ::
        Network
     -> TxSignData
     -> [SecKeyI]
-    -> Either String (TxInformation, Tx, Bool)
+    -> Either String (DetailedTx, Tx, Bool)
 signSwipeTx net (TxSignData tx inTxs _ _) prvKeys = do
     sigDat <- mapM g coins
     signedTx <- eitherString $ signTx net tx (fmap f sigDat) prvKeys
     let isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx sigDat
     return
         ( if isSigned
-              then txInfoFillTx net signedTx info
+              then detailedTxFillTx net signedTx info
               else info
         , signedTx
         , isSigned)
   where
-    info = txInfoFillInputs net Map.empty (snd <$> coins) emptyTxInfo
+    info = detailedTxFillInputs net Map.empty (snd <$> coins) emptyDetailedTx
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
     f (so, val, op) = SigInput so val op (maybeSetForkId net sigHashAll) Nothing
     g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
