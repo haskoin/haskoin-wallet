@@ -8,8 +8,9 @@ import           Control.Monad
 import           Data.Decimal
 import           Foundation
 import           Foundation.String.Read
-import           Network.Haskoin.Wallet.Printer
+import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.FoundationCompat
+import           Options.Applicative.Help.Pretty
 
 type Satoshi = Natural
 
@@ -21,24 +22,25 @@ data AmountUnit
 
 {- Printer functions -}
 
-formatFeeBytes :: Decimal -> Printer
-formatFeeBytes fee = formatFee (show fee) <+> text "sat/bytes"
+amountDoc :: AmountUnit -> Satoshi -> Doc
+amountDoc unit = integerAmountDoc unit . fromIntegral
 
-formatAmount :: AmountUnit -> Satoshi -> Printer
-formatAmount unit = formatIntegerAmount unit . fromIntegral
+integerAmountDoc :: AmountUnit -> Integer -> Doc
+integerAmountDoc unit amnt
+    | amnt >= 0 = integerAmountWithDoc posAmountDoc unit amnt
+    | otherwise = integerAmountWithDoc negAmountDoc unit amnt
 
-formatIntegerAmount :: AmountUnit -> Integer -> Printer
-formatIntegerAmount unit amnt
-    | amnt >= 0 = formatIntegerAmountWith formatPosAmount unit amnt
-    | otherwise = formatIntegerAmountWith formatNegAmount unit amnt
+integerAmountWithDoc :: (Doc -> Doc) -> AmountUnit -> Integer -> Doc
+integerAmountWithDoc f unit amnt =
+    f (doc $ showIntegerAmount unit amnt) <+> unitDoc unit amnt
 
-formatIntegerAmountWith ::
-       (String -> Printer) -> AmountUnit -> Integer -> Printer
-formatIntegerAmountWith f unit amnt =
-    f (showIntegerAmount unit amnt) <+> formatUnit unit amnt
+unitDoc :: AmountUnit -> Integer -> Doc
+unitDoc unit = text . toLString . showUnit unit
 
-formatUnit :: AmountUnit -> Integer -> Printer
-formatUnit unit = text . showUnit unit
+feeBytesDoc :: Decimal -> Doc
+feeBytesDoc fee = feeDoc (doc $ show fee) <+> doc "sat/bytes"
+
+{- Amount Parsing -}
 
 showUnit :: AmountUnit -> Integer -> String
 showUnit unit amnt
@@ -51,8 +53,6 @@ showUnit unit amnt
             UnitBitcoin -> "bitcoin"
             UnitBit     -> "bit"
             UnitSatoshi -> "satoshi"
-
-{- Amount Parsing -}
 
 showAmount :: AmountUnit -> Satoshi -> String
 showAmount unit amnt =

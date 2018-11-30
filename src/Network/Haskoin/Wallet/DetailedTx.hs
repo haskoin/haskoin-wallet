@@ -1,5 +1,5 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 module Network.Haskoin.Wallet.DetailedTx where
@@ -11,7 +11,6 @@ import           Data.Map.Strict                         (Map)
 import qualified Data.Map.Strict                         as Map
 import           Foundation
 import           Foundation.Collection
-import           Foundation.Compat.Text
 import           Network.Haskoin.Address
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
@@ -19,8 +18,9 @@ import           Network.Haskoin.Keys
 import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
 import           Network.Haskoin.Wallet.Amounts
+import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.FoundationCompat
-import           Network.Haskoin.Wallet.Printer
+import           Options.Applicative.Help.Pretty
 import qualified Prelude
 
 data DetailedTx = DetailedTx
@@ -174,31 +174,30 @@ isExternal :: SoftPath -> Bool
 isExternal (Deriv :/ 0 :/ _) = True
 isExternal _                 = False
 
-detailedTxFormatCompact ::
+detailedTxCompactDoc ::
        HardPath
     -> AmountUnit
     -> Maybe Bool
     -> Maybe Natural
     -> DetailedTx
-    -> Printer
-detailedTxFormatCompact _ unit _ heightM s@DetailedTx {..} =
-    vcat [title <+> confs, nest 4 $ vcat [txid, outbound, self, inbound]]
+    -> Doc
+detailedTxCompactDoc _ unit _ heightM s@DetailedTx {..} =
+    vcat [title <+> doc confs, nest 4 $ vcat [txid, outbound, self, inbound]]
   where
     title =
         case detailedTxType s of
-            TxOutbound -> formatTitle "Outbound Payment"
-            TxInbound  -> formatTitle "Inbound Payment"
-            TxInternal -> formatTitle "Payment To Yourself"
+            TxOutbound -> titleDoc "Outbound Payment"
+            TxInbound  -> titleDoc "Inbound Payment"
+            TxInternal -> titleDoc "Payment To Yourself"
     confs =
         case heightM of
             Just currHeight ->
                 case (currHeight -) =<< detailedTxHeight of
                     Just conf ->
-                        formatStatic $
                         "(" <> show (conf + 1) <> " confirmations)"
-                    _ -> formatStatic "(Pending)"
+                    _ -> "(Pending)"
             _ -> mempty
-    txid = maybe mempty (formatTxHash . fromText . txHashToHex) detailedTxHash
+    txid = maybe mempty (txHashDoc . textDoc . txHashToHex) detailedTxHash
     outbound
         | detailedTxType s /= TxOutbound = mempty
         | detailedTxNonStdOutputs == 0 && Map.null detailedTxOutbound = mempty
@@ -209,13 +208,13 @@ detailedTxFormatCompact _ unit _ heightM s@DetailedTx {..} =
     nonStdRcp
         | detailedTxNonStdOutputs == 0 = mempty
         | otherwise =
-            formatStatic "Non-standard recipients:" <+>
-            formatIntegerAmount unit (fromIntegral detailedTxNonStdOutputs)
+            "Non-standard recipients:" <+>
+            integerAmountDoc unit (fromIntegral detailedTxNonStdOutputs)
     feeKey =
         case detailedTxFee of
             Just fee ->
-                formatKey "Fees:" <+>
-                formatIntegerAmountWith formatFee unit (fromIntegral fee)
+                keyDoc 0 "Fees:" <+>
+                integerAmountWithDoc feeDoc unit (fromIntegral fee)
             _ -> mempty
     self
         | detailedTxType s /= TxInternal = mempty
@@ -226,80 +225,75 @@ detailedTxFormatCompact _ unit _ heightM s@DetailedTx {..} =
         | otherwise =
             vcat $
             [ if Map.size detailedTxInbound > 1
-                  then formatKey "Total amount:" <+>
-                       formatIntegerAmount unit (detailedTxAmount s)
+                  then keyDoc 0 "Total amount:" <+>
+                       integerAmountDoc unit (detailedTxAmount s)
                   else mempty
             ] <>
             fmap (addrFormat id) (Map.assocs $ Map.map fst detailedTxInbound)
     addrFormat f (a, v) =
-        formatAddress (fromText $ addrToString a) <> formatStatic ":" <+>
-        formatIntegerAmount unit (f $ fromIntegral v)
+        addressDoc (textDoc $ addrToString a) <> colon <+>
+        integerAmountDoc unit (f $ fromIntegral v)
 
-detailedTxFormat ::
+detailedTxDoc ::
        HardPath
     -> AmountUnit
     -> Maybe Bool
     -> Maybe Natural
     -> DetailedTx
-    -> Printer
-detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
+    -> Doc
+detailedTxDoc accDeriv unit txSignedM heightM s@DetailedTx {..} =
     vcat [information, nest 2 $ vcat [outbound, inbound, myInputs, otherInputs]]
   where
     information =
         vcat
-            [ formatTitle "Tx Information"
+            [ titleDoc "Tx Information"
             , nest 4 $
               vcat
-                  [ formatKey (block 15 "Tx Type:") <>
-                    formatStatic (txTypeString $ detailedTxType s)
+                  [ keyDoc 15 "Tx Type:" <>
+                    doc (txTypeString $ detailedTxType s)
                   , case detailedTxHash of
                         Just tid ->
-                            formatKey (block 15 "Tx hash:") <>
-                            formatTxHash (fromText $ txHashToHex tid)
+                            keyDoc 15 "Tx hash:" <>
+                            txHashDoc (textDoc $ txHashToHex tid)
                         _ -> mempty
-                  , formatKey (block 15 "Amount:") <>
-                    formatIntegerAmount unit (detailedTxAmount s)
+                  , keyDoc 15 "Amount:" <>
+                    integerAmountDoc unit (detailedTxAmount s)
                   , case detailedTxFee of
                         Just fee ->
-                            formatKey (block 15 "Fees:") <>
-                            formatIntegerAmountWith
-                                formatFee
-                                unit
-                                (fromIntegral fee)
+                            keyDoc 15 "Fees:" <>
+                            integerAmountWithDoc feeDoc unit (fromIntegral fee)
                         _ -> mempty
                   , case detailedTxFeeByte s of
                         Just feeByte ->
-                            formatKey (block 15 "Fee/byte:") <>
-                            formatFeeBytes feeByte
+                            keyDoc 15 "Fee/byte:" <> feeBytesDoc feeByte
                         _ -> mempty
                   , case detailedTxSize of
                         Just bytes ->
-                            formatKey (block 15 "Tx size:") <>
-                            formatStatic (show (fromCount bytes) <> " bytes")
+                            keyDoc 15 "Tx size:" <> doc (show $ fromCount bytes) <+>
+                            "bytes"
                         _ -> mempty
                   , case detailedTxHeight of
                         Just height ->
-                            formatKey (block 15 "Block Height:") <>
-                            formatStatic (show height)
+                            keyDoc 15 "Block Height:" <> doc (show height)
                         _ -> mempty
                   , case detailedTxBlockHash of
                         Just bh ->
-                            formatKey (block 15 "Block Hash:") <>
-                            formatBlockHash (fromText $ blockHashToHex bh)
+                            keyDoc 15 "Block Hash:" <>
+                            blockHashDoc (textDoc $ blockHashToHex bh)
                         _ -> mempty
                   , case heightM of
                         Just currHeight ->
-                            formatKey (block 15 "Confirmations:") <>
+                            keyDoc 15 "Confirmations:" <>
                             case (currHeight -) =<< detailedTxHeight of
-                                Just conf -> formatStatic $ show $ conf + 1
-                                _         -> formatStatic "Pending"
+                                Just conf -> doc $ show $ conf + 1
+                                _ -> "Pending"
                         _ -> mempty
                   , case txSignedM of
                         Just signed ->
-                            formatKey (block 15 "Signed:") <>
+                            keyDoc 15 "Signed:" <>
                             if signed
-                                then formatTrue "Yes"
-                                else formatFalse "No"
+                                then trueDoc "Yes"
+                                else falseDoc "No"
                         _ -> mempty
                   ]
             ]
@@ -308,7 +302,7 @@ detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
         | detailedTxNonStdOutputs == 0 && Map.null detailedTxOutbound = mempty
         | otherwise =
             vcat
-                [ formatTitle "Outbound"
+                [ titleDoc "Outbound"
                 , nest 2 $
                   vcat $
                   fmap addrFormatOutbound (Map.assocs detailedTxOutbound) <>
@@ -317,17 +311,17 @@ detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
     nonStdRcp
         | detailedTxNonStdOutputs == 0 = mempty
         | otherwise =
-            formatAddrVal
+            addrValDoc
                 unit
                 accDeriv
-                (formatStatic "Non-standard recipients")
+                "Non-standard recipients"
                 Nothing
                 (negate $ fromIntegral detailedTxNonStdOutputs)
     inbound
         | Map.null detailedTxInbound = mempty
         | otherwise =
             vcat
-                [ formatTitle "Inbound"
+                [ titleDoc "Inbound"
                 , nest 2 $
                   vcat $
                   fmap addrFormatInbound $
@@ -338,7 +332,7 @@ detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
         | Map.null detailedTxMyInputs = mempty
         | otherwise =
             vcat
-                [ formatTitle "Spent Coins"
+                [ titleDoc "Spent Coins"
                 , nest 2 $
                   vcat $ fmap addrFormatMyInputs (Map.assocs detailedTxMyInputs)
                 ]
@@ -346,61 +340,61 @@ detailedTxFormat accDeriv unit txSignedM heightM s@DetailedTx {..} =
         | Map.null detailedTxOtherInputs = mempty
         | otherwise =
             vcat
-                [ formatTitle "Other Coins"
+                [ titleDoc "Other Coins"
                 , nest 2 $
                   vcat $
                   fmap addrFormatOtherInputs (Map.assocs detailedTxOtherInputs)
                 ]
     addrFormatInbound (a, (v, pM)) =
-        formatAddrVal
+        addrValDoc
             unit
             accDeriv
             ((if maybe False isExternal pM
-                  then formatAddress
-                  else formatInternalAddress) $
-             fromText $ addrToString a)
+                  then addressDoc
+                  else internalAddressDoc) $
+             textDoc $ addrToString a)
             pM
             (fromIntegral v)
     addrFormatMyInputs (a, (v, pM)) =
-        formatAddrVal
+        addrValDoc
             unit
             accDeriv
-            (formatInternalAddress $ fromText $ addrToString a)
+            (internalAddressDoc $ textDoc $ addrToString a)
             pM
             (negate $ fromIntegral v)
     addrFormatOtherInputs (a, v) =
-        formatAddrVal
+        addrValDoc
             unit
             accDeriv
-            (formatInternalAddress $ fromText $ addrToString a)
+            (internalAddressDoc $ textDoc $ addrToString a)
             Nothing
             (negate $ fromIntegral v)
     addrFormatOutbound (a, v) =
-        formatAddrVal
+        addrValDoc
             unit
             accDeriv
-            (formatAddress $ fromText $ addrToString a)
+            (addressDoc $ textDoc $ addrToString a)
             Nothing
             (negate $ fromIntegral v)
 
-formatAddrVal ::
+addrValDoc ::
        AmountUnit
     -> HardPath
-    -> Printer
+    -> Doc
     -> Maybe SoftPath
     -> Integer
-    -> Printer
-formatAddrVal unit accDeriv title pathM amnt =
+    -> Doc
+addrValDoc unit accDeriv title pathM amnt =
     vcat
         [ title
         , nest 4 $
           vcat
-              [ formatKey (block 8 "Amount:") <> formatIntegerAmount unit amnt
+              [ keyDoc 8 "Amount:" <> integerAmountDoc unit amnt
               , case pathM of
                     Just p ->
                         mconcat
-                            [ formatKey $ block 8 "Deriv:"
-                            , formatDeriv $
+                            [ keyDoc 8 "Deriv:"
+                            , derivationDoc $ doc $
                               show $ ParsedPrv $ toGeneric $ accDeriv ++/ p
                             ]
                     _ -> mempty

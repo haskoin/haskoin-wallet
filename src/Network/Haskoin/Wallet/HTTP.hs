@@ -33,11 +33,12 @@ import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util                    (eitherToMaybe)
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.DetailedTx
+import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.FoundationCompat
-import           Network.Haskoin.Wallet.Printer
 import           Network.HTTP.Types.Status
 import qualified Network.Wreq                            as HTTP
 import           Network.Wreq.Types                      (ResponseChecker)
+import           Options.Applicative.Help.Pretty
 
 baseUrl :: Network -> LString
 baseUrl net
@@ -46,7 +47,7 @@ baseUrl net
     | net == bch = "https://bch.haskoin.com/api"
     | net == bchTest = "https://bchtest.haskoin.com/api"
     | otherwise =
-        printError $
+        exitError $
         "Haskoin does not support the network " <>
         fromLString (getNetworkName net)
 
@@ -63,7 +64,7 @@ httpBalance_ net addrs = do
     url = baseUrl net <> "/address/balances"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
     aList = intercalate "," $ fromText . addrToString <$> addrs
-    err = printError "Balance was negative"
+    err = exitError "Balance was negative"
 
 httpUnspent :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 httpUnspent net = (mconcat <$>) . mapM (httpUnspent_ net) . groupIn 50
@@ -72,7 +73,7 @@ httpUnspent_ :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
 httpUnspent_ net addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseCoin $ v ^.. values
-    maybe (printError "Could not parse coin") return resM
+    maybe (exitError "Could not parse coin") return resM
   where
     url = baseUrl net <> "/address/unspent"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [toText aList]
@@ -128,7 +129,7 @@ httpAddressTxs_ :: Network -> [Address] -> IO [(Address, TxHash)]
 httpAddressTxs_ net addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseAddrTx $ v ^.. values
-    maybe (printError "Could not parse addrTx") return resM
+    maybe (exitError "Could not parse addrTx") return resM
   where
     url = baseUrl net <> "/address/transactions"
     aList = intercalate "," $ addrToString <$> addrs
@@ -160,7 +161,7 @@ httpRawTxs_ _ [] = return []
 httpRawTxs_ net tids = do
     v <- httpJsonGet opts url
     let xs = mapM parseTx $ v ^.. values
-    maybe (printError "Could not decode the transaction") return xs
+    maybe (exitError "Could not decode the transaction") return xs
   where
     url = baseUrl net <> "/transactions/hex"
     opts = HTTP.defaults & HTTP.param "txids" .~ [tList]
@@ -174,7 +175,7 @@ httpBestHeight net = do
     maybe err return resM
   where
     url = baseUrl net <> "/block/best"
-    err = printError "Could not get the best block height"
+    err = exitError "Could not get the best block height"
 
 httpBroadcastTx :: Network -> Tx -> IO ()
 httpBroadcastTx net tx = do
@@ -201,14 +202,14 @@ checkStatus :: ResponseChecker
 checkStatus _ r
     | statusIsSuccessful status = return ()
     | otherwise =
-        printCustomError $
+        exitCustomError $
         vcat
-            [ formatError "Received an HTTP error response:"
+            [ errorDoc "Received an HTTP error response:"
             , nest 4 $
               vcat
-                  [ formatKey (block 10 "Status:") <> formatError (show code)
-                  , formatKey (block 10 "Message:") <>
-                    formatStatic
+                  [ keyDoc 10 "Status:" <> errorDoc (doc $ show code)
+                  , keyDoc 10 "Message:" <>
+                    doc
                         (fromMaybe "Could not decode the message" $
                          bsToString message)
                   ]

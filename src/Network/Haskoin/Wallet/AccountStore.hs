@@ -14,7 +14,7 @@ import           Foundation.VFS
 import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
-import           Network.Haskoin.Wallet.Printer
+import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.FoundationCompat
 import qualified System.Directory                        as D
 
@@ -71,7 +71,7 @@ readAccountsFile net = do
     bytes <- readFile file
     maybe err return $ parseMaybe (accountsFileFromJSON net) =<< decodeJson bytes
   where
-    err = printError "Could not decode accounts file"
+    err = exitError "Could not decode accounts file"
 
 writeAccountsFile :: Network -> AccountsFile -> IO ()
 writeAccountsFile net dat = do
@@ -87,9 +87,9 @@ newAccountStore net store = do
             | Map.null accMap = "main"
             | otherwise = xPubChecksum $ accountStoreXPubKey store
     when (accountStoreXPubKey store `elem` xpubs) $
-        printError "This public key is already being watched"
+        exitError "This public key is already being watched"
     let f Nothing = Just store
-        f _ = printError "The account name already exists"
+        f _ = exitError "The account name already exists"
     writeAccountsFile net $ Map.alter f (toText key) accMap
     return key
 
@@ -99,7 +99,7 @@ getAccountStore net key = Map.lookup (toText key) <$> readAccountsFile net
 updateAccountStore :: Network -> String -> (AccountStore -> AccountStore) -> IO ()
 updateAccountStore net key f = do
     accMap <- readAccountsFile net
-    let g Nothing  = printError $
+    let g Nothing  = exitError $
             "The account " <> key <> " does not exist"
         g (Just s) = Just $ f s
     writeAccountsFile net $ Map.alter g (toText key) accMap
@@ -107,17 +107,17 @@ updateAccountStore net key f = do
 renameAccountStore :: Network -> String -> String -> IO ()
 renameAccountStore net oldName newName
     | oldName == newName =
-        printError "Both old and new names are the same"
+        exitError "Both old and new names are the same"
     | otherwise = do
         accMap <- readAccountsFile net
         case Map.lookup (toText oldName) accMap of
             Just store -> do
                 when (Map.member (toText newName) accMap) $
-                    printError "New account name already exists"
+                    exitError "New account name already exists"
                 writeAccountsFile net $
                     Map.insert (toText newName) store $
                     Map.delete (toText oldName) accMap
-            _ -> printError "Old account does not exist"
+            _ -> exitError "Old account does not exist"
 
 xPubChecksum :: XPubKey -> String
 xPubChecksum = encodeHexStr . encodeBytes . xPubFP
