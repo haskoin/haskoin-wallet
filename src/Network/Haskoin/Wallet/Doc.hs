@@ -1,19 +1,9 @@
-{-# LANGUAGE NoImplicitPrelude #-}
+{-# LANGUAGE FlexibleContexts  #-}
 module Network.Haskoin.Wallet.Doc where
 
-import           Data.String.Conversions                 (cs)
-import           Data.Text                               (Text)
-import           Foundation
-import           Network.Haskoin.Wallet.FoundationCompat
 import           Options.Applicative.Help.Pretty
 import           System.Exit
 import           System.IO.Unsafe
-
-doc :: String -> Doc
-doc = text . toLString
-
-textDoc :: Text -> Doc
-textDoc = text . cs
 
 titleDoc :: Doc -> Doc
 titleDoc = bold
@@ -73,7 +63,7 @@ errorDoc :: Doc -> Doc
 errorDoc = dullred
 
 exitError :: String -> a
-exitError = exitCustomError . errorDoc . doc
+exitError = exitCustomError . errorDoc . text
 
 exitCustomError :: Doc -> a
 exitCustomError err = unsafePerformIO $ putDoc err >> exitFailure

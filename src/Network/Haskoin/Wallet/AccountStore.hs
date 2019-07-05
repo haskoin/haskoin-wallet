@@ -1,37 +1,44 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.AccountStore where
 
 import           Control.Monad
+import qualified Data.Aeson                 as Json
+import qualified Data.Aeson.Encode.Pretty   as Pretty
 import           Data.Aeson.Types
-import           Data.Map.Strict                         (Map)
-import qualified Data.Map.Strict                         as Map
-import           Data.Text                               (Text)
-import           Foundation
-import           Foundation.Compat.Text
-import           Foundation.IO
-import           Foundation.VFS
+import qualified Data.ByteString            as BS
+import qualified Data.ByteString.Lazy       as BL
+import qualified Data.HashMap.Strict        as HMap
+import           Data.Map.Strict            (Map)
+import qualified Data.Map.Strict            as Map
+import qualified Data.Serialize             as S
+import           Data.Text                  (Text)
+import qualified Data.Text                  as Text
+import           Data.Word
 import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
+import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.Doc
-import           Network.Haskoin.Wallet.FoundationCompat
-import qualified System.Directory                        as D
+import qualified System.Directory           as D
 
-type AccountsFile = Map Text AccountStore
+type AccountsMap = Map Text AccountStore
 
-accountsFileFromJSON :: Network -> Value -> Parser AccountsFile
-accountsFileFromJSON net =
+accountsMapFromJSON :: Network -> Value -> Parser AccountsMap
+accountsMapFromJSON net =
     withObject "accountsfile" $ \o -> do
-        res <- forM (toList o) $ \(k, v) -> do
+        res <- forM (HMap.toList o) $ \(k, v) -> do
             a <- accountStoreFromJSON net v
             return (k, a)
-        return $ fromList res
+        return $ Map.fromList res
+
+accountsMapToJSON :: Network -> AccountsMap -> Value
+accountsMapToJSON net accMap =
+    object $ Map.assocs $ Map.map (accountStoreToJSON net) accMap
 
 data AccountStore = AccountStore
     { accountStoreXPubKey  :: !XPubKey
-    , accountStoreExternal :: !Natural
-    , accountStoreInternal :: !Natural
+    , accountStoreExternal :: !Word64
+    , accountStoreInternal :: !Word64
     , accountStoreDeriv    :: !HardPath
     } deriving (Eq, Show)
 
@@ -43,45 +50,56 @@ accountStoreFromJSON net =
         o .: "internal" <*>
         o .: "deriv"
 
-instance ToJSON AccountStore where
-    toJSON (AccountStore k e i d) =
-        object
-            [ "xpubkey" .= toJSON k
-            , "external" .= e
-            , "internal" .= i
-            , "deriv" .= d
-            ]
+accountStoreToJSON :: Network -> AccountStore -> Value
+accountStoreToJSON net (AccountStore k e i d) =
+    object
+        [ "xpubkey"  .= xPubToJSON net k
+        , "external" .= e
+        , "internal" .= i
+        , "deriv"    .= d
+        ]
 
 extDeriv, intDeriv :: SoftPath
 extDeriv = Deriv :/ 0
 intDeriv = Deriv :/ 1
 
-accountsFile :: Network -> IO FilePath
-accountsFile net = do
-    hwDir <- fromString <$> D.getAppUserDataDirectory "hw"
-    let dir = hwDir </> fromString (getNetworkName net)
-    D.createDirectoryIfMissing True $ filePathToLString dir
+(</>) :: String -> String -> String
+a </> b = a <> "/" <> b
+
+accountsFilePath :: Network -> IO FilePath
+accountsFilePath net = do
+    hwDir <- D.getAppUserDataDirectory "hw"
+    let dir = hwDir </> getNetworkName net
+    D.createDirectoryIfMissing True dir
     return $ dir </> "accounts.json"
 
-readAccountsFile :: Network -> IO AccountsFile
-readAccountsFile net = do
-    file <- accountsFile net
-    exists <- D.doesFileExist $ filePathToLString file
-    unless exists $ writeAccountsFile net Map.empty
-    bytes <- readFile file
-    maybe err return $ parseMaybe (accountsFileFromJSON net) =<< decodeJson bytes
+readAccountsMap :: Network -> IO AccountsMap
+readAccountsMap net = do
+    fp <- accountsFilePath net
+    exists <- D.doesFileExist fp
+    unless exists $ writeAccountsMap net Map.empty
+    bytes <- BS.readFile fp
+    maybe err return $
+        parseMaybe (accountsMapFromJSON net) =<< Json.decodeStrict bytes
   where
     err = exitError "Could not decode accounts file"
 
-writeAccountsFile :: Network -> AccountsFile -> IO ()
-writeAccountsFile net dat = do
-    file <- accountsFile net
-    withFile file WriteMode $ \h ->
-        hPut h $ encodeJsonPretty dat <> stringToBytes "\n"
+writeAccountsMap :: Network -> AccountsMap -> IO ()
+writeAccountsMap net dat = do
+    file <- accountsFilePath net
+    BS.writeFile file $ encPretty $ accountsMapToJSON net dat
+  where
+    encPretty =
+        BL.toStrict .
+        Pretty.encodePretty'
+            Pretty.defConfig
+                { Pretty.confIndent = Pretty.Spaces 2
+                , Pretty.confTrailingNewline = True
+                }
 
-newAccountStore :: Network -> AccountStore -> IO String
+newAccountStore :: Network -> AccountStore -> IO Text
 newAccountStore net store = do
-    accMap <- readAccountsFile net
+    accMap <- readAccountsMap net
     let xpubs = accountStoreXPubKey <$> Map.elems accMap
         key
             | Map.null accMap = "main"
@@ -89,40 +107,40 @@ newAccountStore net store = do
     when (accountStoreXPubKey store `elem` xpubs) $
         exitError "This public key is already being watched"
     let f Nothing = Just store
-        f _ = exitError "The account name already exists"
-    writeAccountsFile net $ Map.alter f (toText key) accMap
+        f _       = exitError "The account name already exists"
+    writeAccountsMap net $ Map.alter f key accMap
     return key
 
-getAccountStore :: Network -> String -> IO (Maybe AccountStore)
-getAccountStore net key = Map.lookup (toText key) <$> readAccountsFile net
+getAccountStore :: Network -> Text -> IO (Maybe AccountStore)
+getAccountStore net key = Map.lookup key <$> readAccountsMap net
 
-updateAccountStore :: Network -> String -> (AccountStore -> AccountStore) -> IO ()
+updateAccountStore :: Network -> Text -> (AccountStore -> AccountStore) -> IO ()
 updateAccountStore net key f = do
-    accMap <- readAccountsFile net
+    accMap <- readAccountsMap net
     let g Nothing  = exitError $
-            "The account " <> key <> " does not exist"
+            "The account " <> Text.unpack key <> " does not exist"
         g (Just s) = Just $ f s
-    writeAccountsFile net $ Map.alter g (toText key) accMap
+    writeAccountsMap net $ Map.alter g key accMap
 
-renameAccountStore :: Network -> String -> String -> IO ()
+renameAccountStore :: Network -> Text -> Text -> IO ()
 renameAccountStore net oldName newName
     | oldName == newName =
         exitError "Both old and new names are the same"
     | otherwise = do
-        accMap <- readAccountsFile net
-        case Map.lookup (toText oldName) accMap of
+        accMap <- readAccountsMap net
+        case Map.lookup oldName accMap of
             Just store -> do
-                when (Map.member (toText newName) accMap) $
+                when (Map.member newName accMap) $
                     exitError "New account name already exists"
-                writeAccountsFile net $
-                    Map.insert (toText newName) store $
-                    Map.delete (toText oldName) accMap
+                writeAccountsMap net $
+                    Map.insert newName store $
+                    Map.delete oldName accMap
             _ -> exitError "Old account does not exist"
 
-xPubChecksum :: XPubKey -> String
-xPubChecksum = encodeHexStr . encodeBytes . xPubFP
+xPubChecksum :: XPubKey -> Text
+xPubChecksum = encodeHex . S.encode . xPubFP
 
-nextExtAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
+nextExtAddress :: AccountStore -> ((Address, SoftPath, Word64), AccountStore)
 nextExtAddress store =
     ( ( fst $ derivePathAddr (accountStoreXPubKey store) extDeriv idx
       , extDeriv :/ idx
@@ -134,7 +152,7 @@ nextExtAddress store =
     nat = accountStoreExternal store
     idx = fromIntegral nat
 
-nextIntAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
+nextIntAddress :: AccountStore -> ((Address, SoftPath, Word64), AccountStore)
 nextIntAddress store =
     ( ( fst $ derivePathAddr (accountStoreXPubKey store) intDeriv idx
       , intDeriv :/ idx

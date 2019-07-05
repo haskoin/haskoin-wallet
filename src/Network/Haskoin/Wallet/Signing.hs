@@ -1,20 +1,19 @@
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Signing where
 
-import           Control.Arrow                           ((&&&))
-import           Data.Aeson.TH                           (deriveJSON)
-import           Data.List                               (nub, sum, sortOn)
-import           Data.Map.Strict                         (Map)
-import qualified Data.Map.Strict                         as Map
+import           Control.Arrow                       (second, (&&&), (***))
+import           Data.Aeson.TH                       (deriveJSON)
+import qualified Data.ByteString                     as BS
+import           Data.List                           (nub, sortOn, sum)
+import           Data.Map.Strict                     (Map)
+import qualified Data.Map.Strict                     as Map
+import           Data.Maybe
 import           Data.Ord
-import qualified Data.Set                                as Set
-import           Foundation
-import           Foundation.Collection
-import           Foundation.Compat.Text
+import qualified Data.Set                            as Set
+import           Data.Text                           (Text)
 import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
@@ -23,9 +22,9 @@ import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.FoundationCompat
-import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.DetailedTx
+import           Network.Haskoin.Wallet.HTTP
+import           Numeric.Natural
 
 {- Building Transactions -}
 
@@ -39,7 +38,7 @@ instance Coin WalletCoin where
     coinValue = fromIntegral . walletCoinValue
 
 instance Ord WalletCoin where
-    compare = compare `on` walletCoinValue
+    compare = comparing walletCoinValue
 
 toWalletCoin :: (OutPoint, ScriptOutput, Satoshi) -> WalletCoin
 toWalletCoin (op, so, v) = WalletCoin op so v
@@ -56,17 +55,24 @@ buildTxSignData net store rcpMap feeByte dust
     | otherwise = do
         allCoins <-
             fmap toWalletCoin <$> httpUnspent net (Map.keys walletAddrMap)
-        case buildWalletTx net walletAddrMap allCoins change rcpMap feeByte dust of
+        case buildWalletTx
+                 net
+                 walletAddrMap
+                 allCoins
+                 (fromIntegral change)
+                 rcpMap
+                 feeByte
+                 dust of
             Right (tx, depTxHash, inDeriv, outDeriv) -> do
                 depTxs <- httpRawTxs net depTxHash
                 return $
                     Right
                         ( TxSignData
-                          { txSignDataTx = tx
-                          , txSignDataInputs = depTxs
-                          , txSignDataInputPaths = inDeriv
-                          , txSignDataOutputPaths = outDeriv
-                          }
+                              { txSignDataTx = tx
+                              , txSignDataInputs = depTxs
+                              , txSignDataInputPaths = inDeriv
+                              , txSignDataOutputPaths = outDeriv
+                              }
                         , if null outDeriv
                               then store
                               else store')
@@ -87,8 +93,7 @@ buildWalletTx ::
     -> Either String (Tx, [TxHash], [SoftPath], [SoftPath])
 buildWalletTx net walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte dust = do
     (selectedCoins, changeAmnt) <-
-        eitherString $
-        second toNatural <$>
+        second fromIntegral <$>
         chooseCoins
             (fromIntegral tot)
             (fromIntegral feeByte)
@@ -100,12 +105,13 @@ buildWalletTx net walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte du
             | otherwise = (Map.insert change changeAmnt rcpMap, [changeDeriv])
         ops = fmap walletCoinOutPoint selectedCoins
     tx <-
-        eitherString $
         buildAddrTx net ops $
-        bimap addrToString fromIntegral <$> Map.assocs txRcpMap
+        (addrToString net *** fromIntegral) <$> Map.assocs txRcpMap
     inCoinAddrs <-
-        eitherString $
-        mapM (outputAddress net . walletCoinScriptOutput) selectedCoins
+        mapM
+            (maybeToEither "buildWalletTx Error" .
+             outputAddress . walletCoinScriptOutput)
+            selectedCoins
     let inDerivMap = Map.restrictKeys walletAddrMap $ Set.fromList inCoinAddrs
     return
         ( tx
@@ -128,31 +134,30 @@ buildSwipeTx ::
 buildSwipeTx net store addrs feeByte = do
     coins <- fmap toWalletCoin <$> httpUnspent net addrs
     let tot = sum $ walletCoinValue <$> coins
-        fee = guessTxFee (fromIntegral feeByte) 1 (fromCount $ length coins)
+        fee = guessTxFee (fromIntegral feeByte) 1 (length coins)
         ops = walletCoinOutPoint <$> coins
         depTxHash = nub $ outPointHash <$> ops
     if null coins
         then return $ Left "No coins were found in the given addresses"
         else do
             depTxs <- httpRawTxs net depTxHash
-            return $
-                eitherString $ do
-                    amnt <-
-                        maybeToEither "The inputs do not cover the required fee" $
-                        tot - fromIntegral fee
-                    tx <-
-                        buildAddrTx
-                            net
-                            ops
-                            [(addrToString (fst rcpt), fromIntegral amnt)]
-                    return
-                        ( TxSignData
+            return $ do
+                amnt <-
+                    maybeToEither "The inputs do not cover the required fee" $
+                    tot `safeSubtract` fromIntegral fee
+                tx <-
+                    buildAddrTx
+                        net
+                        ops
+                        [(addrToString net (fst3 rcpt), fromIntegral amnt)]
+                return
+                    ( TxSignData
                           { txSignDataTx = tx
                           , txSignDataInputs = depTxs
                           , txSignDataInputPaths = []
-                          , txSignDataOutputPaths = [snd rcpt]
+                          , txSignDataOutputPaths = [snd3 rcpt]
                           }
-                        , store')
+                    , store')
   where
     (rcpt, store') = nextExtAddress store
 
@@ -161,10 +166,11 @@ buildSwipeTx net store addrs feeByte = do
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| getBip44Coin net :| fromIntegral a
 
-signingKey :: Network -> String -> String -> Natural -> Either String XPrvKey
+signingKey ::
+       Network -> BS.ByteString -> Text -> Natural -> Either String XPrvKey
 signingKey net pass mnem acc = do
-    seed <- eitherString $ mnemonicToSeed (stringToBS pass) (toText mnem)
-    return $ derivePath (bip44Deriv net acc) (makeXPrvKey net seed)
+    seed <- mnemonicToSeed pass mnem
+    return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
 
 data TxSignData = TxSignData
     { txSignDataTx          :: !Tx
@@ -177,18 +183,18 @@ $(deriveJSON (dropFieldLabel 10) ''TxSignData)
 
 pubDetailedTx :: Network -> TxSignData -> XPubKey -> Either String DetailedTx
 pubDetailedTx net (TxSignData tx inTxs inPaths outPaths) pubKey
-    | fromCount (length coins) /= fromCount (length $ txIn tx) =
+    | length coins /= length (txIn tx) =
         Left "Referenced input transactions are missing"
-    | fromCount (length inPaths) /= Map.size (detailedTxMyInputs info) =
+    | length inPaths /= Map.size (detailedTxMyInputs info) =
         Left "Tx is missing inputs from private keys"
-    | fromCount (length outPaths) /= Map.size (detailedTxInbound info) =
+    | length outPaths /= Map.size (detailedTxInbound info) =
         Left "Tx is missing change outputs"
     | otherwise = return info
   where
     info =
-        detailedTxFillUnsignedTx net tx $
-        detailedTxFillInbound net outAddrMap (txOut tx) $
-        detailedTxFillInputs net inAddrMap (snd <$> coins) emptyDetailedTx
+        detailedTxFillUnsignedTx tx $
+        detailedTxFillInbound outAddrMap (txOut tx) $
+        detailedTxFillInputs inAddrMap (snd <$> coins) emptyDetailedTx
     outAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) outPaths
     inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
@@ -201,7 +207,6 @@ signWalletTx ::
 signWalletTx net tsd@(TxSignData tx _ inPaths _) signKey = do
     sigDat <- mapM g myCoins
     signedTx <-
-        eitherString $
         signTx net tx (fmap f sigDat) (wrapSecKey True <$> prvKeys)
     let vDat = rights $ fmap g allCoins
         isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx vDat

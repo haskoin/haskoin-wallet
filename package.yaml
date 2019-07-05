@@ -34,7 +34,6 @@ library:
   - Network.Haskoin.Wallet.HTTP
   - Network.Haskoin.Wallet.Amounts
   - Network.Haskoin.Wallet.Doc
-  - Network.Haskoin.Wallet.FoundationCompat
   - Network.Haskoin.Wallet.DetailedTx
   dependencies:
   - aeson
@@ -45,12 +44,9 @@ library:
   - bytestring
   - cereal
   - containers
-  - console-program
   - directory
   - Decimal
   - entropy
-  - foundation
-  - foundation-edge
   - haskeline
   - haskoin-core
   - http-types
@@ -60,7 +56,9 @@ library:
   - pretty
   - string-conversions
   - text
+  - tostring
   - transformers
+  - unordered-containers
   - wreq
 executables:
   hw:
@@ -85,8 +83,6 @@ tests:
     - bytestring
     - cereal
     - containers
-    - foundation
-    - foundation-edge
     - haskoin-core
     - haskoin-wallet
     - hspec

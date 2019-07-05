@@ -1,8 +1,10 @@
--- This file has been generated from package.yaml by hpack version 0.28.2.
+cabal-version: 1.12
+
+-- This file has been generated from package.yaml by hpack version 0.31.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f12b0772f7f53cd3d8f07aa37c6254bc55491e5e8c151b141c228c265aebd530
+-- hash: 16a16a9613ae497d66d1c001876c8bf16c56e9c5eb81a2105e96a1a5aef58f46
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -22,7 +24,6 @@ license:        PublicDomain
 license-file:   UNLICENSE
 tested-with:    GHC==8.0.2
 build-type:     Simple
-cabal-version:  >= 1.10
 
 source-repository head
   type: git
@@ -42,12 +43,9 @@ library
     , base64-bytestring
     , bytestring
     , cereal
-    , console-program
     , containers
     , directory
     , entropy
-    , foundation
-    , foundation-edge
     , haskeline
     , haskoin-core
     , http-types
@@ -57,7 +55,9 @@ library
     , pretty
     , string-conversions
     , text
+    , tostring
     , transformers
+    , unordered-containers
     , wreq
   exposed-modules:
       Network.Haskoin.Wallet
@@ -67,9 +67,9 @@ library
       Network.Haskoin.Wallet.HTTP
       Network.Haskoin.Wallet.Amounts
       Network.Haskoin.Wallet.Doc
-      Network.Haskoin.Wallet.FoundationCompat
       Network.Haskoin.Wallet.DetailedTx
   other-modules:
+      Network.Haskoin.Wallet.FoundationCompat
       Paths_haskoin_wallet
   default-language: Haskell2010
 
@@ -99,8 +99,6 @@ test-suite test-haskoin-wallet
     , bytestring
     , cereal
     , containers
-    , foundation
-    , foundation-edge
     , haskoin-core
     , haskoin-wallet
     , hspec

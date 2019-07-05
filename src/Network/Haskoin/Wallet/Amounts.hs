@@ -1,16 +1,19 @@
 {-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies      #-}
 module Network.Haskoin.Wallet.Amounts where
 
+import           Control.Arrow                   (second)
 import           Control.Monad
 import           Data.Decimal
-import           Foundation
-import           Foundation.String.Read
+import           Data.Maybe
+import           Data.String.Conversions         (cs)
+import           Data.Text                       as Text
+import           Data.Text.Read                  as Read
+import           Numeric.Natural
 import           Network.Haskoin.Wallet.Doc
-import           Network.Haskoin.Wallet.FoundationCompat
 import           Options.Applicative.Help.Pretty
+import           Prelude                         as Prelude
 
 type Satoshi = Natural
 
@@ -32,17 +35,17 @@ integerAmountDoc unit amnt
 
 integerAmountWithDoc :: (Doc -> Doc) -> AmountUnit -> Integer -> Doc
 integerAmountWithDoc f unit amnt =
-    f (doc $ showIntegerAmount unit amnt) <+> unitDoc unit amnt
+    f (text $ cs $ showIntegerAmount unit amnt) <+> unitDoc unit amnt
 
 unitDoc :: AmountUnit -> Integer -> Doc
-unitDoc unit = text . toLString . showUnit unit
+unitDoc unit = text . unpack . showUnit unit
 
 feeBytesDoc :: Decimal -> Doc
-feeBytesDoc fee = feeDoc (doc $ show fee) <+> doc "sat/bytes"
+feeBytesDoc fee = feeDoc (text $ show fee) <+> text "sat/bytes"
 
 {- Amount Parsing -}
 
-showUnit :: AmountUnit -> Integer -> String
+showUnit :: AmountUnit -> Integer -> Text
 showUnit unit amnt
     | unit == UnitSatoshi = strUnit -- satoshi is always singular
     | abs amnt == 1 = strUnit
@@ -54,53 +57,79 @@ showUnit unit amnt
             UnitBit     -> "bit"
             UnitSatoshi -> "satoshi"
 
-showAmount :: AmountUnit -> Satoshi -> String
+showAmount :: AmountUnit -> Satoshi -> Text
 showAmount unit amnt =
     case unit of
         UnitBitcoin ->
             let (q, r) = amnt `divMod` 100000000
-            in addSep (show q) <> "." <>
-               stripEnd (padStart 8 '0' (show r))
+            in addSep (showT q) <> "." <> removeEnd (padStart 8 "0" (showT r))
         UnitBit ->
             let (q, r) = amnt `divMod` 100
-            in addSep (show q) <> "." <> padStart 2 '0' (show r)
-        UnitSatoshi -> addSep (show amnt)
+            in addSep (showT q) <> "." <> padStart 2 "0" (showT r)
+        UnitSatoshi -> addSep (showT amnt)
   where
-    stripEnd = dropPatternEnd "0000" . dropPatternEnd "000000"
-    addSep = intercalate "'" . groupEnd 3
+    removeEnd = dropPatternEnd "0000" . dropPatternEnd "000000"
+    addSep = Text.intercalate "'" . chunksOfEnd 3
+    showT = pack . show
 
-readAmount :: AmountUnit -> String -> Maybe Satoshi
+readAmount :: AmountUnit -> Text -> Maybe Satoshi
 readAmount unit amntStr =
     case unit of
         UnitBitcoin -> do
-            guard $ length r <= 8
+            guard $ Text.length r <= 8
             a <- readNatural q
-            b <- readNatural $ padEnd 8 '0' r
+            b <- readNatural $ padEnd 8 "0" r
             return $ a * 100000000 + b
         UnitBit -> do
-            guard $ length r <= 2
+            guard $ Text.length r <= 2
             a <- readNatural q
-            b <- readNatural $ padEnd 2 '0' r
+            b <- readNatural $ padEnd 2 "0" r
             return $ a * 100 + b
         UnitSatoshi -> readNatural str
   where
     str = dropAmountSep amntStr
-    (q, r) = second (drop 1) $ breakElem '.' str
+    (q, r) = second (Text.drop 1) $ breakOn "." str
 
-dropAmountSep :: String -> String
-dropAmountSep = filter (`notElem` [' ', '_', '\''])
+readNatural :: Text -> Maybe Satoshi
+readNatural txt =
+    case Read.decimal txt of
+        Right (res, "") -> Just res
+        _               -> Nothing
+
+dropAmountSep :: Text -> Text
+dropAmountSep = Text.filter (`notElem` [' ', '_', '\''])
 
 -- | Like 'showAmount' but will display a minus sign for negative amounts
-showIntegerAmount :: AmountUnit -> Integer -> String
+showIntegerAmount :: AmountUnit -> Integer -> Text
 showIntegerAmount unit i
     | i < 0 = "-" <> showAmount unit (fromIntegral $ abs i)
     | otherwise = showAmount unit $ fromIntegral i
 
-
 -- | Like 'readAmount' but can parse a negative amount
-readIntegerAmount :: AmountUnit -> String -> Maybe Integer
-readIntegerAmount unit str =
-    case uncons str of
+readIntegerAmount :: AmountUnit -> Text -> Maybe Integer
+readIntegerAmount unit txt =
+    case uncons txt of
         Just ('-', rest) -> negate . toInteger <$> readAmount unit rest
-        _                -> toInteger <$> readAmount unit str
+        _                -> toInteger <$> readAmount unit txt
+
+{- Utilities -}
+
+padStart :: Int -> Text -> Text -> Text
+padStart n c t =
+    Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c <> t
+
+padEnd :: Int -> Text -> Text -> Text
+padEnd n c t
+    = t <> Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c
+
+dropPatternEnd :: Text -> Text -> Text
+dropPatternEnd p t = fromMaybe t $ stripSuffix p t
+
+chunksOfEnd :: Int -> Text -> [Text]
+chunksOfEnd n t = Prelude.reverse $ Text.reverse <$> chunksOf n (Text.reverse t)
+
+safeSubtract :: Integral a => a -> a -> Maybe a
+safeSubtract a b
+    | b > a = Nothing
+    | otherwise = Just $ a - b
 

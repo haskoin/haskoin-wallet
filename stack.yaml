@@ -1,12 +1,12 @@
 resolver: lts-12.5
 extra-deps:
 - git: https://github.com/haskoin/haskoin-core.git
-  commit: 9ead939e7401089550aaceb0a39f5cd6b48bd056
+  commit: 9520c85fc9bb6384c37e855e31e37435b8eefb64
 - rocksdb-haskell-1.0.1
 - murmur3-1.0.3
 - console-program-0.4.2.2
 - foundation-edge-0.0.3
 - ansi-terminal-0.6.3.1
 - parsec-extra-0.2.0.0
-- secp256k1-haskell-0.1.2
+- secp256k1-haskell-0.1.4
 

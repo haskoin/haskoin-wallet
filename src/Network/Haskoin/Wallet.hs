@@ -1,6 +1,5 @@
 {-# LANGUAGE ApplicativeDo     #-}
 {-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE NoImplicitPrelude #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE TemplateHaskell   #-}
@@ -19,13 +18,6 @@ import           Data.String                             (unwords)
 import           Data.String.Conversions                 (cs)
 import           Data.Text                               (Text)
 import           Data.Tree                               (Tree (Node))
-import           Foundation
-import           Foundation.Collection
-import           Foundation.Compat.Text
-import           Foundation.IO
-import           Foundation.String
-import           Foundation.String.Read
-import           Foundation.VFS
 import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
@@ -36,14 +28,11 @@ import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.Entropy
-import           Network.Haskoin.Wallet.FoundationCompat
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Signing
 import           Options.Applicative
 import           Options.Applicative.Help.Pretty         hiding ((</>))
-import qualified System.Console.Argument                 as Argument
 import qualified System.Console.Haskeline                as Haskeline
-import qualified System.Console.Program                  as Program
 import qualified System.Directory                        as D
 
 data DocStructure a = DocStructure
