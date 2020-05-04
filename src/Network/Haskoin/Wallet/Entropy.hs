@@ -10,8 +10,9 @@ import           Data.Maybe
 import           Data.Text                      (Text)
 import           Network.Haskoin.Keys           (Mnemonic, toMnemonic)
 import           Network.Haskoin.Util
-import           Network.Haskoin.Wallet.Amounts (safeSubtract)
+import           Network.Haskoin.Wallet.Util
 import           Numeric                        (readInt)
+import           Numeric.Natural
 import qualified System.Directory               as D
 import           System.Entropy                 (getEntropy)
 import           System.IO
@@ -46,31 +47,31 @@ mixEntropy ent1 ent2
         Right $ BS.pack $ BS.zipWith xor ent1 ent2
     | otherwise = Left "Entropy is not of the same length"
 
-diceToEntropy :: Int -> String -> Either String BS.ByteString
+diceToEntropy :: Natural -> String -> Either String BS.ByteString
 diceToEntropy ent rolls
-    | length rolls /= requiredRolls ent =
+    | (fromIntegral $ length rolls) /= requiredRolls ent =
         Left $ show (requiredRolls ent) <> " dice rolls are required"
     | otherwise = do
         bytes <- maybeToEither "Could not decode base6" $ decodeBase6 rolls
-        case ent `safeSubtract` BS.length bytes of
+        case fromIntegral ent `safeSubtract` BS.length bytes of
             Just n -> return $ BS.replicate n 0x00 <> bytes
             -- This should probably never happend
-            _      -> Left "Invalid entropy length"
+            _ -> Left "Invalid entropy length"
 
 -- The number of dice rolls required to reach a given amount of entropy
 -- Example: 32 bytes of entropy require 99 dice rolls (255.9 bits)
-requiredRolls :: Int -> Int
+requiredRolls :: Natural -> Natural
 requiredRolls ent = floor $ fromIntegral ent * log2o6
   where
     log2o6 = 3.09482245788 :: Double -- 8 * log 2 / log 6
 
-genMnemonic :: Int -> IO (Either String (Text, Mnemonic))
+genMnemonic :: Natural -> IO (Either String (Text, Mnemonic))
 genMnemonic reqEnt = genMnemonicGen reqEnt Nothing
 
-genMnemonicDice :: Int -> String -> IO (Either String (Text, Mnemonic))
+genMnemonicDice :: Natural -> String -> IO (Either String (Text, Mnemonic))
 genMnemonicDice reqEnt rolls = genMnemonicGen reqEnt (Just rolls)
 
-genMnemonicGen :: Int -> Maybe String -> IO (Either String (Text, Mnemonic))
+genMnemonicGen :: Natural -> Maybe String -> IO (Either String (Text, Mnemonic))
 genMnemonicGen reqEnt rollsM
     | reqEnt `elem` [16,20 .. 32] = do
         (entOrig, sysEnt) <- systemEntropy reqEnt
@@ -80,18 +81,19 @@ genMnemonicGen reqEnt rollsM
                     (Right sysEnt)
                     (diceToEntropy reqEnt >=> mixEntropy sysEnt)
                     rollsM
-            when (BS.length ent /= reqEnt) $
+            when (BS.length ent /= (fromIntegral reqEnt)) $
                 Left "Something went wrong with the entropy size"
             mnem <- toMnemonic ent
             return (entOrig, mnem)
     | otherwise = return $ Left "The entropy value can only be in [16,20..32]"
 
-systemEntropy :: Int -> IO (Text, BS.ByteString)
+systemEntropy :: Natural -> IO (Text, BS.ByteString)
 systemEntropy bytes = do
     exists <- D.doesFileExist "/dev/random"
     if exists
         then ("/dev/random", ) <$> devRandom bytes
-        else ("System.Entropy.getEntropy", ) <$> getEntropy bytes
+        else ("System.Entropy.getEntropy", ) <$> getEntropy (fromIntegral bytes)
 
-devRandom :: Int -> IO BS.ByteString
-devRandom bytes = withBinaryFile "/dev/random" ReadMode (`BS.hGet` bytes)
+devRandom :: Natural -> IO BS.ByteString
+devRandom bytes =
+    withBinaryFile "/dev/random" ReadMode (`BS.hGet` (fromIntegral bytes))

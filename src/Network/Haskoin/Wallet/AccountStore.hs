@@ -1,25 +1,28 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.AccountStore where
 
+import           Control.Arrow                   (first)
 import           Control.Monad
-import qualified Data.Aeson                 as Json
-import qualified Data.Aeson.Encode.Pretty   as Pretty
+import qualified Data.Aeson                      as Json
+import qualified Data.Aeson.Encode.Pretty        as Pretty
 import           Data.Aeson.Types
-import qualified Data.ByteString            as BS
-import qualified Data.ByteString.Lazy       as BL
-import qualified Data.HashMap.Strict        as HMap
-import           Data.Map.Strict            (Map)
-import qualified Data.Map.Strict            as Map
-import qualified Data.Serialize             as S
-import           Data.Text                  (Text)
-import qualified Data.Text                  as Text
-import           Data.Word
+import qualified Data.ByteString.Lazy            as BL
+import qualified Data.ByteString.Char8           as C8
+import qualified Data.HashMap.Strict             as HMap
+import           Data.Map.Strict                 (Map)
+import qualified Data.Map.Strict                 as Map
+import qualified Data.Serialize                  as S
+import           Data.String.Conversions         (cs)
+import           Data.Text                       (Text)
+import qualified Data.Text                       as Text
 import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.Doc
-import qualified System.Directory           as D
+import           Numeric.Natural
+import           Options.Applicative.Help.Pretty hiding ((</>))
+import qualified System.Directory                as D
 
 type AccountsMap = Map Text AccountStore
 
@@ -37,8 +40,8 @@ accountsMapToJSON net accMap =
 
 data AccountStore = AccountStore
     { accountStoreXPubKey  :: !XPubKey
-    , accountStoreExternal :: !Word64
-    , accountStoreInternal :: !Word64
+    , accountStoreExternal :: !Natural
+    , accountStoreInternal :: !Natural
     , accountStoreDeriv    :: !HardPath
     } deriving (Eq, Show)
 
@@ -78,7 +81,7 @@ readAccountsMap net = do
     fp <- accountsFilePath net
     exists <- D.doesFileExist fp
     unless exists $ writeAccountsMap net Map.empty
-    bytes <- BS.readFile fp
+    bytes <- C8.readFile fp
     maybe err return $
         parseMaybe (accountsMapFromJSON net) =<< Json.decodeStrict bytes
   where
@@ -87,7 +90,7 @@ readAccountsMap net = do
 writeAccountsMap :: Network -> AccountsMap -> IO ()
 writeAccountsMap net dat = do
     file <- accountsFilePath net
-    BS.writeFile file $ encPretty $ accountsMapToJSON net dat
+    C8.writeFile file $ encPretty $ accountsMapToJSON net dat
   where
     encPretty =
         BL.toStrict .
@@ -137,10 +140,38 @@ renameAccountStore net oldName newName
                     Map.delete oldName accMap
             _ -> exitError "Old account does not exist"
 
+withAccountStore ::
+       Network -> String -> ((String, AccountStore) -> IO ()) -> IO ()
+withAccountStore net name f
+    | null name = do
+        accMap <- readAccountsMap net
+        case Map.assocs accMap of
+            [val] -> f (first cs val)
+            _ ->
+                case Map.lookup "main" accMap of
+                    Just val -> f ("main", val)
+                    _ -> err $ cs <$> Map.keys accMap
+    | otherwise = do
+        accM <- getAccountStore net (cs name)
+        case accM of
+            Just acc -> f (name, acc)
+            _ -> err . fmap cs . Map.keys =<< readAccountsMap net
+  where
+    err :: [String] -> IO ()
+    err [] = exitError "No accounts have been created"
+    err keys =
+        exitCustomError $
+        vcat
+            [ errorDoc
+                  "Select one of the following accounts with -a or --account"
+            , indent 4 $ vcat $ fmap (accountDoc . text) keys
+            ]
+
+
 xPubChecksum :: XPubKey -> Text
 xPubChecksum = encodeHex . S.encode . xPubFP
 
-nextExtAddress :: AccountStore -> ((Address, SoftPath, Word64), AccountStore)
+nextExtAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
 nextExtAddress store =
     ( ( fst $ derivePathAddr (accountStoreXPubKey store) extDeriv idx
       , extDeriv :/ idx
@@ -152,7 +183,7 @@ nextExtAddress store =
     nat = accountStoreExternal store
     idx = fromIntegral nat
 
-nextIntAddress :: AccountStore -> ((Address, SoftPath, Word64), AccountStore)
+nextIntAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
 nextIntAddress store =
     ( ( fst $ derivePathAddr (accountStoreXPubKey store) intDeriv idx
       , intDeriv :/ idx

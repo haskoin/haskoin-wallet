@@ -30,9 +30,8 @@ import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Script
 import           Network.Haskoin.Transaction
-import           Network.Haskoin.Util
-import           Network.Haskoin.Util              (eitherToMaybe)
-import           Network.Haskoin.Wallet.Amounts
+import           Network.Haskoin.Util              (decodeHex, eitherToMaybe,
+                                                    encodeHex)
 import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.Doc
 import           Network.HTTP.Types.Status
@@ -51,22 +50,22 @@ baseUrl net
         exitError $
         "Haskoin does not support the network " <> getNetworkName net
 
-httpBalance :: Network -> [Address] -> IO Satoshi
+httpBalance :: Network -> [Address] -> IO Natural
 httpBalance net = (sum <$>) . mapM (httpBalance_ net) . chunksOf 50
 
-httpBalance_ :: Network -> [Address] -> IO Satoshi
+httpBalance_ :: Network -> [Address] -> IO Natural
 httpBalance_ net addrs = do
     v <- httpJsonGet opts url
     return $ fromIntegral $ sum $ v ^.. values . key "confirmed" . _Integer
   where
     url = baseUrl net <> "/address/balances"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
-    aList = Text.intercalate "," $ addrToString net <$> addrs
+    aList = Text.intercalate "," $ addrStr net <$> addrs
 
-httpUnspent :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
+httpUnspent :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Natural)]
 httpUnspent net = (mconcat <$>) . mapM (httpUnspent_ net) . chunksOf 50
 
-httpUnspent_ :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Satoshi)]
+httpUnspent_ :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Natural)]
 httpUnspent_ net addrs = do
     v <- httpJsonGet opts url
     let resM = mapM parseCoin $ v ^.. values
@@ -74,7 +73,7 @@ httpUnspent_ net addrs = do
   where
     url = baseUrl net <> "/address/unspent"
     opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
-    aList = Text.intercalate "," $ addrToString net <$> addrs
+    aList = Text.intercalate "," $ addrStr net <$> addrs
     parseCoin v = do
         tid <- hexToTxHash =<< v ^? key "txid" . _String
         pos <- v ^? key "index" . _Integral
@@ -106,7 +105,7 @@ toDetailedTx net addrs v =
           hexToBlockHash =<< v ^? key "block" . key "hash" . _String
     }
   where
-    is, os :: Map (Maybe Address) Satoshi
+    is, os :: Map (Maybe Address) Natural
     is = Map.fromListWith (+) $ mapMaybe f $ v ^.. key "inputs" . values
     os = Map.fromListWith (+) $ mapMaybe f $ v ^.. key "outputs" . values
     f x =
@@ -129,7 +128,7 @@ httpAddressTxs_ net addrs = do
     maybe (exitError "Could not parse addrTx") return resM
   where
     url = baseUrl net <> "/address/transactions"
-    aList = Text.intercalate "," $ addrToString net <$> addrs
+    aList = Text.intercalate "," $ addrStr net <$> addrs
     opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
     parseAddrTx v = do
         tid <- hexToTxHash =<< v ^? key "txid" . _String

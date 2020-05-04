@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.31.0.
+-- This file has been generated from package.yaml by hpack version 0.33.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 16a16a9613ae497d66d1c001876c8bf16c56e9c5eb81a2105e96a1a5aef58f46
+-- hash: 540ea2b18713f5087e2bedde64b9b48df5f70a2f51ab0ce25a69e27d60b75d9d
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -61,6 +61,8 @@ library
     , wreq
   exposed-modules:
       Network.Haskoin.Wallet
+      Network.Haskoin.Wallet.Commands
+      Network.Haskoin.Wallet.Parser
       Network.Haskoin.Wallet.Entropy
       Network.Haskoin.Wallet.AccountStore
       Network.Haskoin.Wallet.Signing
@@ -68,8 +70,8 @@ library
       Network.Haskoin.Wallet.Amounts
       Network.Haskoin.Wallet.Doc
       Network.Haskoin.Wallet.DetailedTx
+      Network.Haskoin.Wallet.Util
   other-modules:
-      Network.Haskoin.Wallet.FoundationCompat
       Paths_haskoin_wallet
   default-language: Haskell2010
 

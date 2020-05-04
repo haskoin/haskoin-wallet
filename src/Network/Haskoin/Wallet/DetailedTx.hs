@@ -11,9 +11,11 @@ import           Data.Either                     (partitionEithers)
 import           Data.List                       (sortOn, sum)
 import           Data.Map.Strict                 (Map)
 import qualified Data.Map.Strict                 as Map
+import           Data.Maybe                      (fromMaybe)
 import qualified Data.Serialize                  as Serialize
 import           Data.String.Conversions         (cs)
 import           Data.String.ToString
+import           Data.Text                       (Text)
 import           Network.Haskoin.Address
 import           Network.Haskoin.Block
 import           Network.Haskoin.Constants
@@ -23,19 +25,20 @@ import           Network.Haskoin.Transaction
 import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Doc
+import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty
 
 data DetailedTx = DetailedTx
     { detailedTxHash          :: Maybe TxHash
     , detailedTxSize          :: Maybe Int
-    , detailedTxOutbound      :: Map Address Satoshi
-    , detailedTxNonStdOutputs :: Satoshi
-    , detailedTxInbound       :: Map Address (Satoshi, Maybe SoftPath)
-    , detailedTxMyInputs      :: Map Address (Satoshi, Maybe SoftPath)
-    , detailedTxOtherInputs   :: Map Address Satoshi
-    , detailedTxNonStdInputs  :: Satoshi
-    , detailedTxFee           :: Maybe Satoshi
+    , detailedTxOutbound      :: Map Address Natural
+    , detailedTxNonStdOutputs :: Natural
+    , detailedTxInbound       :: Map Address (Natural, Maybe SoftPath)
+    , detailedTxMyInputs      :: Map Address (Natural, Maybe SoftPath)
+    , detailedTxOtherInputs   :: Map Address Natural
+    , detailedTxNonStdInputs  :: Natural
+    , detailedTxFee           :: Maybe Natural
     , detailedTxHeight        :: Maybe Natural
     , detailedTxBlockHash     :: Maybe BlockHash
     } deriving (Eq, Show)
@@ -118,9 +121,9 @@ detailedTxFillTx tx detailedTx =
   where
     (outAddrMap, nonStd) = txOutAddressMap $ txOut tx
     outbound = Map.difference outAddrMap (detailedTxInbound detailedTx)
-    outSum = fromIntegral $ sum $ outValue <$> txOut tx :: Satoshi
-    myInSum = sum $ fst <$> Map.elems (detailedTxMyInputs detailedTx) :: Satoshi
-    othInSum = sum $ Map.elems (detailedTxOtherInputs detailedTx) :: Satoshi
+    outSum = fromIntegral $ sum $ outValue <$> txOut tx :: Natural
+    myInSum = sum $ fst <$> Map.elems (detailedTxMyInputs detailedTx) :: Natural
+    othInSum = sum $ Map.elems (detailedTxOtherInputs detailedTx) :: Natural
     feeM = (myInSum + othInSum) `safeSubtract` outSum
 
 detailedTxFillInputs ::
@@ -149,7 +152,7 @@ detailedTxFillInbound walletAddrs txOs txInf =
     (outValMap, _) = txOutAddressMap txOs
     inboundMap = Map.intersectionWith (,) outValMap walletAddrs
 
-txOutAddressMap :: [TxOut] -> (Map Address Satoshi, Satoshi)
+txOutAddressMap :: [TxOut] -> (Map Address Natural, Natural)
 txOutAddressMap txout =
     (Map.fromListWith (+) rs, sum ls)
   where
@@ -175,7 +178,7 @@ detailedTxCompactDoc ::
     -> HardPath
     -> AmountUnit
     -> Maybe Bool
-    -> Maybe Satoshi
+    -> Maybe Natural
     -> DetailedTx
     -> Doc
 detailedTxCompactDoc net _ unit _ heightM s@DetailedTx {..} =
@@ -227,15 +230,15 @@ detailedTxCompactDoc net _ unit _ heightM s@DetailedTx {..} =
             ] <>
             fmap (addrFormat id) (Map.assocs $ Map.map fst detailedTxInbound)
     addrFormat f (a, v) =
-        addressDoc (text . cs $ addrToString net a) <> colon <+>
-        integerAmountDoc unit (f $ fromIntegral v)
+         addressDoc (text . cs $ addrStr net a) <> colon <+>
+            integerAmountDoc unit (f $ fromIntegral v)
 
 detailedTxDoc ::
        Network
     -> HardPath
     -> AmountUnit
     -> Maybe Bool
-    -> Maybe Satoshi
+    -> Maybe Natural
     -> DetailedTx
     -> Doc
 detailedTxDoc net accDeriv unit txSignedM heightM s@DetailedTx {..} =
@@ -283,7 +286,7 @@ detailedTxDoc net accDeriv unit txSignedM heightM s@DetailedTx {..} =
                             case (currHeight `safeSubtract`) =<<
                                  detailedTxHeight of
                                 Just conf -> text $ show $ conf + 1
-                                _         -> "Pending"
+                                _ -> "Pending"
                         _ -> mempty
                   , case txSignedM of
                         Just signed ->
@@ -349,30 +352,37 @@ detailedTxDoc net accDeriv unit txSignedM heightM s@DetailedTx {..} =
             ((if maybe False isExternal pM
                   then addressDoc
                   else internalAddressDoc) $
-             text . cs $ addrToString net a)
+             text . cs $ addrStr net a)
             pM
             (fromIntegral v)
     addrFormatMyInputs (a, (v, pM)) =
         addrValDoc
             unit
             accDeriv
-            (internalAddressDoc $ text . cs $ addrToString net a)
+            (internalAddressDoc $ text . cs $ addrStr net a)
             pM
             (negate $ fromIntegral v)
     addrFormatOtherInputs (a, v) =
         addrValDoc
             unit
             accDeriv
-            (internalAddressDoc $ text . cs $ addrToString net a)
+            (internalAddressDoc $ text . cs $ addrStr net a)
             Nothing
             (negate $ fromIntegral v)
     addrFormatOutbound (a, v) =
         addrValDoc
             unit
             accDeriv
-            (addressDoc $ text . cs $ addrToString net a)
+            (addressDoc $ text . cs $ addrStr net a)
             Nothing
             (negate $ fromIntegral v)
+
+
+addrStr :: Network -> Address -> Text
+addrStr net a =
+    fromMaybe
+        (exitError "Invalid Address in haskoin-wallet")
+        (addrToString net a)
 
 addrValDoc ::
        AmountUnit

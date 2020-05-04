@@ -28,6 +28,8 @@ library:
   ghc-options: -Wall
   exposed-modules:
   - Network.Haskoin.Wallet
+  - Network.Haskoin.Wallet.Commands
+  - Network.Haskoin.Wallet.Parser
   - Network.Haskoin.Wallet.Entropy
   - Network.Haskoin.Wallet.AccountStore
   - Network.Haskoin.Wallet.Signing
@@ -35,6 +37,7 @@ library:
   - Network.Haskoin.Wallet.Amounts
   - Network.Haskoin.Wallet.Doc
   - Network.Haskoin.Wallet.DetailedTx
+  - Network.Haskoin.Wallet.Util
   dependencies:
   - aeson
   - ansi-terminal

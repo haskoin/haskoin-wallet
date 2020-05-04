@@ -6,16 +6,13 @@ module Network.Haskoin.Wallet.Amounts where
 import           Control.Arrow                   (second)
 import           Control.Monad
 import           Data.Decimal
-import           Data.Maybe
 import           Data.String.Conversions         (cs)
 import           Data.Text                       as Text
 import           Data.Text.Read                  as Read
-import           Numeric.Natural
 import           Network.Haskoin.Wallet.Doc
+import           Network.Haskoin.Wallet.Util
+import           Numeric.Natural
 import           Options.Applicative.Help.Pretty
-import           Prelude                         as Prelude
-
-type Satoshi = Natural
 
 data AmountUnit
     = UnitBitcoin
@@ -25,7 +22,7 @@ data AmountUnit
 
 {- Printer functions -}
 
-amountDoc :: AmountUnit -> Satoshi -> Doc
+amountDoc :: AmountUnit -> Natural -> Doc
 amountDoc unit = integerAmountDoc unit . fromIntegral
 
 integerAmountDoc :: AmountUnit -> Integer -> Doc
@@ -57,7 +54,7 @@ showUnit unit amnt
             UnitBit     -> "bit"
             UnitSatoshi -> "satoshi"
 
-showAmount :: AmountUnit -> Satoshi -> Text
+showAmount :: AmountUnit -> Natural -> Text
 showAmount unit amnt =
     case unit of
         UnitBitcoin ->
@@ -72,7 +69,7 @@ showAmount unit amnt =
     addSep = Text.intercalate "'" . chunksOfEnd 3
     showT = pack . show
 
-readAmount :: AmountUnit -> Text -> Maybe Satoshi
+readAmount :: AmountUnit -> Text -> Maybe Natural
 readAmount unit amntStr =
     case unit of
         UnitBitcoin -> do
@@ -90,7 +87,7 @@ readAmount unit amntStr =
     str = dropAmountSep amntStr
     (q, r) = second (Text.drop 1) $ breakOn "." str
 
-readNatural :: Text -> Maybe Satoshi
+readNatural :: Text -> Maybe Natural
 readNatural txt =
     case Read.decimal txt of
         Right (res, "") -> Just res
@@ -111,25 +108,4 @@ readIntegerAmount unit txt =
     case uncons txt of
         Just ('-', rest) -> negate . toInteger <$> readAmount unit rest
         _                -> toInteger <$> readAmount unit txt
-
-{- Utilities -}
-
-padStart :: Int -> Text -> Text -> Text
-padStart n c t =
-    Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c <> t
-
-padEnd :: Int -> Text -> Text -> Text
-padEnd n c t
-    = t <> Text.replicate (fromMaybe 0 $ n `safeSubtract` Text.length t) c
-
-dropPatternEnd :: Text -> Text -> Text
-dropPatternEnd p t = fromMaybe t $ stripSuffix p t
-
-chunksOfEnd :: Int -> Text -> [Text]
-chunksOfEnd n t = Prelude.reverse $ Text.reverse <$> chunksOf n (Text.reverse t)
-
-safeSubtract :: Integral a => a -> a -> Maybe a
-safeSubtract a b
-    | b > a = Nothing
-    | otherwise = Just $ a - b
 

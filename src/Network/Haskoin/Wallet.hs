@@ -5,334 +5,49 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet where
 
-import           Control.Arrow                           (right, (&&&))
-import           Control.Monad                           (join, unless, when)
-import qualified Data.Aeson                              as Json
+import           Control.Monad                       (forM, join, unless, when)
+import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
-import qualified Data.Aeson.Types                        as Json
-import           Data.Foldable                           (asum)
-import           Data.List                               (nub, sort, sortOn)
-import           Data.Map.Strict                         (Map)
-import qualified Data.Map.Strict                         as Map
-import           Data.String                             (unwords)
-import           Data.String.Conversions                 (cs)
-import           Data.Text                               (Text)
-import           Data.Tree                               (Tree (Node))
-import           Network.Haskoin.Address
+import qualified Data.Aeson.Types                    as Json
+import qualified Data.ByteString.Char8               as C8
+import           Data.Foldable                       (asum)
+import           Data.List                           (isPrefixOf, nub, sort)
+import           Data.Map.Strict                     (Map)
+import qualified Data.Map.Strict                     as Map
+import           Data.Maybe                          (fromMaybe)
+import           Data.String                         (unwords)
+import           Data.String.Conversions             (cs)
+import           Data.Text                           (Text)
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
-import           Network.Haskoin.Transaction
-import           Network.Haskoin.Util                    (dropFieldLabel)
+import           Network.Haskoin.Util                (dropFieldLabel)
+import           Network.Haskoin.Wallet.Commands
+import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.Entropy
-import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Signing
+import           Network.Haskoin.Wallet.Util
+import           Numeric.Natural
 import           Options.Applicative
-import           Options.Applicative.Help.Pretty         hiding ((</>))
-import qualified System.Console.Haskeline                as Haskeline
-import qualified System.Directory                        as D
-
-data DocStructure a = DocStructure
-    { docStructureNetwork :: !Text
-    , docStructurePayload :: !a
-    } deriving (Eq, Show)
-
-$(deriveJSON (dropFieldLabel 12) ''DocStructure)
-
-{- Options -}
-
-diceOption :: Parser Bool
-diceOption =
-    switch $
-    mconcat
-        [ short 'd'
-        , long "dice"
-        , help "Provide additional entropy using 6-sided dice."
-        , showDefault
-        ]
-
-entropyOption :: Parser (CountOf Word8)
-entropyOption =
-    option (maybeReader f) $
-    mconcat
-        [ short 'e'
-        , long "entropy"
-        , help
-              "Amount of entropy to use in bytes. Valid values are [16,20..32]."
-        , metavar "INT"
-        , value 16
-        , showDefaultWith (toLString . show . fromCount)
-        , completeWith valid
-        ]
-  where
-    valid = ["16", "20", "24", "28", "32"]
-    f s
-        | s `elem` valid = fromIntegral <$> readNatural (fromLString s)
-        | otherwise = Nothing
-
-derivationOption :: Parser Natural
-derivationOption =
-    option (maybeReader $ readNatural . fromLString) $
-    mconcat
-        [ short 'd'
-        , long "derivation"
-        , help "Specify a different bip44 account derivation."
-        , metavar "INT"
-        , value 0
-        , showDefault
-        ]
-
-networkOption :: Parser Network
-networkOption =
-    option (eitherReader (f . netByName)) $
-    mconcat
-        [ short 'n'
-        , long "network"
-        , help "Specify which coin network to use."
-        , metavar "TEXT"
-        , value btc
-        , showDefault
-        , completeWith (getNetworkName <$> allNets)
-        ]
-  where
-    f :: Maybe Network -> Either LString Network
-    f Nothing =
-        Left $
-        unwords $
-        "Invalid network name. Select one of the following:" :
-        (getNetworkName <$> allNets)
-    f (Just res) = Right res
-
-accountOption :: Parser String
-accountOption =
-    option str $
-    mconcat
-        [ short 'a'
-        , long "account"
-        , help "Specify a different account to use for this command."
-        , metavar "TEXT"
-        , value "main"
-        , showDefault
-        , completer (mkCompleter accountCompleter)
-        ]
-  where
-    accountCompleter :: LString -> IO [LString]
-    accountCompleter pref = do
-        keys <- mconcat <$> forM allNets ((Map.keys <$>) . readAccountsFile)
-        return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
-
-filepathArgument :: Parser FilePath
-filepathArgument =
-    argument str $
-    mconcat
-        [ help "Specify a filename"
-        , metavar "FILENAME"
-        , action "file"
-        ]
-
-{--
-
-cntOpt :: Option Natural
-cntOpt =
-    option
-        'c'
-        "count"
-        ["10"]
-        5
-        (fromIntegral <$> Argument.natural)
-        "Number of addresses to display."
-
-feeOpt :: Option Natural
-feeOpt =
-    option
-        'f'
-        "fee"
-        ["50"]
-        200
-        (fromIntegral <$> Argument.natural)
-        "Fee to pay in sat/bytes"
-
-dustOpt :: Option Natural
-dustOpt =
-    option
-        'd'
-        "dust"
-        ["8000"]
-        5430
-        (fromIntegral <$> Argument.natural)
-        "Smallest allowed satoshi value for change outputs."
-
-unitOpt :: Option String
-unitOpt =
-    option
-        'u'
-        "unit"
-        ["bitcoin", "bit", "satoshi"]
-        "bitcoin"
-        (fromLString <$> Argument.string)
-        "Specify the unit for displayed amounts."
-
-verboseOpt :: Option Bool
-verboseOpt =
-    option
-        'v'
-        "verbose"
-        ["true"]
-        False
-        Argument.boolean
-        "Produce a more detailed output for this command."
-
-parseUnit :: String -> AmountUnit
-parseUnit unit =
-    case unit of
-        "bitcoin" -> UnitBitcoin
-        "bit" -> UnitBit
-        "satoshi" -> UnitSatoshi
-        _ ->
-            exitCustomError $
-            vcat
-                [ formatError "Invalid unit value. Choose one of:"
-                , indent 4 $
-                  vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
-                ]
-
---}
+import           Options.Applicative.Help.Pretty     hiding ((</>))
+import qualified System.Console.Haskeline            as Haskeline
+import qualified System.Directory                    as D
+import           System.IO                           (IOMode (..), withFile)
 
 networkHeaderDoc :: Network -> Doc
 networkHeaderDoc net =
     "---" <+> networkDoc (text $ getNetworkName net) <+> "---"
 
-{- Commands -}
-
 clientMain :: IO ()
-clientMain = join $ customExecParser p opts
-  where
-    opts =
-        info (commandParser <**> helper) $
-        mconcat
-            [ fullDesc
-            , progDesc "Lightweight Bitcoin and Bitcoin Cash Wallet."
-            ]
-    p = prefs showHelpOnEmpty
+clientMain = do
+    cmd <- customExecParser (prefs showHelpOnEmpty) programParser
+    res <- commandResponse cmd
+    jsonPrinter res
 
-commandParser :: Parser (IO ())
-commandParser =
-    asum
-        [ hsubparser $
-            mconcat
-            [ commandGroup "Mnemonic and account management"
-            , mnemonicDef
-            , createaccDef
-            , importaccDef
-            ]
-        , hsubparser $
-            mconcat
-            [ commandGroup "Address management"
-            , hidden
-            ]
-        ]
-
-mnemonicDef :: Mod CommandFields (IO ())
-mnemonicDef = command "mnemonic" $
-    info (mnemonic <$> diceOption <*> entropyOption) $
-    mconcat
-        [ progDesc "Generate a mnemonic using your systems entropy"
-        , footer "Next commands: createacc, signtx"
-        ]
-
-mnemonic :: Bool -> CountOf Word8 -> IO ()
-mnemonic useDice ent = do
-    mnemE <-
-        if useDice
-            then genMnemonicDice ent =<< askDiceRolls
-            else genMnemonic ent
-    case right (second fromText) mnemE of
-        Right (orig, ms) ->
-            printDoc $
-            vcat
-                [ titleDoc "System Entropy Source"
-                , indent 4 $ filePathDoc (doc orig)
-                , titleDoc "Private Mnemonic"
-                , indent 4 $ mnemonicPrinter 4 (words ms)
-                ]
-        Left err -> exitError err
-  where
-    askDiceRolls =
-        askInputLine $
-        "Enter your " <> show (requiredRolls ent) <> " dice rolls: "
-
-mnemonicPrinter :: CountOf (Natural, String) -> [String] -> Doc
-mnemonicPrinter n ws =
-    vcat $
-    fmap (mconcat . fmap wordDoc) $ groupIn n $ zip ([1 ..] :: [Natural]) ws
-  where
-    wordDoc (i, w) =
-        mconcat
-            [keyDoc 4 $ doc (show i) <> ".", mnemonicDoc $ fill 10 (doc w)]
-
-createaccDef :: Mod CommandFields (IO ())
-createaccDef =
-    command "createacc" $
-    info (createacc <$> networkOption <*> derivationOption) $
-    mconcat
-        [ progDesc "Create a new account from a mnemonic"
-        , footer "Next command: importacc"
-        ]
-
-createacc :: Network -> Natural -> IO ()
-createacc net deriv = do
-    printDoc $ networkHeaderDoc net
-    xpub <- deriveXPubKey <$> askSigningKey net (fromIntegral deriv)
-    let fname = fromString $ "key-" <> toLString (xPubChecksum xpub)
-    path <- writeDoc net fname $ xPubExport xpub
-    printDoc $
-        vcat
-            [ titleDoc "Public Key"
-            , indent 4 $ pubKeyDoc $ textDoc $ xPubExport xpub
-            , titleDoc "Derivation"
-            , indent 4 $
-              derivationDoc $
-              doc $ show $ ParsedPrv $ toGeneric $ bip44Deriv net deriv
-            , titleDoc "Public Key File"
-            , indent 4 $ filePathDoc $ doc $ filePathToString path
-            ]
-
-importaccDef :: Mod CommandFields (IO ())
-importaccDef =
-    command "importacc" $
-    info (importacc <$> networkOption <*> filepathArgument) $
-    mconcat
-        [ progDesc "Import an account file into the wallet"
-        , footer "Next command: receive"
-        ]
-
-importacc :: Network -> FilePath -> IO ()
-importacc net fp = do
-    printDoc $ networkHeaderDoc net
-    xpub <- readDoc net fp (xPubFromJSON net)
-    let store =
-            AccountStore
-                xpub
-                0
-                0
-                (bip44Deriv net $ fromIntegral $ xPubChild xpub)
-    name <- newAccountStore net store
-    printDoc $
-        vcat
-            [ titleDoc "New Account Created"
-            , indent 4 $
-              vcat
-                  [ (keyDoc 13 "Name:") <> accountDoc (doc name)
-                  , (keyDoc 13 "Derivation:") <>
-                    derivationDoc
-                        (doc $
-                         show $ ParsedPrv $ toGeneric $ accountStoreDeriv store)
-                  ]
-            ]
-
+jsonPrinter :: Response -> IO ()
+jsonPrinter = C8.putStrLn . encodeJsonPretty
 
 {--
 
@@ -670,98 +385,3 @@ transactions =
 
 --}
 
-{- Command Line Helpers -}
-
-writeDoc :: Json.ToJSON a => Network -> FileName -> a -> IO FilePath
-writeDoc net fileName dat = do
-    dir <- fromString <$> D.getUserDocumentsDirectory
-    let path = dir </> (fromString network <> "-" <> fileName <> ".json")
-        val = encodeJsonPretty $ DocStructure (fromString network) dat
-    withFile path WriteMode (`hPut` (val <> stringToBytes "\n"))
-    return path
-  where
-    network = getNetworkName net
-
-readDoc :: Network -> FilePath -> (Json.Value -> Json.Parser a) -> IO a
-readDoc net fileName parser = do
-    bytes <- readFile fileName
-    let m = fromMaybe err $ decodeJson bytes :: Map Text Json.Value
-    case m Map.!? toText "network" of
-        Just (Json.String fileNet) ->
-            if fileNet == fromString (getNetworkName net)
-                then case decodeJson bytes of
-                         Just (DocStructure _ val) ->
-                             maybe err return $ Json.parseMaybe parser val
-                         _ -> err
-                else badNetErr $ fromText fileNet
-        _ -> err
-  where
-    err = exitError $ "Could not read file " <> filePathToString fileName
-    badNetErr fileNet =
-        exitError $
-        "Bad network. This file has to be used on the network: " <> fileNet
-
-withAccountStore ::
-       Network -> String -> ((String, AccountStore) -> IO ()) -> IO ()
-withAccountStore net name f
-    | null name = do
-        accMap <- readAccountsFile net
-        case Map.assocs accMap of
-            [val] -> f (first fromText val)
-            _ ->
-                case Map.lookup "main" accMap of
-                    Just val -> f ("main", val)
-                    _        -> err $ fromText <$> Map.keys accMap
-    | otherwise = do
-        accM <- getAccountStore net name
-        case accM of
-            Just acc -> f (name, acc)
-            _ -> err . fmap fromText . Map.keys =<< readAccountsFile net
-  where
-    err :: [String] -> IO ()
-    err [] = exitError "No accounts have been created"
-    err keys =
-        exitCustomError $
-        vcat
-            [ errorDoc
-                  "Select one of the following accounts with -a or --account"
-            , indent 4 $ vcat $ fmap (accountDoc . doc) keys
-            ]
-
-askInputLineHidden :: String -> IO String
-askInputLineHidden msg = do
-    inputM <-
-        Haskeline.runInputT Haskeline.defaultSettings $
-        Haskeline.getPassword (Just '*') (toLString msg)
-    maybe
-        (exitError "No action due to EOF")
-        (return . fromLString)
-        inputM
-
-askInputLine :: String -> IO String
-askInputLine msg = do
-    inputM <-
-        Haskeline.runInputT Haskeline.defaultSettings $
-        Haskeline.getInputLine (toLString msg)
-    maybe
-        (exitError "No action due to EOF")
-        (return . fromLString)
-        inputM
-
-askSigningKey :: Network -> Natural -> IO XPrvKey
-askSigningKey net acc = do
-    str <- askInputLineHidden "Enter your private mnemonic: "
-    case mnemonicToSeed "" (toText str) of
-        Right _ -> do
-            passStr <- askPassword
-            either exitError return $ signingKey net passStr str acc
-        Left err -> exitError $ fromLString err
-
-askPassword :: IO String
-askPassword = do
-    pass <- askInputLineHidden "Mnemonic password or leave empty: "
-    unless (null pass) $ do
-        pass2 <- askInputLineHidden "Repeat your mnemonic password: "
-        when (pass /= pass2) $
-            exitError "The passwords did not match"
-    return pass
