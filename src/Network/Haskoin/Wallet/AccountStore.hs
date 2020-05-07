@@ -1,14 +1,17 @@
+{-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.AccountStore where
 
 import           Control.Arrow                   (first)
 import           Control.Monad
+import           Control.Monad.Except
 import qualified Data.Aeson                      as Json
 import qualified Data.Aeson.Encode.Pretty        as Pretty
 import           Data.Aeson.Types
-import qualified Data.ByteString.Lazy            as BL
 import qualified Data.ByteString.Char8           as C8
+import qualified Data.ByteString.Lazy            as BL
 import qualified Data.HashMap.Strict             as HMap
+import           Data.List                       (nub)
 import           Data.Map.Strict                 (Map)
 import qualified Data.Map.Strict                 as Map
 import qualified Data.Serialize                  as S
@@ -19,23 +22,23 @@ import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Util
-import           Network.Haskoin.Wallet.Doc
+import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty hiding ((</>))
 import qualified System.Directory                as D
 
-type AccountsMap = Map Text AccountStore
+type AccountMap = Map Text AccountStore
 
-accountsMapFromJSON :: Network -> Value -> Parser AccountsMap
-accountsMapFromJSON net =
+accountMapFromJSON :: Network -> Value -> Parser AccountMap
+accountMapFromJSON net =
     withObject "accountsfile" $ \o -> do
         res <- forM (HMap.toList o) $ \(k, v) -> do
             a <- accountStoreFromJSON net v
             return (k, a)
         return $ Map.fromList res
 
-accountsMapToJSON :: Network -> AccountsMap -> Value
-accountsMapToJSON net accMap =
+accountMapToJSON :: Network -> AccountMap -> Value
+accountMapToJSON net accMap =
     object $ Map.assocs $ Map.map (accountStoreToJSON net) accMap
 
 data AccountStore = AccountStore
@@ -69,104 +72,95 @@ intDeriv = Deriv :/ 1
 (</>) :: String -> String -> String
 a </> b = a <> "/" <> b
 
-accountsFilePath :: Network -> IO FilePath
-accountsFilePath net = do
+accountMapFilePath :: Network -> IO FilePath
+accountMapFilePath net = do
     hwDir <- D.getAppUserDataDirectory "hw"
     let dir = hwDir </> getNetworkName net
     D.createDirectoryIfMissing True dir
     return $ dir </> "accounts.json"
 
-readAccountsMap :: Network -> IO AccountsMap
-readAccountsMap net = do
-    fp <- accountsFilePath net
-    exists <- D.doesFileExist fp
-    unless exists $ writeAccountsMap net Map.empty
-    bytes <- C8.readFile fp
+readAccountMap :: Network -> ExceptT String IO AccountMap
+readAccountMap net = do
+    fp <- liftIO $ accountMapFilePath net
+    exists <- liftIO $ D.doesFileExist fp
+    unless exists $ writeAccountMap net Map.empty
+    bytes <- liftIO $ C8.readFile fp
     maybe err return $
-        parseMaybe (accountsMapFromJSON net) =<< Json.decodeStrict bytes
+        parseMaybe (accountMapFromJSON net) =<< Json.decodeStrict bytes
   where
-    err = exitError "Could not decode accounts file"
+    err = throwError "Could not decode accounts file"
 
-writeAccountsMap :: Network -> AccountsMap -> IO ()
-writeAccountsMap net dat = do
-    file <- accountsFilePath net
-    C8.writeFile file $ encPretty $ accountsMapToJSON net dat
+writeAccountMap :: Network -> AccountMap -> ExceptT String IO ()
+writeAccountMap net accMap = do
+    liftEither $ validAccountMap accMap
+    liftIO $ do
+        file <- accountMapFilePath net
+        C8.writeFile file $ encodeJsonPrettyLn $ accountMapToJSON net accMap
+
+validAccountMap :: AccountMap -> Either String ()
+validAccountMap accMap
+    | (length $ nub pubKeys) /= length pubKeys =
+      Left "Duplicate account public keys"
+    | otherwise = return ()
   where
-    encPretty =
-        BL.toStrict .
-        Pretty.encodePretty'
-            Pretty.defConfig
-                { Pretty.confIndent = Pretty.Spaces 2
-                , Pretty.confTrailingNewline = True
-                }
+    pubKeys = accountStoreXPubKey <$> Map.elems accMap
 
-newAccountStore :: Network -> AccountStore -> IO Text
-newAccountStore net store = do
-    accMap <- readAccountsMap net
-    let xpubs = accountStoreXPubKey <$> Map.elems accMap
-        key
-            | Map.null accMap = "main"
-            | otherwise = xPubChecksum $ accountStoreXPubKey store
-    when (accountStoreXPubKey store `elem` xpubs) $
-        exitError "This public key is already being watched"
-    let f Nothing = Just store
-        f _       = exitError "The account name already exists"
-    writeAccountsMap net $ Map.alter f key accMap
-    return key
+accountMapKeys :: Network -> ExceptT String IO [Text]
+accountMapKeys net = Map.keys <$> readAccountMap net
 
-getAccountStore :: Network -> Text -> IO (Maybe AccountStore)
-getAccountStore net key = Map.lookup key <$> readAccountsMap net
+lookupAccountStore :: Network -> Text -> ExceptT String IO (Maybe AccountStore)
+lookupAccountStore net key = Map.lookup key <$> readAccountMap net
 
-updateAccountStore :: Network -> Text -> (AccountStore -> AccountStore) -> IO ()
-updateAccountStore net key f = do
-    accMap <- readAccountsMap net
-    let g Nothing  = exitError $
-            "The account " <> Text.unpack key <> " does not exist"
-        g (Just s) = Just $ f s
-    writeAccountsMap net $ Map.alter g key accMap
+withAccountStore ::
+       Network
+    -> Text
+    -> (AccountStore -> ExceptT String IO ())
+    -> ExceptT String IO ()
+withAccountStore net key f = do
+    storeM <- lookupAccountStore net key
+    case storeM of
+        Just store -> f store
+        _ -> throwError "Account does not exist"
 
-renameAccountStore :: Network -> Text -> Text -> IO ()
+alterAccountStore ::
+       Network
+    -> Text
+    -> (Maybe AccountStore -> Either String (Maybe AccountStore))
+    -> ExceptT String IO ()
+alterAccountStore net key f = do
+    accMap <- readAccountMap net
+    accM <- liftEither $ f (key `Map.lookup` accMap)
+    let newMap = Map.alter (const accM) key accMap
+    when (accMap /= newMap) $ writeAccountMap net newMap
+
+insertAccountStore :: Network -> Text -> AccountStore -> ExceptT String IO ()
+insertAccountStore net key store = do
+    alterAccountStore net key $ \case
+        Nothing -> return $ Just store
+        _ -> Left "The account name already exists"
+
+adjustAccountStore ::
+       Network -> Text -> (AccountStore -> AccountStore) -> ExceptT String IO ()
+adjustAccountStore net key f =
+    alterAccountStore net key $ \case
+        Nothing ->
+            Left $ "The account " <> Text.unpack key <> " does not exist"
+        Just store -> return $ Just $ f store
+
+renameAccountStore :: Network -> Text -> Text -> ExceptT String IO ()
 renameAccountStore net oldName newName
     | oldName == newName =
-        exitError "Both old and new names are the same"
+        throwError "Old and new names are the same"
     | otherwise = do
-        accMap <- readAccountsMap net
+        accMap <- readAccountMap net
         case Map.lookup oldName accMap of
             Just store -> do
                 when (Map.member newName accMap) $
-                    exitError "New account name already exists"
-                writeAccountsMap net $
+                    throwError "New account name already exists"
+                writeAccountMap net $
                     Map.insert newName store $
                     Map.delete oldName accMap
-            _ -> exitError "Old account does not exist"
-
-withAccountStore ::
-       Network -> String -> ((String, AccountStore) -> IO ()) -> IO ()
-withAccountStore net name f
-    | null name = do
-        accMap <- readAccountsMap net
-        case Map.assocs accMap of
-            [val] -> f (first cs val)
-            _ ->
-                case Map.lookup "main" accMap of
-                    Just val -> f ("main", val)
-                    _ -> err $ cs <$> Map.keys accMap
-    | otherwise = do
-        accM <- getAccountStore net (cs name)
-        case accM of
-            Just acc -> f (name, acc)
-            _ -> err . fmap cs . Map.keys =<< readAccountsMap net
-  where
-    err :: [String] -> IO ()
-    err [] = exitError "No accounts have been created"
-    err keys =
-        exitCustomError $
-        vcat
-            [ errorDoc
-                  "Select one of the following accounts with -a or --account"
-            , indent 4 $ vcat $ fmap (accountDoc . text) keys
-            ]
-
+            _ -> throwError "Account does not exist"
 
 xPubChecksum :: XPubKey -> Text
 xPubChecksum = encodeHex . S.encode . xPubFP

@@ -55,6 +55,7 @@ library:
   - http-types
   - lens
   - lens-aeson
+  - mtl
   - optparse-applicative
   - pretty
   - string-conversions

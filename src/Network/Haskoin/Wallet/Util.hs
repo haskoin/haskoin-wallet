@@ -20,36 +20,14 @@ encodeJsonPretty =
     BL.toStrict .
     Pretty.encodePretty' Pretty.defConfig {Pretty.confIndent = Pretty.Spaces 2}
 
-encodeJson :: JSON.ToJSON a => a -> BS.ByteString
-encodeJson = BL.toStrict . JSON.encode
-
-decodeJson :: JSON.FromJSON a => BS.ByteString -> Maybe a
-decodeJson = JSON.decode . BL.fromStrict
-
-encodeHex :: BS.ByteString -> BS.ByteString
-encodeHex = B16.encode
-
-decodeHex :: BS.ByteString -> Maybe (BS.ByteString)
-decodeHex bs = do
-    guard (BS.null rest)
-    return res
-  where
-    (res, rest) = B16.decode bs
-
-encodeHexStr :: BS.ByteString -> String
-encodeHexStr = cs . encodeHex
-
-encodeHexText :: BS.ByteString -> Text
-encodeHexText = cs . encodeHex
-
-decodeHexStr :: String -> Maybe (BS.ByteString)
-decodeHexStr = decodeHex . cs
-
-decodeHexText :: Text -> Maybe (BS.ByteString)
-decodeHexText = decodeHex . cs
-
-toStrictBS :: BL.ByteString -> BS.ByteString
-toStrictBS = BL.toStrict
+encodeJsonPrettyLn :: JSON.ToJSON a => a -> BS.ByteString
+encodeJsonPrettyLn =
+    BL.toStrict .
+    Pretty.encodePretty'
+        Pretty.defConfig
+            { Pretty.confIndent = Pretty.Spaces 2
+            , Pretty.confTrailingNewline = True
+            }
 
 {- Haskoin helper functions -}
 

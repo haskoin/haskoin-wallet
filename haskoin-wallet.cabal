@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 540ea2b18713f5087e2bedde64b9b48df5f70a2f51ab0ce25a69e27d60b75d9d
+-- hash: e4d45c9c23a984bc68fa5fe1539f92c94c14a8794cc64ebd508c0c570546ed31
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -51,6 +51,7 @@ library
     , http-types
     , lens
     , lens-aeson
+    , mtl
     , optparse-applicative
     , pretty
     , string-conversions

@@ -2,19 +2,21 @@
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Entropy where
 
-import           Control.Monad                  (when, (>=>))
+import           Control.Monad               (when, (>=>))
+import           Control.Monad.Except
 import           Data.Bits
-import qualified Data.ByteString                as BS
+import qualified Data.ByteString             as BS
+import           Data.Either                 (either)
 import           Data.List
 import           Data.Maybe
-import           Data.Text                      (Text)
-import           Network.Haskoin.Keys           (Mnemonic, toMnemonic)
+import           Data.Text                   (Text)
+import           Network.Haskoin.Keys        (Mnemonic, toMnemonic)
 import           Network.Haskoin.Util
 import           Network.Haskoin.Wallet.Util
-import           Numeric                        (readInt)
+import           Numeric                     (readInt)
 import           Numeric.Natural
-import qualified System.Directory               as D
-import           System.Entropy                 (getEntropy)
+import qualified System.Directory            as D
+import           System.Entropy              (getEntropy)
 import           System.IO
 
 {- Base 6 decoding for dice entropy -}
@@ -34,7 +36,7 @@ decodeBase6 str
     | otherwise =
         case readInt 6 (isJust . b6') (fromInteger . toInteger . f) str of
             ((i, []):_) -> Just $ integerToBS i
-            _           -> Nothing
+            _ -> Nothing
   where
     f = fromMaybe (error "Could not decode base6") . b6'
 
@@ -56,7 +58,7 @@ diceToEntropy ent rolls
         case fromIntegral ent `safeSubtract` BS.length bytes of
             Just n -> return $ BS.replicate n 0x00 <> bytes
             -- This should probably never happend
-            _ -> Left "Invalid entropy length"
+            _      -> Left "Invalid entropy length"
 
 -- The number of dice rolls required to reach a given amount of entropy
 -- Example: 32 bytes of entropy require 99 dice rolls (255.9 bits)
@@ -65,27 +67,28 @@ requiredRolls ent = floor $ fromIntegral ent * log2o6
   where
     log2o6 = 3.09482245788 :: Double -- 8 * log 2 / log 6
 
-genMnemonic :: Natural -> IO (Either String (Text, Mnemonic))
+genMnemonic :: Natural -> ExceptT String IO (Text, Mnemonic)
 genMnemonic reqEnt = genMnemonicGen reqEnt Nothing
 
-genMnemonicDice :: Natural -> String -> IO (Either String (Text, Mnemonic))
+genMnemonicDice :: Natural -> String -> ExceptT String IO (Text, Mnemonic)
 genMnemonicDice reqEnt rolls = genMnemonicGen reqEnt (Just rolls)
 
-genMnemonicGen :: Natural -> Maybe String -> IO (Either String (Text, Mnemonic))
+genMnemonicGen :: Natural -> Maybe String -> ExceptT String IO (Text, Mnemonic)
 genMnemonicGen reqEnt rollsM
     | reqEnt `elem` [16,20 .. 32] = do
-        (entOrig, sysEnt) <- systemEntropy reqEnt
-        return $ do
-            ent <-
-                maybe
-                    (Right sysEnt)
-                    (diceToEntropy reqEnt >=> mixEntropy sysEnt)
-                    rollsM
-            when (BS.length ent /= (fromIntegral reqEnt)) $
-                Left "Something went wrong with the entropy size"
-            mnem <- toMnemonic ent
-            return (entOrig, mnem)
-    | otherwise = return $ Left "The entropy value can only be in [16,20..32]"
+        (origEnt, sysEnt) <- liftIO $ systemEntropy reqEnt
+        ent <-
+            liftEither $
+            case rollsM of
+                Just rolls -> do
+                    diceEnt <- diceToEntropy reqEnt rolls
+                    mixEntropy sysEnt diceEnt
+                _ -> return sysEnt
+        when (BS.length ent /= (fromIntegral reqEnt)) $
+            throwError "Something went wrong with the entropy size"
+        mnem <- liftEither $ toMnemonic ent
+        return (origEnt, mnem)
+    | otherwise = throwError "The entropy value can only be in [16,20..32]"
 
 systemEntropy :: Natural -> IO (Text, BS.ByteString)
 systemEntropy bytes = do

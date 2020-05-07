@@ -4,7 +4,9 @@
 module Network.Haskoin.Wallet.Parser where
 
 import           Control.Monad                       (forM, join, unless, when)
+import           Control.Monad.Except
 import           Data.Aeson.TH
+import           Data.Either                         (rights)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
 import           Data.Map.Strict                     (Map)
@@ -26,7 +28,7 @@ import           Options.Applicative.Help.Pretty     hiding ((</>))
 data Command
     = CommandMnemonic Bool Natural
     | CommandCreateAcc Network Natural
-    | CommandImportAcc Network FilePath
+    | CommandImportAcc Network FilePath Text
 
 programParser :: ParserInfo Command
 programParser =
@@ -54,7 +56,7 @@ commandParser =
         ]
 
 mnemonicParser :: ParserInfo Command
-mnemonicParser = 
+mnemonicParser =
     info (CommandMnemonic <$> diceOption <*> entropyOption) $
     mconcat
         [ progDesc "Generate a mnemonic using your systems entropy"
@@ -71,7 +73,9 @@ createAccParser =
 
 importAccParser :: ParserInfo Command
 importAccParser =
-    info (CommandImportAcc <$> networkOption <*> filepathArgument) $
+    info
+        (CommandImportAcc <$> networkOption <*> filepathArgument <*>
+         nameArgument) $
     mconcat
         [ progDesc "Import an account file into the wallet"
         , footer "Next command: receive"
@@ -156,7 +160,8 @@ accountOption =
   where
     accountCompleter :: String -> IO [String]
     accountCompleter pref = do
-        keys <- mconcat <$> forM allNets ((Map.keys <$>) . readAccountsMap)
+        keysE <- forM allNets (runExceptT . accountMapKeys)
+        let keys = mconcat $ rights keysE
         return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
 
 filepathArgument :: Parser FilePath
@@ -166,6 +171,14 @@ filepathArgument =
         [ help "Specify a filename"
         , metavar "FILENAME"
         , action "file"
+        ]
+
+nameArgument :: Parser Text
+nameArgument =
+    argument str $
+    mconcat
+        [ help "Specify an account name"
+        , metavar "TEXT"
         ]
 
 {--

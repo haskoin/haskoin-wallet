@@ -5,6 +5,7 @@
 module Network.Haskoin.Wallet.Commands where
 
 import           Control.Monad                       (forM, join, unless, when)
+import           Control.Monad.Except
 import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
 import qualified Data.Aeson.Types                    as Json
@@ -37,19 +38,20 @@ import           System.IO                           (IOMode (..), withFile)
 
 data Response
     = ResponseError
-      { responseError         :: Text }
+      { responseError         :: Text
+      }
     | ResponseMnemonic
       { responseEntropySource :: Text
       , responseWords         :: [Text]
       }
     | ResponseCreateAcc
-      { responsePubKey     :: Text
-      , responseDerivation :: Text
-      , responsePubKeyFile :: Text
+      { responsePubKey        :: Text
+      , responseDerivation    :: Text
+      , responsePubKeyFile    :: Text
       }
     | ResponseImportAcc
-      { responseName       :: Text
-      , responseDerivation :: Text
+      { responseName          :: Text
+      , responseDerivation    :: Text
       }
     deriving (Eq, Show)
 
@@ -62,65 +64,70 @@ data DocStructure a = DocStructure
 
 $(deriveJSON (dropFieldLabel 12) ''DocStructure)
 
+catchResponseError :: ExceptT String IO Response -> IO Response
+catchResponseError m = do
+    resE <- runExceptT m
+    case resE of
+        Left err  -> return $ ResponseError $ cs err
+        Right res -> return res
+
 commandResponse :: Command -> IO Response
 commandResponse = \case
     CommandMnemonic d e -> mnemonic d e
     CommandCreateAcc n d -> createAcc n d
+    CommandImportAcc n f k -> importAcc n f k
 
 mnemonic :: Bool -> Natural -> IO Response
-mnemonic useDice ent = do
-    mnemE <-
-        if useDice
-            then genMnemonicDice ent =<< askDiceRolls
-            else genMnemonic ent
-    return $ case mnemE of
-        Right (orig, ms) ->
-            ResponseMnemonic orig (cs <$> words (cs ms))
-        Left err ->
-            ResponseError $ cs err
-  where
-    askDiceRolls =
-        askInputLine $
+mnemonic useDice ent =
+    catchResponseError $ do
+        (orig, ms) <-
+            if useDice
+                then genMnemonicDice ent =<< askDiceRolls ent
+                else genMnemonic ent
+        return $ ResponseMnemonic orig (cs <$> words (cs ms))
+
+askDiceRolls :: Natural -> ExceptT String IO String
+askDiceRolls ent = do
+    roll1 <- liftIO $ askInputLineHidden $
         "Enter your " <> show (requiredRolls ent) <> " dice rolls: "
+    roll2 <- liftIO $ askInputLineHidden "Enter your dice rolls again:"
+    unless (roll1 == roll2) $
+        throwError "Dice rolls do not match"
+    return roll1
 
 createAcc :: Network -> Natural -> IO Response
-createAcc net deriv = do
-    prvKeyE <- askSigningKey net (fromIntegral deriv)
-    case prvKeyE of
-        Right prvKey -> do
-            let xpub = deriveXPubKey prvKey
-                fname = "key-" <> xPubChecksum xpub
-            path <- writeDoc net (cs fname) $ xPubExport net xpub
-            return $
-                ResponseCreateAcc
-                    { responsePubKey = xPubExport net xpub
-                    , responseDerivation =
-                          cs $
-                          show $ ParsedPrv $ toGeneric $ bip44Deriv net deriv
-                    , responsePubKeyFile = cs path
-                    }
-        Left err -> return $ ResponseError $ cs err
+createAcc net deriv =
+    catchResponseError $ do
+        prvKey <- askSigningKey net deriv
+        let xpub = deriveXPubKey prvKey
+            fname = "key-" <> xPubChecksum xpub
+        path <- liftIO $ writeDoc net (cs fname) $ xPubExport net xpub
+        return $
+            ResponseCreateAcc
+                { responsePubKey = xPubExport net xpub
+                , responseDerivation =
+                      cs $ show $ ParsedPrv $ toGeneric $ bip44Deriv net deriv
+                , responsePubKeyFile = cs path
+                }
 
-importacc :: Network -> FilePath -> IO Response
-importacc net fp = do
-    xpubE <- readDoc net fp (xPubFromJSON net)
-    case xpubE of
-        Right xpub -> do
-            let store =
-                    AccountStore
-                        xpub
-                        0
-                        0
-                        (bip44Deriv net $ fromIntegral $ xPubChild xpub)
-            name <- newAccountStore net store
-            return $
-                ResponseImportAcc
-                    { responseName = name
-                    , responseDerivation =
-                          cs $
-                          show $ ParsedPrv $ toGeneric $ accountStoreDeriv store
-                    }
-        Left err -> return $ ResponseError $ cs err
+importAcc :: Network -> FilePath -> Text -> IO Response
+importAcc net fp name =
+    catchResponseError $ do
+        xpub <- readDoc net fp (xPubFromJSON net)
+        let store =
+                AccountStore
+                    xpub
+                    0
+                    0
+                    (bip44Deriv net $ fromIntegral $ xPubChild xpub)
+        insertAccountStore net name store
+        return $
+            ResponseImportAcc
+                { responseName = name
+                , responseDerivation =
+                      cs $
+                      show $ ParsedPrv $ toGeneric $ accountStoreDeriv store
+                }
 
 {- File IO Helpers -}
 
@@ -138,18 +145,15 @@ readDoc ::
        Network
     -> FilePath
     -> (Json.Value -> Json.Parser a)
-    -> IO (Either String a)
+    -> ExceptT String IO a
 readDoc net fileName parser = do
-    bytes <- C8.readFile fileName
-    return $ do
-        DocStructure fileNet val <- maybeToEither err $ decodeJson bytes
-        if cs fileNet == getNetworkName net
-            then maybeToEither err $ Json.parseMaybe parser val
-            else Left $ badNetErr $ cs fileNet
-  where
-    err = "Could not read file " <> fileName
-    badNetErr fileNet =
-        "Bad network. This file has to be used on the network: " <> fileNet
+    bytes <- liftIO $ C8.readFile fileName
+    DocStructure fileNet val <- liftEither $ Json.eitherDecodeStrict' bytes
+    if cs fileNet == getNetworkName net
+        then liftEither $ Json.parseEither parser val
+        else throwError $
+             "Bad network. This file has to be used on the network: " <>
+             cs fileNet
 
 {- Haskeline Helpers -}
 
@@ -173,24 +177,22 @@ askInputLine msg = do
         return
         inputM
 
-askSigningKey :: Network -> Natural -> IO (Either String XPrvKey)
+askSigningKey :: Network -> Natural -> ExceptT String IO XPrvKey
 askSigningKey net acc = do
-    mnm <- askInputLineHidden "Enter your private mnemonic: "
-    case mnemonicToSeed "" (cs mnm) of
-        Right _ -> do
-            passStrE <- askPassword
-            return $ do
-                passStr <- passStrE
-                signingKey net (cs passStr) (cs mnm) acc
-        Left err -> return $ Left err
+    mnm <- liftIO $ askInputLineHidden "Enter your private mnemonic: "
+    -- We validate the mnemonic before asking the password
+    _ <- liftEither $ mnemonicToSeed "" (cs mnm)
+    passStr <- askPassword
+    liftEither $ signingKey net (cs passStr) (cs mnm) acc
 
-askPassword :: IO (Either String String)
+askPassword :: ExceptT String IO String
 askPassword = do
-    pass <- askInputLineHidden "Mnemonic password or leave empty: "
+    pass <- liftIO $ askInputLineHidden "Mnemonic password or leave empty: "
     if null pass
-        then return $ Right pass
+        then return pass
         else do
-            pass2 <- askInputLineHidden "Repeat your mnemonic password: "
-            return $ if pass == pass2
-               then Right pass
-               else Left "The passwords did not match"
+            pass2 <-
+                liftIO $ askInputLineHidden "Repeat your mnemonic password: "
+            if pass == pass2
+                then return pass
+                else throwError "The passwords did not match"
