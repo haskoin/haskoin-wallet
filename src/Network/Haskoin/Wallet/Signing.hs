@@ -82,7 +82,7 @@ buildTxSignData net store rcpMap feeByte dust
             Left err -> return $ Left err
   where
     walletAddrMap =
-        Map.fromList $ allExtAddresses store <> allIntAddresses store
+        Map.fromList $ extAddresses store <> intAddresses store
     (change, store') = nextIntAddress store
 
 buildWalletTx ::

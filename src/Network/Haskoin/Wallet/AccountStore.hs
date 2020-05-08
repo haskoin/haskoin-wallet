@@ -108,18 +108,19 @@ validAccountMap accMap
 accountMapKeys :: ExceptT String IO [Text]
 accountMapKeys = Map.keys <$> readAccountMap
 
-lookupAccountStore :: Text -> ExceptT String IO (Maybe AccountStore)
-lookupAccountStore key = Map.lookup key <$> readAccountMap
-
-withAccountStore ::
-       Text
-    -> (AccountStore -> ExceptT String IO ())
-    -> ExceptT String IO ()
-withAccountStore key f = do
-    storeM <- lookupAccountStore key
-    case storeM of
-        Just store -> f store
-        _          -> throwError "Account does not exist"
+getAccountStore :: Maybe Text -> ExceptT String IO AccountStore
+getAccountStore keyM = do
+    accMap <- readAccountMap
+    case keyM of
+        Nothing ->
+            case Map.elems accMap of
+                [store] -> return store
+                [] -> throwError "There are no accounts in the wallet"
+                _ -> throwError "Specify which account you want to use"
+        Just key -> 
+            case key `Map.lookup` accMap of
+                Just val -> return val
+                _ -> throwError $ "The account " <> cs key <> "does not exist"
 
 alterAccountStore ::
        Text
@@ -185,19 +186,19 @@ nextIntAddress store =
     nat = accountStoreInternal store
     idx = fromIntegral nat
 
-allExtAddresses :: AccountStore -> [(Address, SoftPath)]
-allExtAddresses store =
-    fmap (\(a,_,i) -> (a, extDeriv :/ i)) extAddrs
-  where
-    xpub     = accountStoreXPubKey store
-    extI     = fromIntegral $ accountStoreExternal store
-    extAddrs = take extI $ derivePathAddrs xpub extDeriv 0
+extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath)]
+extAddresses = addresses_ accountStoreExternal extDeriv
+intAddresses = addresses_ accountStoreInternal intDeriv
 
-allIntAddresses :: AccountStore -> [(Address, SoftPath)]
-allIntAddresses store =
-    fmap (\(a,_,i) -> (a, intDeriv :/ i)) intAddrs
+addresses_ ::
+       (AccountStore -> Natural)
+    -> SoftPath
+    -> AccountStore
+    -> [(Address, SoftPath)]
+addresses_ f deriv store =
+    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
   where
-    xpub     = accountStoreXPubKey store
-    intI     = fromIntegral $ accountStoreInternal store
-    intAddrs = take intI $ derivePathAddrs xpub intDeriv 0
+    xpub = accountStoreXPubKey store
+    idx = fromIntegral $ f store
+    addrs = take idx $ derivePathAddrs xpub deriv 0
 

@@ -1,12 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Strict            #-}
-{-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet.Parser where
 
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
 import           Data.Aeson.TH
-import           Data.Either                         (rights, either)
+import           Data.Either                         (either, rights)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
 import           Data.Map.Strict                     (Map)
@@ -31,17 +30,18 @@ data Command
     | CommandImportAcc FilePath Text
     | CommandRenameAcc Text Text
     | CommandAccounts
+    | CommandAddresses (Maybe Text) Natural
 
 programParser :: ParserInfo Command
 programParser =
     info (commandParser <**> helper) $
     mconcat
         [ fullDesc
-        , progDesc "Lightweight Bitcoin and Bitcoin Cash Wallet."
+        , progDesc "Lightweight Bitcoin and Bitcoin Cash Wallet"
         ]
 
 commandParser :: Parser Command
-commandParser =
+commandParser = 
     asum
         [ hsubparser $
             mconcat
@@ -55,7 +55,7 @@ commandParser =
         , hsubparser $
             mconcat
             [ commandGroup "Address management"
-            , hidden
+            , command "addresses" addressesParser
             ]
         ]
 
@@ -64,7 +64,7 @@ mnemonicParser =
     info (CommandMnemonic <$> diceOption <*> entropyOption) $
     mconcat
         [ progDesc "Generate a mnemonic using your systems entropy"
-        , footer "Next commands: createacc, signtx"
+        , footer "Next commands: createacc"
         ]
 
 createAccParser :: ParserInfo Command
@@ -96,6 +96,14 @@ accountsParser :: ParserInfo Command
 accountsParser =
     info (pure CommandAccounts) $ mconcat [progDesc "Return all accounts"]
 
+addressesParser :: ParserInfo Command
+addressesParser =
+    info
+        (CommandAddresses <$> accountOption <*>
+         countOption "Number of addresses to display") $
+    mconcat [progDesc "List the latest receiving addresses in the account"]
+
+
 {- Option Parsers -}
 
 textArg :: String -> Parser Text
@@ -103,7 +111,7 @@ textArg desc = argument str $ mconcat [help desc, metavar "TEXT"]
 
 filepathArgument :: Parser FilePath
 filepathArgument =
-    argument str $
+    strArgument $
     mconcat
         [ help "Specify a filename"
         , metavar "FILENAME"
@@ -116,7 +124,7 @@ diceOption =
     mconcat
         [ short 'd'
         , long "dice"
-        , help "Provide additional entropy using 6-sided dice."
+        , help "Provide additional entropy using 6-sided dice"
         , showDefault
         ]
 
@@ -127,7 +135,7 @@ entropyOption =
         [ short 'e'
         , long "entropy"
         , help
-              "Amount of entropy to use in bytes. Valid values are [16,20..32]."
+              "Amount of entropy to use in bytes. Valid values are [16,20..32]"
         , metavar "INT"
         , value 16
         , showDefault
@@ -145,7 +153,7 @@ derivationOption =
     mconcat
         [ short 'd'
         , long "derivation"
-        , help "Specify a different bip44 account derivation."
+        , help "Specify a different bip44 account derivation"
         , metavar "INT"
         , value 0
         , showDefault
@@ -157,7 +165,7 @@ networkOption =
     mconcat
         [ short 'n'
         , long "network"
-        , help "Specify which coin network to use."
+        , help "Specify which coin network to use"
         , metavar "TEXT"
         , value btc
         , showDefault
@@ -172,13 +180,14 @@ networkOption =
         (getNetworkName <$> allNets)
     f (Just res) = Right res
 
-accountOption :: Parser String
+accountOption :: Parser (Maybe Text)
 accountOption =
-    option str $
+    optional $
+    strOption $
     mconcat
         [ short 'a'
         , long "account"
-        , help "Specify the account to use for this command."
+        , help "Specify the account to use for this command"
         , metavar "TEXT"
         , completer (mkCompleter accountCompleter)
         ]
@@ -197,17 +206,19 @@ accountCompleter pref = do
     keys <- either (const []) id <$> runExceptT accountMapKeys
     return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
 
-{--
+countOption :: String -> Parser Natural
+countOption desc =
+    option (maybeReader $ readNatural . cs) $
+    mconcat
+        [ short 'c'
+        , long "count"
+        , help desc
+        , metavar "TEXT"
+        , value 5
+        , showDefault
+        ]
 
-cntOpt :: Option Natural
-cntOpt =
-    option
-        'c'
-        "count"
-        ["10"]
-        5
-        (fromIntegral <$> Argument.natural)
-        "Number of addresses to display."
+{--
 
 feeOpt :: Option Natural
 feeOpt =

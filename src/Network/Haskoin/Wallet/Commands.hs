@@ -4,6 +4,7 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet.Commands where
 
+import           Control.Arrow                       (first)
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
 import qualified Data.Aeson                          as Json
@@ -18,6 +19,7 @@ import           Data.Maybe                          (fromMaybe)
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
+import           Network.Haskoin.Address
 import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Util                (dropFieldLabel,
@@ -63,6 +65,10 @@ data Response
     | ResponseAccounts
       { responseAccounts :: AccountMap
       }
+    | ResponseAddresses
+      { responseAccount   :: AccountStore
+      , responseAddresses :: [(Text, SoftPath)]
+      }
     deriving (Eq, Show)
 
 $(deriveJSON (dropSumLabels 8 8 "type") ''Response)
@@ -81,6 +87,7 @@ commandResponse = \case
     CommandImportAcc f k -> importAcc f k
     CommandRenameAcc old new -> renameAcc old new
     CommandAccounts -> accounts
+    CommandAddresses accM c -> addresses accM c
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -131,6 +138,20 @@ renameAcc oldName newName =
 
 accounts :: IO Response
 accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
+
+addresses :: Maybe Text -> Natural -> IO Response
+addresses accM cnt =
+    catchResponseError $ do
+        store <- getAccountStore accM
+        let net = accountStoreNetwork store
+            addrs = lastList cnt $ extAddresses store
+        addrsRes <- liftEither $ mapM (f net) addrs
+        return $ ResponseAddresses store addrsRes
+  where
+    f :: Network -> (Address, SoftPath) -> Either String (Text, SoftPath)
+    f net (addr, path) = do
+        addrStr <- maybeToEither "Invalid Address" $ addrToString net addr
+        return (addrStr, path)
 
 {- Haskeline Helpers -}
 

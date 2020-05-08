@@ -15,6 +15,7 @@ import           Data.Text                (Text)
 import qualified Data.Text                as Text
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Util
+import           Numeric.Natural
 
 {- Data.Aeson Compatibility -}
 
@@ -33,6 +34,9 @@ encodeJsonPrettyLn =
             }
 
 {- Haskoin helper functions -}
+
+lastList :: Natural -> [a] -> [a]
+lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs
 
 xPubChecksum :: XPubKey -> Text
 xPubChecksum = encodeHex . S.encode . xPubFP
