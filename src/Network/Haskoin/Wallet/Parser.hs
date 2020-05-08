@@ -6,7 +6,7 @@ module Network.Haskoin.Wallet.Parser where
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
 import           Data.Aeson.TH
-import           Data.Either                         (rights)
+import           Data.Either                         (rights, either)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
 import           Data.Map.Strict                     (Map)
@@ -28,7 +28,9 @@ import           Options.Applicative.Help.Pretty     hiding ((</>))
 data Command
     = CommandMnemonic Bool Natural
     | CommandCreateAcc Network Natural
-    | CommandImportAcc Network FilePath Text
+    | CommandImportAcc FilePath Text
+    | CommandRenameAcc Text Text
+    | CommandAccounts
 
 programParser :: ParserInfo Command
 programParser =
@@ -47,6 +49,8 @@ commandParser =
             , command "mnemonic" mnemonicParser
             , command "createacc" createAccParser
             , command "importacc" importAccParser
+            , command "renameacc" renameAccParser
+            , command "accounts" accountsParser
             ]
         , hsubparser $
             mconcat
@@ -74,14 +78,37 @@ createAccParser =
 importAccParser :: ParserInfo Command
 importAccParser =
     info
-        (CommandImportAcc <$> networkOption <*> filepathArgument <*>
-         nameArgument) $
+        (CommandImportAcc <$> filepathArgument <*>
+         textArg "Name of the new account") $
     mconcat
         [ progDesc "Import an account file into the wallet"
         , footer "Next command: receive"
         ]
 
+renameAccParser :: ParserInfo Command
+renameAccParser =
+    info
+        (CommandRenameAcc <$> accountArg "Old account name" <*>
+         textArg "New account name") $
+    mconcat [progDesc "Rename an account"]
+
+accountsParser :: ParserInfo Command
+accountsParser =
+    info (pure CommandAccounts) $ mconcat [progDesc "Return all accounts"]
+
 {- Option Parsers -}
+
+textArg :: String -> Parser Text
+textArg desc = argument str $ mconcat [help desc, metavar "TEXT"]
+
+filepathArgument :: Parser FilePath
+filepathArgument =
+    argument str $
+    mconcat
+        [ help "Specify a filename"
+        , metavar "FILENAME"
+        , action "file"
+        ]
 
 diceOption :: Parser Bool
 diceOption =
@@ -151,35 +178,24 @@ accountOption =
     mconcat
         [ short 'a'
         , long "account"
-        , help "Specify a different account to use for this command."
+        , help "Specify the account to use for this command."
         , metavar "TEXT"
-        , value "main"
-        , showDefault
         , completer (mkCompleter accountCompleter)
         ]
-  where
-    accountCompleter :: String -> IO [String]
-    accountCompleter pref = do
-        keysE <- forM allNets (runExceptT . accountMapKeys)
-        let keys = mconcat $ rights keysE
-        return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
 
-filepathArgument :: Parser FilePath
-filepathArgument =
+accountArg :: String -> Parser Text
+accountArg desc =
     argument str $
     mconcat
-        [ help "Specify a filename"
-        , metavar "FILENAME"
-        , action "file"
-        ]
-
-nameArgument :: Parser Text
-nameArgument =
-    argument str $
-    mconcat
-        [ help "Specify an account name"
+        [ help desc
         , metavar "TEXT"
+        , completer (mkCompleter accountCompleter)
         ]
+
+accountCompleter :: String -> IO [String]
+accountCompleter pref = do
+    keys <- either (const []) id <$> runExceptT accountMapKeys
+    return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
 
 {--
 

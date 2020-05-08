@@ -166,9 +166,6 @@ buildSwipeTx net store addrs feeByte = do
 
 {- Signing Transactions -}
 
-bip44Deriv :: Network -> Natural -> HardPath
-bip44Deriv net a = Deriv :| 44 :| getBip44Coin net :| fromIntegral a
-
 signingKey ::
        Network -> BS.ByteString -> Text -> Natural -> Either String XPrvKey
 signingKey net pass mnem acc = do

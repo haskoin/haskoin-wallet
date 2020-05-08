@@ -36,10 +36,6 @@ import qualified System.Console.Haskeline            as Haskeline
 import qualified System.Directory                    as D
 import           System.IO                           (IOMode (..), withFile)
 
-networkHeaderDoc :: Network -> Doc
-networkHeaderDoc net =
-    "---" <+> networkDoc (text $ getNetworkName net) <+> "---"
-
 clientMain :: IO ()
 clientMain = do
     cmd <- customExecParser (prefs showHelpOnEmpty) programParser
@@ -50,29 +46,6 @@ jsonPrinter :: Response -> IO ()
 jsonPrinter = C8.putStrLn . encodeJsonPretty
 
 {--
-
-renameacc :: Command IO
-renameacc =
-    command
-        "renameacc"
-        "Rename an account"
-        Nothing
-        [] $
-    withOption netOpt $ \netStr ->
-    withNonOption Argument.string "{oldname}" $ \oldName ->
-    withNonOption Argument.string "{newname}" $ \newName ->
-        io $ do
-            let !net = parseNetwork netStr
-            printNetworkHeader net
-            renameAccountStore
-                net
-                (fromLString oldName)
-                (fromLString newName)
-            renderIO $
-                formatStatic "Account" <+>
-                formatAccount (fromLString oldName) <+>
-                formatStatic "renamed to" <+>
-                formatAccount (fromLString newName)
 
 preparetx :: Command IO
 preparetx =

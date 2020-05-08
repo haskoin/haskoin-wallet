@@ -26,6 +26,7 @@ import           Network.Haskoin.Util                (dropFieldLabel,
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Entropy
+import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.Util
@@ -45,24 +46,26 @@ data Response
       , responseWords         :: [Text]
       }
     | ResponseCreateAcc
-      { responsePubKey        :: Text
-      , responseDerivation    :: Text
-      , responsePubKeyFile    :: Text
+      { responsePubKey     :: Text
+      , responseDerivation :: HardPath
+      , responsePubKeyFile :: Text
+      , responseNetwork    :: Text
       }
     | ResponseImportAcc
-      { responseName          :: Text
-      , responseDerivation    :: Text
+      { responseName    :: Text
+      , responseAccount :: AccountStore
+      }
+    | ResponseRenameAcc
+      { responseOldName :: Text
+      , responseNewName :: Text
+      , responseAccount :: AccountStore
+      }
+    | ResponseAccounts
+      { responseAccounts :: AccountMap
       }
     deriving (Eq, Show)
 
 $(deriveJSON (dropSumLabels 8 8 "type") ''Response)
-
-data DocStructure a = DocStructure
-    { docStructureNetwork :: !Text
-    , docStructurePayload :: !a
-    } deriving (Eq, Show)
-
-$(deriveJSON (dropFieldLabel 12) ''DocStructure)
 
 catchResponseError :: ExceptT String IO Response -> IO Response
 catchResponseError m = do
@@ -75,7 +78,9 @@ commandResponse :: Command -> IO Response
 commandResponse = \case
     CommandMnemonic d e -> mnemonic d e
     CommandCreateAcc n d -> createAcc n d
-    CommandImportAcc n f k -> importAcc n f k
+    CommandImportAcc f k -> importAcc f k
+    CommandRenameAcc old new -> renameAcc old new
+    CommandAccounts -> accounts
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -86,6 +91,7 @@ mnemonic useDice ent =
                 else genMnemonic ent
         return $ ResponseMnemonic orig (cs <$> words (cs ms))
 
+-- TODO: Ask the dice rolls in sequences of 5 or so
 askDiceRolls :: Natural -> ExceptT String IO String
 askDiceRolls ent = do
     roll1 <- liftIO $ askInputLineHidden $
@@ -100,60 +106,31 @@ createAcc net deriv =
     catchResponseError $ do
         prvKey <- askSigningKey net deriv
         let xpub = deriveXPubKey prvKey
-            fname = "key-" <> xPubChecksum xpub
-        path <- liftIO $ writeDoc net (cs fname) $ xPubExport net xpub
+        path <- liftIO $ writeDoc $ PubKeyDoc xpub net
         return $
             ResponseCreateAcc
                 { responsePubKey = xPubExport net xpub
-                , responseDerivation =
-                      cs $ show $ ParsedPrv $ toGeneric $ bip44Deriv net deriv
+                , responseDerivation = bip44Deriv net deriv
                 , responsePubKeyFile = cs path
+                , responseNetwork = cs $ getNetworkName net
                 }
 
-importAcc :: Network -> FilePath -> Text -> IO Response
-importAcc net fp name =
+importAcc :: FilePath -> Text -> IO Response
+importAcc fp name =
     catchResponseError $ do
-        xpub <- readDoc net fp (xPubFromJSON net)
-        let store =
-                AccountStore
-                    xpub
-                    0
-                    0
-                    (bip44Deriv net $ fromIntegral $ xPubChild xpub)
-        insertAccountStore net name store
-        return $
-            ResponseImportAcc
-                { responseName = name
-                , responseDerivation =
-                      cs $
-                      show $ ParsedPrv $ toGeneric $ accountStoreDeriv store
-                }
+        PubKeyDoc xpub net <- readJsonFile fp
+        let store = newAccountStore net xpub
+        insertAccountStore name store
+        return $ ResponseImportAcc name store
 
-{- File IO Helpers -}
+renameAcc :: Text -> Text -> IO Response
+renameAcc oldName newName =
+    catchResponseError $ do
+        store <- renameAccountStore oldName newName
+        return $ ResponseRenameAcc oldName newName store
 
-writeDoc :: Json.ToJSON a => Network -> String -> a -> IO FilePath
-writeDoc net fileName dat = do
-    dir <- D.getUserDocumentsDirectory
-    let path = dir </> (network <> "-" <> fileName <> ".json")
-        val = encodeJsonPretty $ DocStructure (cs network) dat
-    withFile path WriteMode (`C8.hPutStrLn` val)
-    return path
-  where
-    network = getNetworkName net
-
-readDoc ::
-       Network
-    -> FilePath
-    -> (Json.Value -> Json.Parser a)
-    -> ExceptT String IO a
-readDoc net fileName parser = do
-    bytes <- liftIO $ C8.readFile fileName
-    DocStructure fileNet val <- liftEither $ Json.eitherDecodeStrict' bytes
-    if cs fileNet == getNetworkName net
-        then liftEither $ Json.parseEither parser val
-        else throwError $
-             "Bad network. This file has to be used on the network: " <>
-             cs fileNet
+accounts :: IO Response
+accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
 
 {- Haskeline Helpers -}
 

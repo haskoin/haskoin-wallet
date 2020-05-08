@@ -9,9 +9,12 @@ import qualified Data.ByteString          as BS
 import qualified Data.ByteString.Base16   as B16
 import qualified Data.ByteString.Lazy     as BL
 import           Data.Maybe               (fromMaybe)
+import qualified Data.Serialize           as S
 import           Data.String.Conversions  (cs)
 import           Data.Text                (Text)
 import qualified Data.Text                as Text
+import           Network.Haskoin.Keys
+import           Network.Haskoin.Util
 
 {- Data.Aeson Compatibility -}
 
@@ -30,6 +33,12 @@ encodeJsonPrettyLn =
             }
 
 {- Haskoin helper functions -}
+
+xPubChecksum :: XPubKey -> Text
+xPubChecksum = encodeHex . S.encode . xPubFP
+
+(</>) :: String -> String -> String
+a </> b = a <> "/" <> b
 
 (!!?) :: [a] -> Int -> Maybe a
 xs !!? i
