@@ -241,64 +241,6 @@ sendtx =
                 formatTxHash (fromText $ txHashToHex $ txHash tx) <+>
                 formatStatic "has been broadcast"
 
-receive :: Command IO
-receive =
-    command
-        "receive"
-        "Generate a new address for receiving a payment"
-        Nothing
-        [] $
-    withOption accOpt $ \acc ->
-    withOption netOpt $ \netStr ->
-        io $ do
-            let !net = parseNetwork netStr
-            printNetworkHeader net
-            withAccountStore net acc $ \(k, store) -> do
-                let (addr, store') = nextExtAddress store
-                updateAccountStore net k $ const store'
-                renderIO $ addressFormat $ nonEmpty_ [(thd &&& fst) addr]
-
-addresses :: Command IO
-addresses =
-    command
-        "addresses"
-        "List the latest receiving addresses in your account"
-        Nothing
-        [] $
-    withOption accOpt $ \acc ->
-    withOption cntOpt $ \cnt ->
-    withOption netOpt $ \netStr ->
-        io $ do
-            let !net = parseNetwork netStr
-            printNetworkHeader net
-            withAccountStore net acc $ \(_, store) -> do
-                let xpub = accountStoreXPubKey store
-                    idx = accountStoreExternal store
-                    start = fromMaybe 0 (idx - cnt)
-                    count = fromIntegral $ fromMaybe 0 (idx - start)
-                let addrsM =
-                        nonEmpty $
-                        take count $
-                        derivePathAddrs xpub extDeriv $
-                        fromIntegral start
-                case addrsM of
-                    Just addrs ->
-                        renderIO $
-                        addressFormat $
-                        nonEmptyFmap (fromIntegral . thd &&& fst) addrs
-                    _ -> exitError "No addresses have been generated"
-
-addressFormat :: NonEmpty [(Natural, Address)] -> Printer
-addressFormat as = vcat $ getNonEmpty $ nonEmptyFmap toFormat as
-  where
-    toFormat :: (Natural, Address) -> Printer
-    toFormat (i, a) =
-        mconcat
-            [ formatKey $ block (n + 2) $ show i <> ":"
-            , formatAddress $ fromText $ addrToString a
-            ]
-    n = length $ show $ maximum $ nonEmptyFmap fst as
-
 balance :: Command IO
 balance =
     command

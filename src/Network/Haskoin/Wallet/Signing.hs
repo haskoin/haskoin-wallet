@@ -52,7 +52,7 @@ buildTxSignData ::
     -> Map Address Natural
     -> Natural
     -> Natural
-    -> IO (Either String (TxSignData, AccountStore))
+    -> IO (Either String (TxSignData, Commit AccountStore))
 buildTxSignData net store rcpMap feeByte dust
     | Map.null rcpMap = return $ Left "No recipients provided"
     | otherwise = do
@@ -77,13 +77,14 @@ buildTxSignData net store rcpMap feeByte dust
                               , txSignDataOutputPaths = outDeriv
                               }
                         , if null outDeriv
-                              then store
-                              else store')
+                              then NoCommit store
+                              else newStore)
             Left err -> return $ Left err
   where
     walletAddrMap =
-        Map.fromList $ extAddresses store <> intAddresses store
-    (change, store') = nextIntAddress store
+        Map.fromList $ fmap f $ extAddresses store <> intAddresses store
+    f (a,p,_) = (a,p)
+    (change, newStore) = genIntAddress store
 
 buildWalletTx ::
        Network
@@ -133,7 +134,7 @@ buildSwipeTx ::
     -> AccountStore
     -> [Address]
     -> Natural -- Fee per byte
-    -> IO (Either String (TxSignData, AccountStore))
+    -> IO (Either String (TxSignData, Commit AccountStore))
 buildSwipeTx net store addrs feeByte = do
     coins <- fmap toWalletCoin <$> httpUnspent net addrs
     let tot = sum $ walletCoinValue <$> coins
@@ -160,9 +161,9 @@ buildSwipeTx net store addrs feeByte = do
                           , txSignDataInputPaths = []
                           , txSignDataOutputPaths = [snd3 rcpt]
                           }
-                    , store')
+                    , commitStore)
   where
-    (rcpt, store') = nextExtAddress store
+    (rcpt, commitStore) = genExtAddress store
 
 {- Signing Transactions -}
 

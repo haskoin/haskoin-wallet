@@ -25,12 +25,30 @@ import           Options.Applicative.Help.Pretty     hiding ((</>))
 {- Command Parsers -}
 
 data Command
-    = CommandMnemonic Bool Natural
-    | CommandCreateAcc Network Natural
-    | CommandImportAcc FilePath Text
-    | CommandRenameAcc Text Text
+    = CommandMnemonic
+      { commandUseDice :: Bool
+      , commandEntropy :: Natural
+      }
+    | CommandCreateAcc
+      { commandNetwork    :: Network
+      , commandDerivation :: Natural
+      }
+    | CommandImportAcc
+      { commandFilePath :: FilePath
+      , commandAccount  :: Text
+      }
+    | CommandRenameAcc
+      { commandOldName :: Text
+      , commandNewName :: Text
+      }
     | CommandAccounts
-    | CommandAddresses (Maybe Text) Natural
+    | CommandAddresses
+      { commandMaybeAcc :: Maybe Text
+      , commandCount    :: Natural
+      }
+    | CommandReceive
+      { commandMaybeAcc :: Maybe Text }
+    deriving (Eq, Show)
 
 programParser :: ParserInfo Command
 programParser =
@@ -41,7 +59,7 @@ programParser =
         ]
 
 commandParser :: Parser Command
-commandParser = 
+commandParser =
     asum
         [ hsubparser $
             mconcat
@@ -56,6 +74,7 @@ commandParser =
             mconcat
             [ commandGroup "Address management"
             , command "addresses" addressesParser
+            , command "receive" receiveParser
             ]
         ]
 
@@ -103,6 +122,10 @@ addressesParser =
          countOption "Number of addresses to display") $
     mconcat [progDesc "List the latest receiving addresses in the account"]
 
+receiveParser :: ParserInfo Command
+receiveParser =
+    info (CommandReceive <$> accountOption) $
+    mconcat [progDesc "Get a new address for receiving a payment"]
 
 {- Option Parsers -}
 

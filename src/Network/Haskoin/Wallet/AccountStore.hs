@@ -108,43 +108,44 @@ validAccountMap accMap
 accountMapKeys :: ExceptT String IO [Text]
 accountMapKeys = Map.keys <$> readAccountMap
 
-getAccountStore :: Maybe Text -> ExceptT String IO AccountStore
+getAccountStore :: Maybe Text -> ExceptT String IO (Text, AccountStore)
 getAccountStore keyM = do
     accMap <- readAccountMap
     case keyM of
         Nothing ->
-            case Map.elems accMap of
-                [store] -> return store
+            case Map.assocs accMap of
+                [keyval] -> return keyval
                 [] -> throwError "There are no accounts in the wallet"
                 _ -> throwError "Specify which account you want to use"
         Just key -> 
             case key `Map.lookup` accMap of
-                Just val -> return val
+                Just val -> return (key, val)
                 _ -> throwError $ "The account " <> cs key <> "does not exist"
 
 alterAccountStore ::
        Text
     -> (Maybe AccountStore -> Either String (Maybe AccountStore))
-    -> ExceptT String IO ()
+    -> ExceptT String IO (Maybe AccountStore)
 alterAccountStore key f = do
     accMap <- readAccountMap
     accM <- liftEither $ f (key `Map.lookup` accMap)
     let newMap = Map.alter (const accM) key accMap
     when (accMap /= newMap) $ writeAccountMap newMap
+    return accM
 
 insertAccountStore :: Text -> AccountStore -> ExceptT String IO ()
-insertAccountStore key store = do
-    alterAccountStore key $ \case
+insertAccountStore key store =
+    void $ alterAccountStore key $ \case
         Nothing -> return $ Just store
         _ -> Left "The account name already exists"
 
 adjustAccountStore ::
-       Text -> (AccountStore -> AccountStore) -> ExceptT String IO ()
-adjustAccountStore key f =
-    alterAccountStore key $ \case
-        Nothing ->
-            Left $ "The account " <> Text.unpack key <> " does not exist"
+       Text -> (AccountStore -> AccountStore) -> ExceptT String IO AccountStore
+adjustAccountStore key f = do
+    accM <- alterAccountStore key $ \case
+        Nothing -> Left $ "The account " <> Text.unpack key <> " does not exist"
         Just store -> return $ Just $ f store
+    liftEither $ maybeToEither "Account was Nothing" accM
 
 renameAccountStore :: Text -> Text -> ExceptT String IO AccountStore
 renameAccountStore oldName newName
@@ -162,31 +163,39 @@ renameAccountStore oldName newName
                 return store
             _ -> throwError "Account does not exist"
 
-nextExtAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
-nextExtAddress store =
-    ( ( fst $ derivePathAddr (accountStoreXPubKey store) extDeriv idx
-      , extDeriv :/ idx
-      , nat
-      )
-    , store{ accountStoreExternal = nat + 1 }
-    )
-  where
-    nat = accountStoreExternal store
-    idx = fromIntegral nat
+data Commit a
+    = NoCommit { commitValue :: a }
+    | Commit { commitValue :: a }
 
-nextIntAddress :: AccountStore -> ((Address, SoftPath, Natural), AccountStore)
-nextIntAddress store =
-    ( ( fst $ derivePathAddr (accountStoreXPubKey store) intDeriv idx
-      , intDeriv :/ idx
-      , nat
-      )
-    , store{ accountStoreInternal = nat + 1 }
-    )
-  where
-    nat = accountStoreInternal store
-    idx = fromIntegral nat
+commit :: Text -> Commit AccountStore -> ExceptT String IO AccountStore
+commit _ (NoCommit val) = return val
+commit key (Commit val) = do
+    void $ alterAccountStore key $ const $ return (Just val)
+    return val
 
-extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath)]
+genExtAddress, genIntAddress ::
+       AccountStore -> ((Address, SoftPath, Natural), Commit AccountStore)
+genExtAddress =
+    genAddress_ accountStoreExternal extDeriv $ \f s ->
+        s {accountStoreExternal = f s}
+genIntAddress =
+    genAddress_ accountStoreInternal intDeriv $ \f s ->
+        s {accountStoreInternal = f s}
+
+genAddress_ ::
+       (AccountStore -> Natural)
+    -> SoftPath
+    -> ((AccountStore -> Natural) -> AccountStore -> AccountStore)
+    -> AccountStore
+    -> ((Address, SoftPath, Natural), Commit AccountStore)
+genAddress_ getIdx deriv updAcc store = do
+    ((fst addr, deriv :/ (fromIntegral idx), idx), Commit newStore)
+  where
+    idx = getIdx store
+    addr = derivePathAddr (accountStoreXPubKey store) deriv $ fromIntegral idx
+    newStore = updAcc ((+ 1) . getIdx) store
+
+extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath, Natural)]
 extAddresses = addresses_ accountStoreExternal extDeriv
 intAddresses = addresses_ accountStoreInternal intDeriv
 
@@ -194,11 +203,11 @@ addresses_ ::
        (AccountStore -> Natural)
     -> SoftPath
     -> AccountStore
-    -> [(Address, SoftPath)]
-addresses_ f deriv store =
-    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
+    -> [(Address, SoftPath, Natural)]
+addresses_ getIdx deriv store =
+    fmap (\(a, _, i) -> (a, deriv :/ i, fromIntegral i)) addrs
   where
     xpub = accountStoreXPubKey store
-    idx = fromIntegral $ f store
+    idx = fromIntegral $ getIdx store
     addrs = take idx $ derivePathAddrs xpub deriv 0
 

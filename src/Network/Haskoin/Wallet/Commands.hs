@@ -54,8 +54,8 @@ data Response
       , responseNetwork    :: Text
       }
     | ResponseImportAcc
-      { responseName    :: Text
-      , responseAccount :: AccountStore
+      { responseAccountName :: Text
+      , responseAccount     :: AccountStore
       }
     | ResponseRenameAcc
       { responseOldName :: Text
@@ -66,8 +66,14 @@ data Response
       { responseAccounts :: AccountMap
       }
     | ResponseAddresses
-      { responseAccount   :: AccountStore
-      , responseAddresses :: [(Text, SoftPath)]
+      { responseAccountName :: Text
+      , responseAccount     :: AccountStore
+      , responseAddresses   :: [(Text, SoftPath, Natural)]
+      }
+    | ResponseReceive
+      { responseAccountName :: Text
+      , responseAccount     :: AccountStore
+      , responseAddress     :: (Text, SoftPath, Natural)
       }
     deriving (Eq, Show)
 
@@ -88,6 +94,7 @@ commandResponse = \case
     CommandRenameAcc old new -> renameAcc old new
     CommandAccounts -> accounts
     CommandAddresses accM c -> addresses accM c
+    CommandReceive accM -> receive accM
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -142,16 +149,27 @@ accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
 addresses :: Maybe Text -> Natural -> IO Response
 addresses accM cnt =
     catchResponseError $ do
-        store <- getAccountStore accM
+        (key, store) <- getAccountStore accM
         let net = accountStoreNetwork store
             addrs = lastList cnt $ extAddresses store
-        addrsRes <- liftEither $ mapM (f net) addrs
-        return $ ResponseAddresses store addrsRes
-  where
-    f :: Network -> (Address, SoftPath) -> Either String (Text, SoftPath)
-    f net (addr, path) = do
-        addrStr <- maybeToEither "Invalid Address" $ addrToString net addr
-        return (addrStr, path)
+        addrsRes <- liftEither $ mapM (addrText net) addrs
+        return $ ResponseAddresses key store addrsRes
+      
+addrText :: Network
+  -> (Address, SoftPath, Natural)
+  -> Either String (Text, SoftPath, Natural)
+addrText net (addr, path, i) = do
+    addrStr <- maybeToEither "Invalid Address" $ addrToString net addr
+    return (addrStr, path, i)
+
+receive :: Maybe Text -> IO Response
+receive accM =
+    catchResponseError $ do
+        (key, store) <- getAccountStore accM
+        let (res, store') = genExtAddress store
+        addrRes <- liftEither $ addrText (accountStoreNetwork store) res
+        newStore <- commit key store' 
+        return $ ResponseReceive key newStore addrRes
 
 {- Haskeline Helpers -}
 
