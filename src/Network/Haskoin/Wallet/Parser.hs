@@ -48,6 +48,13 @@ data Command
       }
     | CommandReceive
       { commandMaybeAcc :: Maybe Text }
+    | CommandTransactions
+      { commandMaybeAcc :: Maybe Text }
+    | CommandPrepareTx
+      { commandMaybeAcc :: Maybe Text
+      , commandFeeByte  :: Natural    
+      , commandDust     :: Natural
+      }
     deriving (Eq, Show)
 
 programParser :: ParserInfo Command
@@ -75,6 +82,12 @@ commandParser =
             [ commandGroup "Address management"
             , command "addresses" addressesParser
             , command "receive" receiveParser
+            ]
+        , hsubparser $
+            mconcat
+            [ commandGroup "Transaction management"
+            , command "transactions" transactionsParser
+            , command "preparetx" prepareTxParser
             ]
         ]
 
@@ -126,6 +139,20 @@ receiveParser :: ParserInfo Command
 receiveParser =
     info (CommandReceive <$> accountOption) $
     mconcat [progDesc "Get a new address for receiving a payment"]
+
+transactionsParser :: ParserInfo Command
+transactionsParser =
+    info (CommandTransactions <$> accountOption) $
+    mconcat [progDesc "Display the transactions in an account"]
+
+prepareTxParser :: ParserInfo Command
+prepareTxParser =
+    info
+        (CommandPrepareTx <$> accountOption <*> feeOption <*> dustOption) $
+    mconcat
+       [ progDesc "Prepare a new unsigned transaction"
+       , footer "Next command: signtx"
+       ]
 
 {- Option Parsers -}
 
@@ -236,32 +263,36 @@ countOption desc =
         [ short 'c'
         , long "count"
         , help desc
-        , metavar "TEXT"
+        , metavar "INT"
         , value 5
         , showDefault
         ]
 
+feeOption :: Parser Natural
+feeOption =
+    option (maybeReader $ readNatural . cs) $
+    mconcat
+        [ short 'f'
+        , long "fee"
+        , help "Fee to pay in satoshi/bytes"
+        , metavar "INT"
+        , value 200
+        , showDefault
+        ]
+
+dustOption :: Parser Natural
+dustOption =
+    option (maybeReader $ readNatural . cs) $
+    mconcat
+        [ short 'd'
+        , long "dust"
+        , help "Smallest allowed satoshi value for change outputs"
+        , metavar "INT"
+        , value 5430
+        , showDefault
+        ]
+
 {--
-
-feeOpt :: Option Natural
-feeOpt =
-    option
-        'f'
-        "fee"
-        ["50"]
-        200
-        (fromIntegral <$> Argument.natural)
-        "Fee to pay in sat/bytes"
-
-dustOpt :: Option Natural
-dustOpt =
-    option
-        'd'
-        "dust"
-        ["8000"]
-        5430
-        (fromIntegral <$> Argument.natural)
-        "Smallest allowed satoshi value for change outputs."
 
 unitOpt :: Option String
 unitOpt =

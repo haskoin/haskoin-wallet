@@ -1,18 +1,20 @@
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.Util where
 
-import           Control.Arrow            (second)
-import           Control.Monad            (guard)
-import qualified Data.Aeson               as JSON
-import qualified Data.Aeson.Encode.Pretty as Pretty
-import qualified Data.ByteString          as BS
-import qualified Data.ByteString.Base16   as B16
-import qualified Data.ByteString.Lazy     as BL
-import           Data.Maybe               (fromMaybe)
-import qualified Data.Serialize           as S
-import           Data.String.Conversions  (cs)
-import           Data.Text                (Text)
-import qualified Data.Text                as Text
+import           Control.Arrow             (second)
+import           Control.Monad             (guard)
+import qualified Data.Aeson                as JSON
+import qualified Data.Aeson.Encode.Pretty  as Pretty
+import qualified Data.ByteString           as BS
+import qualified Data.ByteString.Base16    as B16
+import qualified Data.ByteString.Lazy      as BL
+import           Data.Maybe                (fromMaybe)
+import qualified Data.Serialize            as S
+import           Data.String.Conversions   (cs)
+import           Data.Text                 (Text)
+import qualified Data.Text                 as Text
+import           Network.Haskoin.Address
+import           Network.Haskoin.Constants
 import           Network.Haskoin.Keys
 import           Network.Haskoin.Util
 import           Numeric.Natural
@@ -34,6 +36,10 @@ encodeJsonPrettyLn =
             }
 
 {- Haskoin helper functions -}
+
+addrToStringE :: Network -> Address -> Either String Text
+addrToStringE net a =
+    maybeToEither "Invalid Address in haskoin-wallet" (addrToString net a)
 
 lastList :: Natural -> [a] -> [a]
 lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs

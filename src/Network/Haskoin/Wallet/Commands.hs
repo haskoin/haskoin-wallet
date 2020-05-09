@@ -27,8 +27,10 @@ import           Network.Haskoin.Util                (dropFieldLabel,
                                                       maybeToEither)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
+import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FileIO
+import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.Util
@@ -75,6 +77,11 @@ data Response
       , responseAccount     :: AccountStore
       , responseAddress     :: (Text, SoftPath, Natural)
       }
+    | ResponseTransactions
+      { responseAccountName  :: Text
+      , responseAccount      :: AccountStore
+      , responseTransactions :: [DetailedTx]
+      }
     deriving (Eq, Show)
 
 $(deriveJSON (dropSumLabels 8 8 "type") ''Response)
@@ -95,6 +102,7 @@ commandResponse = \case
     CommandAccounts -> accounts
     CommandAddresses accM c -> addresses accM c
     CommandReceive accM -> receive accM
+    CommandTransactions accM -> transactions accM
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -152,14 +160,14 @@ addresses accM cnt =
         (key, store) <- getAccountStore accM
         let net = accountStoreNetwork store
             addrs = lastList cnt $ extAddresses store
-        addrsRes <- liftEither $ mapM (addrText net) addrs
+        addrsRes <- liftEither $ mapM (addrText3 net) addrs
         return $ ResponseAddresses key store addrsRes
-      
-addrText :: Network
+
+addrText3 :: Network
   -> (Address, SoftPath, Natural)
   -> Either String (Text, SoftPath, Natural)
-addrText net (addr, path, i) = do
-    addrStr <- maybeToEither "Invalid Address" $ addrToString net addr
+addrText3 net (addr, path, i) = do
+    addrStr <- addrToStringE net addr
     return (addrStr, path, i)
 
 receive :: Maybe Text -> IO Response
@@ -167,9 +175,15 @@ receive accM =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
         let (res, store') = genExtAddress store
-        addrRes <- liftEither $ addrText (accountStoreNetwork store) res
-        newStore <- commit key store' 
+        addrRes <- liftEither $ addrText3 (accountStoreNetwork store) res
+        newStore <- commit key store'
         return $ ResponseReceive key newStore addrRes
+
+transactions :: Maybe Text -> IO Response
+transactions accM =
+    catchResponseError $ do
+        (key, store) <- getAccountStore accM
+        undefined
 
 {- Haskeline Helpers -}
 
