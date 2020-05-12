@@ -8,6 +8,7 @@ module Network.Haskoin.Wallet.Commands where
 import           Control.Arrow                       (first)
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
+import           Data.Aeson                          (object, (.:), (.=))
 import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
 import qualified Data.Aeson.Types                    as Json
@@ -28,13 +29,13 @@ import           Haskoin.Util                        (dropFieldLabel,
                                                       maybeToEither)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.WalletTx
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.Util
+import           Network.Haskoin.Wallet.WalletTx
 import           Numeric.Natural
 import           Options.Applicative
 import           Options.Applicative.Help.Pretty     hiding ((</>))
@@ -48,7 +49,7 @@ data Response
       }
     | ResponseMnemonic
       { responseEntropySource :: Text
-      , responseWords         :: [Text]
+      , responseMnemonic      :: [Text]
       }
     | ResponseCreateAcc
       { responsePubKey     :: XPubKey
@@ -85,7 +86,127 @@ data Response
       }
     deriving (Eq, Show)
 
-$(deriveJSON (dropSumLabels 8 8 "type") ''Response)
+jsonError :: String -> Json.Value
+jsonError err = object ["type" .= Json.String "error", "error" .= err]
+
+instance Json.ToJSON Response where
+    toJSON =
+        \case
+            ResponseError err -> jsonError $ cs err
+            ResponseMnemonic e w ->
+                object
+                    [ "type" .= Json.String "mnemonic"
+                    , "entropysource" .= e
+                    , "mnemonic" .= w
+                    ]
+            ResponseCreateAcc p d f net ->
+                object
+                    [ "type" .= Json.String "createacc"
+                    , "pubkey" .= xPubToJSON net p
+                    , "derivation" .= d
+                    , "pubkeyfile" .= f
+                    , "network" .= getNetworkName net
+                    ]
+            ResponseImportAcc n a ->
+                object
+                    [ "type" .= Json.String "importacc"
+                    , "accountname" .= n
+                    , "account" .= a
+                    ]
+            ResponseRenameAcc o n a ->
+                object
+                    [ "type" .= Json.String "renameacc"
+                    , "oldname" .= o
+                    , "newname" .= n
+                    , "account" .= a
+                    ]
+            ResponseAccounts a ->
+                object ["type" .= Json.String "accounts", "accounts" .= a]
+            ResponseAddresses n a addrs ->
+                case mapM (addrText2 (accountStoreNetwork a)) addrs of
+                    Right xs ->
+                        object
+                            [ "type" .= Json.String "addresses"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "addresses" .= xs
+                            ]
+                    Left err -> jsonError err
+            ResponseReceive n a addr -> do
+                case addrText2 (accountStoreNetwork a) addr of
+                    Right x ->
+                        object
+                            [ "type" .= Json.String "receive"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "address" .= x
+                            ]
+                    Left err -> jsonError err
+            ResponseTransactions n a txs ->
+                case mapM (walletTxToJSON (accountStoreNetwork a)) txs of
+                    Right txsJ ->
+                        object
+                            [ "type" .= Json.String "transactions"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "transactions" .= txsJ
+                            ]
+                    Left err -> jsonError err
+
+instance Json.FromJSON Response where
+    parseJSON =
+        Json.withObject "response" $ \o -> do
+            Json.String resType <- o .: "type"
+            case resType of
+                "error" -> ResponseError <$> o .: "error"
+                "mnemonic" -> do
+                    e <- o .: "entropysource"
+                    m <- o .: "mnemonic"
+                    return $ ResponseMnemonic e m
+                "createacc" -> do
+                    net <- maybe mzero return . netByName =<< o .: "network"
+                    p <- xPubFromJSON net =<< o .: "pubkey"
+                    d <- o .: "derivation"
+                    f <- o .: "pubkeyfile"
+                    return $ ResponseCreateAcc p d f net
+                "importacc" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    return $ ResponseImportAcc n a
+                "renameacc" -> do
+                    old <- o .: "oldname"
+                    new <- o .: "newname"
+                    a <- o .: "account"
+                    return $ ResponseRenameAcc old new a
+                "accounts" -> do
+                    as <- o .: "accounts"
+                    return $ ResponseAccounts as
+                "addresses" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    let f = textAddr2 (accountStoreNetwork a)
+                    xs <- either fail return . mapM f =<< o .: "addresses"
+                    return $ ResponseAddresses n a xs
+                "receive" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    let f = textAddr2 (accountStoreNetwork a)
+                    x <- either fail return . f =<< o .: "address"
+                    return $ ResponseReceive n a x
+                "transactions" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    let f = walletTxParseJSON (accountStoreNetwork a)
+                    txs <- mapM f =<< o .: "transactions"
+                    return $ ResponseTransactions n a txs
+                _ -> fail "Invalid JSON response type"
+
+
+addrText2 :: Network -> (Address, v) -> Either String (Text, v)
+addrText2 net (a, v) = (,v) <$> addrToStringE net a
+
+textAddr2 :: Network -> (Text, v) -> Either String (Address, v)
+textAddr2 net (a, v) = (,v) <$> stringToAddrE net a
 
 catchResponseError :: ExceptT String IO Response -> IO Response
 catchResponseError m = do
@@ -159,19 +280,14 @@ addresses :: Maybe Text -> Page -> IO Response
 addresses accM page =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
-        let net = accountStoreNetwork store
-            addrs = toPage page $ reverse $ extAddresses store
+        let addrs = toPage page $ reverse $ extAddresses store
         return $ ResponseAddresses key store addrs
-
-textStr2 :: Network -> (Address, a) -> Either String (Text, a)
-textStr2 net (a, b) = (,b) <$> addrToStringE net a
 
 receive :: Maybe Text -> IO Response
 receive accM =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
         let (addr, store') = genExtAddress store
-            net = accountStoreNetwork store
         newStore <- commit key store'
         return $ ResponseReceive key newStore addr
 

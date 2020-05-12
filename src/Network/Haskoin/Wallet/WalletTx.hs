@@ -9,8 +9,7 @@ module Network.Haskoin.Wallet.WalletTx where
 import           Control.Applicative             ((<|>))
 import           Control.Arrow                   (second, (&&&))
 import           Control.Monad                   (fail)
-import           Data.Aeson                      (object, (.=))
-import           Data.Aeson                      ((.:))
+import           Data.Aeson                      (object, (.=), (.:))
 import qualified Data.Aeson                      as Json
 import           Data.Aeson.TH
 import           Data.Aeson.Types                (Parser)
