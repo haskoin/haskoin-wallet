@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: b9bae38586973851ac5f36bf82dc4a0ff05b7700cc41d681c5629c0426407c5c
+-- hash: e93b31621a111799e386ef7e77da35c30360ff71418f327947412f3d8ffae96d
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -48,6 +48,7 @@ library
     , entropy
     , haskeline
     , haskoin-core
+    , haskoin-store-data
     , http-types
     , lens
     , lens-aeson
@@ -71,7 +72,7 @@ library
       Network.Haskoin.Wallet.HTTP
       Network.Haskoin.Wallet.Amounts
       Network.Haskoin.Wallet.Doc
-      Network.Haskoin.Wallet.DetailedTx
+      Network.Haskoin.Wallet.WalletTx
       Network.Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet

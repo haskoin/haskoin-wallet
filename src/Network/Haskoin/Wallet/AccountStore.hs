@@ -20,12 +20,12 @@ import qualified Data.Serialize                  as S
 import           Data.String.Conversions         (cs)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as Text
-import           Network.Haskoin.Address
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Util
-import           Network.Haskoin.Wallet.Util
+import           Haskoin.Address
+import           Haskoin.Constants
+import           Haskoin.Keys
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.FileIO
+import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty hiding ((</>))
 import qualified System.Directory                as D
@@ -117,7 +117,7 @@ getAccountStore keyM = do
                 [keyval] -> return keyval
                 [] -> throwError "There are no accounts in the wallet"
                 _ -> throwError "Specify which account you want to use"
-        Just key -> 
+        Just key ->
             case key `Map.lookup` accMap of
                 Just val -> return (key, val)
                 _ -> throwError $ "The account " <> cs key <> "does not exist"
@@ -174,7 +174,7 @@ commit key (Commit val) = do
     return val
 
 genExtAddress, genIntAddress ::
-       AccountStore -> ((Address, SoftPath, Natural), Commit AccountStore)
+       AccountStore -> ((Address, SoftPath), Commit AccountStore)
 genExtAddress =
     genAddress_ accountStoreExternal extDeriv $ \f s ->
         s {accountStoreExternal = f s}
@@ -187,15 +187,15 @@ genAddress_ ::
     -> SoftPath
     -> ((AccountStore -> Natural) -> AccountStore -> AccountStore)
     -> AccountStore
-    -> ((Address, SoftPath, Natural), Commit AccountStore)
+    -> ((Address, SoftPath), Commit AccountStore)
 genAddress_ getIdx deriv updAcc store = do
-    ((fst addr, deriv :/ (fromIntegral idx), idx), Commit newStore)
+    ((fst addr, deriv :/ (fromIntegral idx)), Commit newStore)
   where
     idx = getIdx store
     addr = derivePathAddr (accountStoreXPubKey store) deriv $ fromIntegral idx
     newStore = updAcc ((+ 1) . getIdx) store
 
-extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath, Natural)]
+extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath)]
 extAddresses = addresses_ accountStoreExternal extDeriv
 intAddresses = addresses_ accountStoreInternal intDeriv
 
@@ -203,9 +203,9 @@ addresses_ ::
        (AccountStore -> Natural)
     -> SoftPath
     -> AccountStore
-    -> [(Address, SoftPath, Natural)]
+    -> [(Address, SoftPath)]
 addresses_ getIdx deriv store =
-    fmap (\(a, _, i) -> (a, deriv :/ i, fromIntegral i)) addrs
+    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
   where
     xpub = accountStoreXPubKey store
     idx = fromIntegral $ getIdx store

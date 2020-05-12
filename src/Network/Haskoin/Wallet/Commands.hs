@@ -2,6 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Strict            #-}
 {-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Commands where
 
 import           Control.Arrow                       (first)
@@ -19,15 +20,15 @@ import           Data.Maybe                          (fromMaybe)
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
-import           Network.Haskoin.Address
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Util                (dropFieldLabel,
+import           Haskoin.Address
+import           Haskoin.Constants
+import           Haskoin.Keys
+import           Haskoin.Util                        (dropFieldLabel,
                                                       dropSumLabels,
                                                       maybeToEither)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
-import           Network.Haskoin.Wallet.DetailedTx
+import           Network.Haskoin.Wallet.WalletTx
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.HTTP
@@ -50,10 +51,10 @@ data Response
       , responseWords         :: [Text]
       }
     | ResponseCreateAcc
-      { responsePubKey     :: Text
+      { responsePubKey     :: XPubKey
       , responseDerivation :: HardPath
       , responsePubKeyFile :: Text
-      , responseNetwork    :: Text
+      , responseNetwork    :: Network
       }
     | ResponseImportAcc
       { responseAccountName :: Text
@@ -70,17 +71,17 @@ data Response
     | ResponseAddresses
       { responseAccountName :: Text
       , responseAccount     :: AccountStore
-      , responseAddresses   :: [(Text, SoftPath, Natural)]
+      , responseAddresses   :: [(Address, SoftPath)]
       }
     | ResponseReceive
       { responseAccountName :: Text
       , responseAccount     :: AccountStore
-      , responseAddress     :: (Text, SoftPath, Natural)
+      , responseAddress     :: (Address, SoftPath)
       }
     | ResponseTransactions
       { responseAccountName  :: Text
       , responseAccount      :: AccountStore
-      , responseTransactions :: [DetailedTx]
+      , responseTransactions :: [WalletTx]
       }
     deriving (Eq, Show)
 
@@ -100,9 +101,9 @@ commandResponse = \case
     CommandImportAcc f k -> importAcc f k
     CommandRenameAcc old new -> renameAcc old new
     CommandAccounts -> accounts
-    CommandAddresses accM c -> addresses accM c
+    CommandAddresses accM p -> addresses accM p
     CommandReceive accM -> receive accM
-    CommandTransactions accM -> transactions accM
+    CommandTransactions accM p -> transactions accM p
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -131,10 +132,10 @@ createAcc net deriv =
         path <- liftIO $ writeDoc $ PubKeyDoc xpub net
         return $
             ResponseCreateAcc
-                { responsePubKey = xPubExport net xpub
+                { responsePubKey = xpub
                 , responseDerivation = bip44Deriv net deriv
                 , responsePubKeyFile = cs path
-                , responseNetwork = cs $ getNetworkName net
+                , responseNetwork = net
                 }
 
 importAcc :: FilePath -> Text -> IO Response
@@ -154,36 +155,37 @@ renameAcc oldName newName =
 accounts :: IO Response
 accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
 
-addresses :: Maybe Text -> Natural -> IO Response
-addresses accM cnt =
+addresses :: Maybe Text -> Page -> IO Response
+addresses accM page =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
         let net = accountStoreNetwork store
-            addrs = lastList cnt $ extAddresses store
-        addrsRes <- liftEither $ mapM (addrText3 net) addrs
-        return $ ResponseAddresses key store addrsRes
+            addrs = toPage page $ reverse $ extAddresses store
+        return $ ResponseAddresses key store addrs
 
-addrText3 :: Network
-  -> (Address, SoftPath, Natural)
-  -> Either String (Text, SoftPath, Natural)
-addrText3 net (addr, path, i) = do
-    addrStr <- addrToStringE net addr
-    return (addrStr, path, i)
+textStr2 :: Network -> (Address, a) -> Either String (Text, a)
+textStr2 net (a, b) = (,b) <$> addrToStringE net a
 
 receive :: Maybe Text -> IO Response
 receive accM =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
-        let (res, store') = genExtAddress store
-        addrRes <- liftEither $ addrText3 (accountStoreNetwork store) res
+        let (addr, store') = genExtAddress store
+            net = accountStoreNetwork store
         newStore <- commit key store'
-        return $ ResponseReceive key newStore addrRes
+        return $ ResponseReceive key newStore addr
 
-transactions :: Maybe Text -> IO Response
-transactions accM =
+transactions :: Maybe Text -> Page -> IO Response
+transactions accM page =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
-        undefined
+        let net = accountStoreNetwork store
+        withNetwork net $ do
+            let allAddrs = extAddresses store <> intAddresses store
+                addrMap = Map.fromList allAddrs
+            txs <- httpAddrTxs (fst <$> allAddrs) page
+            let walletTxs = fromStoreTransaction addrMap <$> txs
+            return $ ResponseTransactions key store walletTxs
 
 {- Haskeline Helpers -}
 

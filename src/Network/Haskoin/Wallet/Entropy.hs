@@ -10,8 +10,8 @@ import           Data.Either                 (either)
 import           Data.List
 import           Data.Maybe
 import           Data.Text                   (Text)
-import           Network.Haskoin.Keys        (Mnemonic, toMnemonic)
-import           Network.Haskoin.Util
+import           Haskoin.Keys                (Mnemonic, toMnemonic)
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
 import           Numeric                     (readInt)
 import           Numeric.Natural
@@ -36,7 +36,7 @@ decodeBase6 str
     | otherwise =
         case readInt 6 (isJust . b6') (fromInteger . toInteger . f) str of
             ((i, []):_) -> Just $ integerToBS i
-            _ -> Nothing
+            _           -> Nothing
   where
     f = fromMaybe (error "Could not decode base6") . b6'
 

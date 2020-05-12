@@ -18,15 +18,15 @@ import           Data.Maybe                          (fromMaybe)
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Util                (dropFieldLabel)
-import           Network.Haskoin.Wallet.Commands
-import           Network.Haskoin.Wallet.Parser
+import           Haskoin.Constants
+import           Haskoin.Keys
+import           Haskoin.Util                        (dropFieldLabel)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
+import           Network.Haskoin.Wallet.Commands
 import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.Entropy
+import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural

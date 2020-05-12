@@ -13,8 +13,8 @@ import qualified Data.Map.Strict                     as Map
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Util
+import           Haskoin.Constants
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Util
@@ -44,15 +44,17 @@ data Command
     | CommandAccounts
     | CommandAddresses
       { commandMaybeAcc :: Maybe Text
-      , commandCount    :: Natural
+      , commandPage     :: Page
       }
     | CommandReceive
       { commandMaybeAcc :: Maybe Text }
     | CommandTransactions
-      { commandMaybeAcc :: Maybe Text }
+      { commandMaybeAcc :: Maybe Text
+      , commandPage     :: Page
+      }
     | CommandPrepareTx
       { commandMaybeAcc :: Maybe Text
-      , commandFeeByte  :: Natural    
+      , commandFeeByte  :: Natural
       , commandDust     :: Natural
       }
     deriving (Eq, Show)
@@ -132,8 +134,10 @@ addressesParser :: ParserInfo Command
 addressesParser =
     info
         (CommandAddresses <$> accountOption <*>
-         countOption "Number of addresses to display") $
+         (Page <$> offsetOption <*> limitOption)) $
     mconcat [progDesc "List the latest receiving addresses in the account"]
+  where
+        
 
 receiveParser :: ParserInfo Command
 receiveParser =
@@ -142,7 +146,9 @@ receiveParser =
 
 transactionsParser :: ParserInfo Command
 transactionsParser =
-    info (CommandTransactions <$> accountOption) $
+    info
+        (CommandTransactions <$> accountOption <*>
+         (Page <$> offsetOption <*> limitOption)) $
     mconcat [progDesc "Display the transactions in an account"]
 
 prepareTxParser :: ParserInfo Command
@@ -256,13 +262,25 @@ accountCompleter pref = do
     keys <- either (const []) id <$> runExceptT accountMapKeys
     return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
 
-countOption :: String -> Parser Natural
-countOption desc =
+offsetOption :: Parser Natural
+offsetOption =
     option (maybeReader $ readNatural . cs) $
     mconcat
-        [ short 'c'
-        , long "count"
-        , help desc
+        [ short 'o'
+        , long "offset"
+        , help "Offset the result set"
+        , metavar "INT"
+        , value 0
+        , showDefault
+        ]
+
+limitOption :: Parser Natural
+limitOption =
+    option (maybeReader $ readNatural . cs) $
+    mconcat
+        [ short 'l'
+        , long "limit"
+        , help "Limit the result set"
         , metavar "INT"
         , value 5
         , showDefault

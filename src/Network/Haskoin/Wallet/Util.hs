@@ -1,23 +1,34 @@
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 module Network.Haskoin.Wallet.Util where
 
-import           Control.Arrow             (second)
-import           Control.Monad             (guard)
-import qualified Data.Aeson                as JSON
-import qualified Data.Aeson.Encode.Pretty  as Pretty
-import qualified Data.ByteString           as BS
-import qualified Data.ByteString.Base16    as B16
-import qualified Data.ByteString.Lazy      as BL
-import           Data.Maybe                (fromMaybe)
-import qualified Data.Serialize            as S
-import           Data.String.Conversions   (cs)
-import           Data.Text                 (Text)
-import qualified Data.Text                 as Text
-import           Network.Haskoin.Address
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Util
+import           Control.Arrow            (second)
+import           Control.Monad            (guard)
+import           Control.Monad.Except
+import           Control.Monad.Reader
+import qualified Data.Aeson               as JSON
+import qualified Data.Aeson.Encode.Pretty as Pretty
+import qualified Data.ByteString          as BS
+import qualified Data.ByteString.Base16   as B16
+import qualified Data.ByteString.Lazy     as BL
+import           Data.Maybe               (fromMaybe)
+import qualified Data.Serialize           as S
+import           Data.String.Conversions  (cs)
+import           Data.Text                (Text)
+import qualified Data.Text                as Text
+import           Haskoin.Address
+import           Haskoin.Constants
+import           Haskoin.Keys
+import           Haskoin.Util
 import           Numeric.Natural
+
+type NetworkT = ReaderT Network
+
+network :: MonadReader Network m => m Network
+network = ask
+
+withNetwork :: Monad m => Network -> NetworkT m a -> m a
+withNetwork net m = runReaderT m net
 
 {- Data.Aeson Compatibility -}
 
@@ -37,9 +48,23 @@ encodeJsonPrettyLn =
 
 {- Haskoin helper functions -}
 
+data Page = Page
+    { pageOffset :: Natural
+    , pageLimit  :: Natural
+    }
+    deriving (Eq, Show)
+
+toPage :: Page -> [a] -> [a]
+toPage (Page offset limit) xs =
+    take (fromIntegral limit) $ drop (fromIntegral offset) xs
+
 addrToStringE :: Network -> Address -> Either String Text
 addrToStringE net a =
-    maybeToEither "Invalid Address in haskoin-wallet" (addrToString net a)
+    maybeToEither "Invalid Address in addrToStringE" (addrToString net a)
+    
+stringToAddrE :: Network -> Text -> Either String Address
+stringToAddrE net a =
+    maybeToEither "Invalid Address in stringToAddrE" (stringToAddr net a)
 
 lastList :: Natural -> [a] -> [a]
 lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs

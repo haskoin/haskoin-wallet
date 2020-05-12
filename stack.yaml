@@ -1,8 +1,7 @@
 resolver: lts-15.11
 extra-deps:
-- git: https://github.com/haskoin/haskoin-core.git
-  commit: 39c0e927ee9b23b9591417a3ec0b8565df3d7b7b
-- rocksdb-haskell-1.0.1
+- haskoin-core-0.13.3
+- haskoin-store-data-0.26.4
 - murmur3-1.0.3
 - ansi-terminal-0.10.3
 - parsec-extra-0.2.0.0

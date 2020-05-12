@@ -37,7 +37,7 @@ library:
   - Network.Haskoin.Wallet.HTTP
   - Network.Haskoin.Wallet.Amounts
   - Network.Haskoin.Wallet.Doc
-  - Network.Haskoin.Wallet.DetailedTx
+  - Network.Haskoin.Wallet.WalletTx
   - Network.Haskoin.Wallet.Util
   dependencies:
   - aeson
@@ -53,6 +53,7 @@ library:
   - entropy
   - haskeline
   - haskoin-core
+  - haskoin-store-data
   - http-types
   - lens
   - lens-aeson

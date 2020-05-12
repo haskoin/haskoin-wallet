@@ -16,20 +16,29 @@ import           Data.Maybe
 import           Data.Ord
 import qualified Data.Set                            as Set
 import           Data.Text                           (Text)
-import           Network.Haskoin.Address
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Crypto
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Script
-import           Network.Haskoin.Transaction
-import           Network.Haskoin.Util
+import           Haskoin.Address
+import           Haskoin.Constants
+import           Haskoin.Crypto
+import           Haskoin.Keys
+import           Haskoin.Script
+import           Haskoin.Transaction
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
-import           Network.Haskoin.Wallet.DetailedTx
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 
 {- Building Transactions -}
+
+{- Signing Transactions -}
+
+signingKey ::
+       Network -> BS.ByteString -> Text -> Natural -> Either String XPrvKey
+signingKey net pass mnem acc = do
+    seed <- mnemonicToSeed pass mnem
+    return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
+
+{-
 
 data WalletCoin = WalletCoin
     { walletCoinOutPoint     :: !OutPoint
@@ -276,3 +285,4 @@ findCoin txs op@(OutPoint h i) = do
     to <- txOut matchTx !!? fromIntegral i
     return (op, to)
 
+ -}

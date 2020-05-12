@@ -23,10 +23,10 @@ import qualified Data.Serialize                  as S
 import           Data.String.Conversions         (cs)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as Text
-import           Network.Haskoin.Address
-import           Network.Haskoin.Constants
-import           Network.Haskoin.Keys
-import           Network.Haskoin.Util
+import           Haskoin.Address
+import           Haskoin.Constants
+import           Haskoin.Keys
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty hiding ((</>))
