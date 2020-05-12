@@ -299,8 +299,9 @@ transactions accM page =
         withNetwork net $ do
             let allAddrs = extAddresses store <> intAddresses store
                 addrMap = Map.fromList allAddrs
+            best <- bestBlockHeight
             txs <- httpAddrTxs (fst <$> allAddrs) page
-            let walletTxs = fromStoreTransaction addrMap <$> txs
+            let walletTxs = fromStoreTransaction addrMap best <$> txs
             return $ ResponseTransactions key store walletTxs
 
 {- Haskeline Helpers -}

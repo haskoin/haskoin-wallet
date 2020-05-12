@@ -73,6 +73,7 @@ data WalletTx = WalletTx
     , walletTxFee           :: Natural
     , walletTxFeeByte       :: Decimal
     , walletTxBlockRef      :: Store.BlockRef
+    , walletTxConfirmations :: Natural
     } deriving (Eq, Show)
 
 walletTxToJSON :: Network -> WalletTx -> Either String Json.Value
@@ -96,6 +97,7 @@ walletTxToJSON net tx = do
             , "fee" .= walletTxFee tx
             , "feebyte" .= show (walletTxFeeByte tx)
             , "block" .= walletTxBlockRef tx
+            , "confirmations" .= walletTxConfirmations tx
             ]
 
 walletTxParseJSON :: Network -> Json.Value -> Parser WalletTx
@@ -119,6 +121,7 @@ walletTxParseJSON net =
             <*> o .: "fee"
             <*> (read <$> o .: "feebyte")
             <*> o .: "block"
+            <*> o .: "confirmations"
 
 mapAddrText :: Network -> Map Address v -> Either String (Map Text v)
 mapAddrText net m = do
@@ -130,8 +133,9 @@ mapTextAddr net m = do
     let f (a, v) = (, v) <$> stringToAddrE net a
     Map.fromList <$> mapM f (Map.assocs m)
 
-fromStoreTransaction :: Map Address SoftPath -> Store.Transaction -> WalletTx
-fromStoreTransaction walletAddrs sTx =
+fromStoreTransaction ::
+       Map Address SoftPath -> Natural -> Store.Transaction -> WalletTx
+fromStoreTransaction walletAddrs currHeight sTx =
     WalletTx
         { walletTxId = Store.transactionId sTx
         , walletTxType = txType
@@ -146,6 +150,7 @@ fromStoreTransaction walletAddrs sTx =
         , walletTxFee = fee
         , walletTxFeeByte = feeByte
         , walletTxBlockRef = Store.transactionBlock sTx
+        , walletTxConfirmations = fromMaybe 0 confM
         }
   where
     size = fromIntegral $ Store.transactionSize sTx :: Natural
@@ -157,12 +162,19 @@ fromStoreTransaction walletAddrs sTx =
     (inputMap, nonStdIn) = inputAddressMap $ Store.transactionInputs sTx
     myInputsMap = Map.intersectionWith (,) inputMap walletAddrs
     othInputsMap = Map.difference inputMap walletAddrs
-    myOutputsSum = fromIntegral $ sum $ fst <$> Map.elems myOutputsMap :: Integer
+    myOutputsSum =
+        fromIntegral $ sum $ fst <$> Map.elems myOutputsMap :: Integer
     myInputsSum = fromIntegral $ sum $ fst <$> Map.elems myInputsMap :: Integer
     amount = myOutputsSum - myInputsSum
-    txType | amount > 0 = TxCredit
-           | abs amount == fromIntegral fee = TxInternal
-           | otherwise = TxDebit
+    confM =
+        case Store.transactionBlock sTx of
+            Store.MemRef _ -> Nothing
+            Store.BlockRef height _ ->
+                (+ 1) <$> currHeight `safeSubtract` fromIntegral height
+    txType
+        | amount > 0 = TxCredit
+        | abs amount == fromIntegral fee = TxInternal
+        | otherwise = TxDebit
 
 outputAddressMap :: [Store.StoreOutput] -> (Map Address Natural, Natural)
 outputAddressMap outs =

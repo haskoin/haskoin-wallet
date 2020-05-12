@@ -50,6 +50,12 @@ httpAddrTxs addrs p = do
     blockTxs <- apiQuery $ AddressTransactions addrs Nothing (Just 1000)
     apiQuery $ Transactions $ Store.blockTxHash <$> toPage p blockTxs
 
+bestBlockHeight ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => m Natural
+bestBlockHeight =
+    fromIntegral . Store.blockDataHeight <$> apiQuery (BlockBest False)
+
 {- Helper API -}
 
 data ApiPoint a where
@@ -64,6 +70,9 @@ data ApiPoint a where
     TransactionsRaw ::
         { apiRawTxids :: [TxHash]
         }             -> ApiPoint [Tx]
+    BlockBest ::
+        { apiNoTx :: Bool } -> ApiPoint Store.BlockData
+    Health :: ApiPoint Store.HealthCheck
 
 apiHost :: Network -> String
 apiHost net = "https://api.haskoin.com" </> getNetworkName net
@@ -76,6 +85,10 @@ applyOptM p =
     \case
         Just t -> applyOpt p t
         _ -> Endo id
+
+optBool :: Text -> Bool -> Endo HTTP.Options
+optBool _ False = Endo id
+optBool p True = applyOpt p ["true"]
 
 apiQuery :: (MonadIO m, MonadReader Network m, MonadError String m) =>
             ApiPoint a -> m a
@@ -99,6 +112,13 @@ apiQuery point = do
                 url = apiHost net </> "transactions" </> "raw"
                 opts = applyOpt "txids" txsTxt
             httpBinary opts url
+        BlockBest notx -> do
+            let url = apiHost net </> "block" </> "best"
+                opts = optBool "notx" notx
+            httpBinary opts url
+        Health -> do
+            let url = apiHost net </> "health"
+            httpBinary (Endo id) url
 
 httpBinary ::
        (MonadIO m, MonadError String m, S.Serialize a)
