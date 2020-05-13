@@ -24,6 +24,7 @@ import           Data.Text                           (Text)
 import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Keys
+import qualified Haskoin.Store.Data                  as Store
 import           Haskoin.Util                        (dropFieldLabel,
                                                       dropSumLabels,
                                                       maybeToEither)
@@ -68,6 +69,11 @@ data Response
       }
     | ResponseAccounts
       { responseAccounts :: AccountMap
+      }
+    | ResponseBalance
+      { responseAccountName :: Text
+      , responseAccount     :: AccountStore
+      , responseBalance     :: AccountBalance
       }
     | ResponseAddresses
       { responseAccountName :: Text
@@ -122,6 +128,13 @@ instance Json.ToJSON Response where
                     ]
             ResponseAccounts a ->
                 object ["type" .= Json.String "accounts", "accounts" .= a]
+            ResponseBalance n a b ->
+                object
+                    [ "type" .= Json.String "balance"
+                    , "accountname" .= n
+                    , "account" .= a
+                    , "balance" .= b
+                    ]
             ResponseAddresses n a addrs ->
                 case mapM (addrText2 (accountStoreNetwork a)) addrs of
                     Right xs ->
@@ -181,6 +194,11 @@ instance Json.FromJSON Response where
                 "accounts" -> do
                     as <- o .: "accounts"
                     return $ ResponseAccounts as
+                "balance" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    b <- o .: "balance"
+                    return $ ResponseBalance n a b
                 "addresses" -> do
                     n <- o .: "accountname"
                     a <- o .: "account"
@@ -201,6 +219,49 @@ instance Json.FromJSON Response where
                     return $ ResponseTransactions n a txs
                 _ -> fail "Invalid JSON response type"
 
+data AccountBalance = AccountBalance
+    { balanceAmount        :: !Natural
+      -- ^ confirmed balance
+    , balanceZero          :: !Natural
+      -- ^ unconfirmed balance
+    , balanceUnspentCount  :: !Natural
+      -- ^ number of unspent outputs
+    , balanceTxCount       :: !Natural
+      -- ^ number of transactions
+    , balanceTotalReceived :: !Natural
+      -- ^ total amount from all outputs in this address
+    } deriving (Show, Read, Eq, Ord)
+
+instance Json.ToJSON AccountBalance where
+    toJSON b =
+        object $
+        [ "confirmed" .= balanceAmount b
+        , "unconfirmed" .= balanceZero b
+        , "utxo" .= balanceUnspentCount b
+        , "txs" .= balanceTxCount b
+        , "received" .= balanceTotalReceived b
+        ]
+
+instance Json.FromJSON AccountBalance where
+    parseJSON =
+        Json.withObject "accountbalance" $ \o -> do
+            AccountBalance <$> o .: "confirmed"
+                           <*> o .: "unconfirmed"
+                           <*> o .: "utxo"
+                           <*> o .: "txs"
+                           <*> o .: "received"
+
+addrsToAccBalance :: [Store.Balance] -> AccountBalance
+addrsToAccBalance xs =
+    AccountBalance
+        { balanceAmount = fromIntegral $ sum $ Store.balanceAmount <$> xs
+        , balanceZero = fromIntegral $ sum $ Store.balanceZero <$> xs
+        , balanceUnspentCount =
+              fromIntegral $ sum $ Store.balanceUnspentCount <$> xs
+        , balanceTxCount = fromIntegral $ sum $ Store.balanceTxCount <$> xs
+        , balanceTotalReceived =
+              fromIntegral $ sum $ Store.balanceTotalReceived <$> xs
+        }
 
 addrText2 :: Network -> (Address, v) -> Either String (Text, v)
 addrText2 net (a, v) = (,v) <$> addrToStringE net a
@@ -222,6 +283,7 @@ commandResponse = \case
     CommandImportAcc f k -> importAcc f k
     CommandRenameAcc old new -> renameAcc old new
     CommandAccounts -> accounts
+    CommandBalance accM -> balance accM
     CommandAddresses accM p -> addresses accM p
     CommandReceive accM -> receive accM
     CommandTransactions accM p -> transactions accM p
@@ -275,6 +337,16 @@ renameAcc oldName newName =
 
 accounts :: IO Response
 accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
+
+balance :: Maybe Text -> IO Response
+balance accM =
+    catchResponseError $ do
+        (key, store) <- getAccountStore accM
+        let net = accountStoreNetwork store
+        withNetwork net $ do
+            let allAddrs = extAddresses store <> intAddresses store
+            bals <- httpAddrBalances $ fst <$> allAddrs
+            return $ ResponseBalance key store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
 addresses accM page =

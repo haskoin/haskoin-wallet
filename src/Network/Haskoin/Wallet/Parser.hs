@@ -42,6 +42,8 @@ data Command
       , commandNewName :: Text
       }
     | CommandAccounts
+    | CommandBalance
+      { commandMaybeAcc :: Maybe Text }
     | CommandAddresses
       { commandMaybeAcc :: Maybe Text
       , commandPage     :: Page
@@ -78,6 +80,7 @@ commandParser =
             , command "importacc" importAccParser
             , command "renameacc" renameAccParser
             , command "accounts" accountsParser
+            , command "balance" balanceParser
             ]
         , hsubparser $
             mconcat
@@ -129,6 +132,11 @@ renameAccParser =
 accountsParser :: ParserInfo Command
 accountsParser =
     info (pure CommandAccounts) $ mconcat [progDesc "Return all accounts"]
+
+balanceParser :: ParserInfo Command
+balanceParser =
+    info (CommandBalance <$> accountOption) $
+    mconcat [progDesc "Get the account balance"]
 
 addressesParser :: ParserInfo Command
 addressesParser =

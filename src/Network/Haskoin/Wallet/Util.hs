@@ -11,7 +11,9 @@ import qualified Data.Aeson.Encode.Pretty as Pretty
 import qualified Data.ByteString          as BS
 import qualified Data.ByteString.Base16   as B16
 import qualified Data.ByteString.Lazy     as BL
+import           Data.List                (sortBy)
 import           Data.Maybe               (fromMaybe)
+import           Data.Ord                 (compare)
 import qualified Data.Serialize           as S
 import           Data.String.Conversions  (cs)
 import           Data.Text                (Text)
@@ -61,7 +63,7 @@ toPage (Page offset limit) xs =
 addrToStringE :: Network -> Address -> Either String Text
 addrToStringE net a =
     maybeToEither "Invalid Address in addrToStringE" (addrToString net a)
-    
+
 stringToAddrE :: Network -> Text -> Either String Address
 stringToAddrE net a =
     maybeToEither "Invalid Address in stringToAddrE" (stringToAddr net a)
@@ -75,15 +77,19 @@ xPubChecksum = encodeHex . S.encode . xPubFP
 (</>) :: String -> String -> String
 a </> b = a <> "/" <> b
 
-(!!?) :: [a] -> Int -> Maybe a
+(!!?) :: [a] -> Natural -> Maybe a
 xs !!? i
-    | i < length xs = Just $ xs !! i
+    | fromIntegral i < length xs = Just $ xs !! fromIntegral i
     | otherwise = Nothing
 
-chunksOf :: Int -> [a] -> [[a]]
+chunksOf :: Natural -> [a] -> [[a]]
 chunksOf n xs
     | null xs = []
-    | otherwise = uncurry (:) $ second (chunksOf n) $ splitAt n xs
+    | otherwise =
+        uncurry (:) $ second (chunksOf n) $ splitAt (fromIntegral n) xs
+
+sortDesc :: Ord a => [a] -> [a]
+sortDesc = sortBy (flip compare)
 
 padStart :: Int -> Text -> Text -> Text
 padStart n c t =

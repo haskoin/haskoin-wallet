@@ -7,37 +7,37 @@ module Network.Haskoin.Wallet.HTTP
 
 where
 
-import           Control.Lens                      ((&), (.~), (?~), (^.),
-                                                    (^..), (^?))
+import           Control.Lens                    ((&), (.~), (?~), (^.), (^..),
+                                                  (^?))
 import           Control.Monad.Except
 import           Control.Monad.Reader
-import           Data.Aeson                        as Json
-import qualified Data.Aeson                        as J
+import           Data.Aeson                      as Json
+import qualified Data.Aeson                      as J
 import           Data.Aeson.Lens
-import qualified Data.ByteString                   as BS
-import qualified Data.ByteString.Lazy              as BL
-import           Data.List                         (nub, sum)
-import           Data.Map                          (Map)
-import qualified Data.Map                          as Map
+import qualified Data.ByteString                 as BS
+import qualified Data.ByteString.Lazy            as BL
+import           Data.List                       (nub, sum, sort)
+import           Data.Map                        (Map)
+import qualified Data.Map                        as Map
 import           Data.Maybe
 import           Data.Monoid
-import qualified Data.Serialize                    as S
-import           Data.String.Conversions           (cs)
-import           Data.Text                         (Text)
-import qualified Data.Text                         as Text
+import qualified Data.Serialize                  as S
+import           Data.String.Conversions         (cs)
+import           Data.Text                       (Text)
+import qualified Data.Text                       as Text
 import           Haskoin.Address
 import           Haskoin.Block
 import           Haskoin.Constants
 import           Haskoin.Script
-import qualified Haskoin.Store.Data                as Store
+import qualified Haskoin.Store.Data              as Store
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
 import           Network.HTTP.Types.Status
-import qualified Network.Wreq                      as HTTP
-import           Network.Wreq.Types                (ResponseChecker)
+import qualified Network.Wreq                    as HTTP
+import           Network.Wreq.Types              (ResponseChecker)
 import           Numeric.Natural
-import           Options.Applicative.Help.Pretty   hiding ((</>))
+import           Options.Applicative.Help.Pretty hiding ((</>))
 
 {- Application -}
 
@@ -47,48 +47,61 @@ httpAddrTxs ::
     -> Page
     -> m [Store.Transaction]
 httpAddrTxs addrs p = do
-    blockTxs <- apiQuery $ AddressTransactions addrs Nothing (Just 1000)
-    apiQuery $ Transactions $ Store.blockTxHash <$> toPage p blockTxs
+    blockTxs <- batchQuery 20 $ AddressTransactions addrs Nothing (Just 500)
+    let sortedTxs = sortDesc blockTxs
+    batchQuery 20 $ Transactions $ Store.blockTxHash <$> toPage p sortedTxs
+
+httpAddrBalances ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => [Address]
+    -> m [Store.Balance]
+httpAddrBalances addrs = batchQuery 20 $ AddressBalances addrs
 
 bestBlockHeight ::
        (MonadIO m, MonadReader Network m, MonadError String m)
     => m Natural
 bestBlockHeight =
-    fromIntegral . Store.blockDataHeight <$> apiQuery (BlockBest False)
+    fromIntegral . Store.blockDataHeight <$> apiQuery (BlockBest True)
 
 {- Helper API -}
 
 data ApiPoint a where
     AddressTransactions ::
-        { apiAddresses  :: [Address]
-        , apiHeight     :: Maybe String
-        , apiLimit      :: Maybe Natural
-        }               -> ApiPoint [Store.BlockTx]
+        { addrTxAddresses :: [Address]
+        , addrTxHeight    :: Maybe String
+        , addrTxLimit     :: Maybe Natural
+        }                 -> ApiPoint [Store.BlockTx]
+    AddressBalances ::
+        { addrBalAddresses :: [Address]
+        }                  -> ApiPoint [Store.Balance]
     Transactions ::
-        { apiTxids :: [TxHash]
+        { txsTxids :: [TxHash]
         }          -> ApiPoint [Store.Transaction]
     TransactionsRaw ::
-        { apiRawTxids :: [TxHash]
+        { txsRawTxids :: [TxHash]
         }             -> ApiPoint [Tx]
     BlockBest ::
-        { apiNoTx :: Bool } -> ApiPoint Store.BlockData
+        { blockBestNoTx :: Bool } -> ApiPoint Store.BlockData
     Health :: ApiPoint Store.HealthCheck
 
 apiHost :: Network -> String
 apiHost net = "https://api.haskoin.com" </> getNetworkName net
 
-applyOpt :: Text -> [Text] -> Endo HTTP.Options
-applyOpt p t = Endo $ HTTP.param p .~ t
+batchQuery ::
+       (MonadIO m, MonadReader Network m, MonadError String m, Monoid a)
+    =>  Natural -> ApiPoint a -> m a
+batchQuery i a = mconcat <$> mapM apiQuery (batchApiPoint i a)
 
-applyOptM :: Text -> Maybe [Text] -> Endo HTTP.Options
-applyOptM p =
+batchApiPoint :: Natural -> ApiPoint a -> [ApiPoint a]
+batchApiPoint i =
     \case
-        Just t -> applyOpt p t
-        _ -> Endo id
-
-optBool :: Text -> Bool -> Endo HTTP.Options
-optBool _ False = Endo id
-optBool p True = applyOpt p ["true"]
+        AddressTransactions xs h l ->
+            AddressTransactions <$> chunksOf i xs <*> pure h <*> pure l
+        AddressBalances xs ->
+            AddressBalances <$> chunksOf i xs
+        Transactions xs -> Transactions <$> chunksOf i xs
+        TransactionsRaw xs -> TransactionsRaw <$> chunksOf i xs
+        _ -> error "This ApiPoint does not support batching"
 
 apiQuery :: (MonadIO m, MonadReader Network m, MonadError String m) =>
             ApiPoint a -> m a
@@ -101,6 +114,11 @@ apiQuery point = do
                 opts = applyOpt "addresses" addrsTxt
                     <> applyOptM "height" ((:[]) . cs <$> heightM)
                     <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
+            httpBinary opts url
+        AddressBalances addrs -> do
+            addrsTxt <- liftEither $ addrToStringE net `mapM` addrs
+            let url = apiHost net </> "address" </> "balances"
+                opts = applyOpt "addresses" addrsTxt
             httpBinary opts url
         Transactions tids -> do
             let txsTxt = txHashToHex <$> tids
@@ -142,6 +160,21 @@ checkStatus _ r
     code = r ^. HTTP.responseStatus . HTTP.statusCode
     message = r ^. HTTP.responseStatus . HTTP.statusMessage
     status = mkStatus code message
+
+{- Helpers -}
+
+applyOpt :: Text -> [Text] -> Endo HTTP.Options
+applyOpt p t = Endo $ HTTP.param p .~ t
+
+applyOptM :: Text -> Maybe [Text] -> Endo HTTP.Options
+applyOptM p =
+    \case
+        Just t -> applyOpt p t
+        _ -> Endo id
+
+optBool :: Text -> Bool -> Endo HTTP.Options
+optBool _ False = Endo id
+optBool p True  = applyOpt p ["true"]
 
 {-
 
