@@ -247,21 +247,22 @@ walletUnsignedTxParseJSON net =
             <*> o .: "fee"
             <*> (read <$> o .: "feebyte")
 
-toUnsignedWalletTx ::
-       Map Address SoftPath -> TxSignData -> Either String WalletUnsignedTx
-toUnsignedWalletTx walletAddrs tsd@(TxSignData tx _ inPaths outPaths _) = do
+parseTxSignData :: XPubKey -> TxSignData -> Either String WalletUnsignedTx
+parseTxSignData pubkey tsd@(TxSignData tx _ inPaths outPaths _) = do
     coins <- txSignDataCoins tsd
     let outSum = fromIntegral $ sum $ outValue <$> txOut tx :: Natural
         inSum = fromIntegral $ sum $ outValue <$> coins :: Natural
     fee <- maybeToEither "Fee is negative" $ inSum `safeSubtract` outSum
     let size = guessTxSize (length $ txIn tx) [] (length $ txOut tx) 0
         feeByte = Decimal.roundTo 2 $ (fromIntegral fee) / (fromIntegral size)
+        inPathAddrs = Map.fromList $ (pathToAddr pubkey &&& id) <$> inPaths
+        outPathAddrs = Map.fromList $ (pathToAddr pubkey &&& id) <$> outPaths
         (outputMap, nonStdOut) = txOutAddressMap $ txOut tx
-        myOutputsMap = Map.intersectionWith (,) outputMap walletAddrs
-        othOutputsMap = Map.difference outputMap walletAddrs
+        myOutputsMap = Map.intersectionWith (,) outputMap outPathAddrs
+        othOutputsMap = Map.difference outputMap outPathAddrs
         (inputMap, nonStdIn) = txOutAddressMap coins
-        myInputsMap = Map.intersectionWith (,) inputMap walletAddrs
-        othInputsMap = Map.difference inputMap walletAddrs
+        myInputsMap = Map.intersectionWith (,) inputMap inPathAddrs
+        othInputsMap = Map.difference inputMap inPathAddrs
         myOutputsSum =
             fromIntegral $ sum $ fst <$> Map.elems myOutputsMap :: Integer
         myInputsSum =
@@ -307,6 +308,9 @@ txType amount fee
     | amount > 0 = TxCredit
     | abs amount == fromIntegral fee = TxInternal
     | otherwise = TxDebit
+
+pathToAddr :: XPubKey -> SoftPath -> Address
+pathToAddr pubKey = xPubAddr . (`derivePubPath` pubKey)
 
 {-
 

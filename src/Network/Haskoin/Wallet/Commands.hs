@@ -171,6 +171,17 @@ instance Json.ToJSON Response where
                             , "transactions" .= txsJ
                             ]
                     Left err -> jsonError err
+            ResponsePrepareTx n a f t ->
+                case walletUnsignedTxToJSON (accountStoreNetwork a) t of
+                    Right tJ ->
+                        object
+                            [ "type" .= Json.String "preparetx"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "txfile" .= f
+                            , "transaction" .= tJ
+                            ]
+                    Left err -> jsonError err
 
 instance Json.FromJSON Response where
     parseJSON =
@@ -223,6 +234,13 @@ instance Json.FromJSON Response where
                     let f = walletTxParseJSON (accountStoreNetwork a)
                     txs <- mapM f =<< o .: "transactions"
                     return $ ResponseTransactions n a txs
+                "preparetx" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    f <- o .: "txfile"
+                    let g = walletUnsignedTxParseJSON (accountStoreNetwork a)
+                    t <- g =<< o .: "transaction"
+                    return $ ResponsePrepareTx n a f t
                 _ -> fail "Invalid JSON response type"
 
 data AccountBalance = AccountBalance
@@ -288,8 +306,8 @@ commandResponse =
         CommandAddresses accM p -> addresses accM p
         CommandReceive accM -> receive accM
         CommandTransactions accM p -> transactions accM p
-        CommandPrepareTx accM rcpts unit fee dust ->
-            prepareTx accM rcpts unit fee dust
+        CommandPrepareTx rcpts accM unit fee dust ->
+            prepareTx rcpts accM unit fee dust
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -380,22 +398,22 @@ transactions accM page =
             return $ ResponseTransactions key store walletTxs
 
 prepareTx ::
-       Maybe Text
-    -> [(Text, Text)]
+       [(Text, Text)]
+    -> Maybe Text
     -> AmountUnit
     -> Natural
     -> Natural
     -> IO Response
-prepareTx accM rcpTxt unit feeByte dust =
+prepareTx rcpTxt accM unit feeByte dust =
     catchResponseError $ do
         (key, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
         withNetwork net $ do
-            let walletAddrMap = storeAddressMap store
             (signDat, commitStore) <- buildTxSignData store rcpts feeByte dust
             path <- liftIO $ writeDoc signDat
-            wTx <- liftEither $ toUnsignedWalletTx walletAddrMap signDat
+            wTx <-
+                liftEither $ parseTxSignData (accountStoreXPubKey store) signDat
             newStore <- commit key commitStore
             return $ ResponsePrepareTx key newStore (cs path) wTx
 

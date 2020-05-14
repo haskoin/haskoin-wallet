@@ -222,9 +222,6 @@ maybeSetForkId net
 noEmptyInputs :: Tx -> Bool
 noEmptyInputs = all (not . BS.null) . fmap scriptInput . txIn
 
-pathToAddr :: XPubKey -> SoftPath -> Address
-pathToAddr pubKey = xPubAddr . (`derivePubPath` pubKey)
-
 parseTxCoins ::
        TxSignData -> XPubKey -> ([(OutPoint, TxOut)], [(OutPoint, TxOut)])
 parseTxCoins (TxSignData tx inTxs inPaths _) pubKey =

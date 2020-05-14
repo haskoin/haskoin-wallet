@@ -55,8 +55,8 @@ data Command
       , commandPage     :: Page
       }
     | CommandPrepareTx
-      { commandMaybeAcc   :: Maybe Text
-      , commandRecipients :: [(Text, Text)]
+      { commandRecipients :: [(Text, Text)]
+      , commandMaybeAcc   :: Maybe Text
       , commandUnit       :: AmountUnit
       , commandFeeByte    :: Natural
       , commandDust       :: Natural
@@ -164,7 +164,7 @@ transactionsParser =
 prepareTxParser :: ParserInfo Command
 prepareTxParser =
     info
-        (CommandPrepareTx <$> accountOption <*> some recipientArg <*> unitOption <*>
+        (CommandPrepareTx <$> some recipientArg <*> accountOption <*> unitOption <*>
          feeOption <*>
          dustOption) $
     mconcat
@@ -270,12 +270,13 @@ accountArg desc =
         ]
 
 recipientArg :: Parser (Text, Text)
-recipientArg =
-    argument ((,) <$> str <*> str) $
-    mconcat
-        [ help "List of recipient as: addr amount addr2 amount2 ..."
-        , metavar "{ADDRESS AMOUNT ...}"
-        ]
+recipientArg = (,) <$> addrParser <*> amntParser
+  where
+    addrParser =
+        strArgument $ mconcat [help "Recipient address", metavar "ADDRESS"]
+    amntParser =
+        strArgument $ mconcat [help "Recipient amount", metavar "AMOUNT"]
+
 
 accountCompleter :: String -> IO [String]
 accountCompleter pref = do
