@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE Strict            #-}
@@ -83,14 +84,14 @@ accountMapFilePath = do
     D.createDirectoryIfMissing True dir
     return $ dir </> "bip44accounts.json"
 
-readAccountMap :: ExceptT String IO AccountMap
+readAccountMap :: (MonadIO m, MonadError String m) => m AccountMap
 readAccountMap = do
     fp <- liftIO accountMapFilePath
     exists <- liftIO $ D.doesFileExist fp
     unless exists $ writeAccountMap Map.empty
     readJsonFile fp
 
-writeAccountMap :: AccountMap -> ExceptT String IO ()
+writeAccountMap :: (MonadIO m, MonadError String m) => AccountMap -> m ()
 writeAccountMap accMap = do
     liftEither $ validAccountMap accMap
     liftIO $ do
@@ -105,10 +106,11 @@ validAccountMap accMap
   where
     pubKeys = accountStoreXPubKey <$> Map.elems accMap
 
-accountMapKeys :: ExceptT String IO [Text]
+accountMapKeys :: (MonadIO m, MonadError String m) => m [Text]
 accountMapKeys = Map.keys <$> readAccountMap
 
-getAccountStore :: Maybe Text -> ExceptT String IO (Text, AccountStore)
+getAccountStore ::
+       (MonadIO m, MonadError String m) => Maybe Text -> m (Text, AccountStore)
 getAccountStore keyM = do
     accMap <- readAccountMap
     case keyM of
@@ -123,9 +125,10 @@ getAccountStore keyM = do
                 _ -> throwError $ "The account " <> cs key <> "does not exist"
 
 alterAccountStore ::
-       Text
+      (MonadIO m, MonadError String m)
+    => Text
     -> (Maybe AccountStore -> Either String (Maybe AccountStore))
-    -> ExceptT String IO (Maybe AccountStore)
+    -> m (Maybe AccountStore)
 alterAccountStore key f = do
     accMap <- readAccountMap
     accM <- liftEither $ f (key `Map.lookup` accMap)
@@ -133,21 +136,26 @@ alterAccountStore key f = do
     when (accMap /= newMap) $ writeAccountMap newMap
     return accM
 
-insertAccountStore :: Text -> AccountStore -> ExceptT String IO ()
+insertAccountStore ::
+       (MonadIO m, MonadError String m) => Text -> AccountStore -> m ()
 insertAccountStore key store =
     void $ alterAccountStore key $ \case
         Nothing -> return $ Just store
         _ -> Left "The account name already exists"
 
 adjustAccountStore ::
-       Text -> (AccountStore -> AccountStore) -> ExceptT String IO AccountStore
+       (MonadIO m, MonadError String m)
+    => Text
+    -> (AccountStore -> AccountStore)
+    -> m AccountStore
 adjustAccountStore key f = do
     accM <- alterAccountStore key $ \case
         Nothing -> Left $ "The account " <> Text.unpack key <> " does not exist"
         Just store -> return $ Just $ f store
     liftEither $ maybeToEither "Account was Nothing" accM
 
-renameAccountStore :: Text -> Text -> ExceptT String IO AccountStore
+renameAccountStore ::
+       (MonadIO m, MonadError String m) => Text -> Text -> m AccountStore
 renameAccountStore oldName newName
     | oldName == newName =
         throwError "Old and new names are the same"
@@ -167,7 +175,11 @@ data Commit a
     = NoCommit { commitValue :: a }
     | Commit { commitValue :: a }
 
-commit :: Text -> Commit AccountStore -> ExceptT String IO AccountStore
+commit ::
+       (MonadIO m, MonadError String m)
+    => Text
+    -> Commit AccountStore
+    -> m AccountStore
 commit _ (NoCommit val) = return val
 commit key (Commit val) = do
     void $ alterAccountStore key $ const $ return (Just val)
@@ -211,3 +223,5 @@ addresses_ getIdx deriv store =
     idx = fromIntegral $ getIdx store
     addrs = take idx $ derivePathAddrs xpub deriv 0
 
+storeAddressMap :: AccountStore -> Map Address SoftPath
+storeAddressMap store = Map.fromList $ extAddresses store <> intAddresses store

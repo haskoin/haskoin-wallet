@@ -1,10 +1,14 @@
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
+{-# LANGUAGE Strict            #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Signing where
 
 import           Control.Arrow                       (second, (&&&), (***))
+import           Control.Monad.Except
+import           Control.Monad.Reader
 import           Data.Aeson.TH                       (deriveJSON)
 import qualified Data.ByteString                     as BS
 import           Data.Either                         (rights)
@@ -16,19 +20,80 @@ import           Data.Maybe
 import           Data.Ord
 import qualified Data.Set                            as Set
 import           Data.Text                           (Text)
+import           Data.Word                           (Word64)
 import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Crypto
 import           Haskoin.Keys
 import           Haskoin.Script
+import qualified Haskoin.Store.Data                  as Store
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
+import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 
 {- Building Transactions -}
+
+buildTxSignData ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => AccountStore
+    -> [(Address, Natural)]
+    -> Natural
+    -> Natural
+    -> m (TxSignData, Commit AccountStore)
+buildTxSignData store rcpts feeByte dust
+    | null rcpts = throwError "No recipients provided"
+    | otherwise = do
+        net <- network
+        allCoins <- httpAddrUnspent $ Map.keys walletAddrMap
+        (tx, depTxHash, inDeriv, outDeriv) <-
+            liftEither $
+            buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
+        depTxs <- httpRawTxs depTxHash
+        return
+            ( TxSignData tx depTxs inDeriv outDeriv net
+            , if null outDeriv
+                  then NoCommit store
+                  else newStore)
+  where
+    walletAddrMap = storeAddressMap store
+    (change, newStore) = genIntAddress store
+
+buildWalletTx ::
+       Network
+    -> [(Address, Natural)] -- recipients
+    -> (Address, SoftPath) -- change
+    -> Map Address SoftPath -- All account addresses
+    -> [Store.Unspent] -- Coins to choose from
+    -> Natural -- Fee per byte
+    -> Natural -- Dust
+    -> Either String (Tx, [TxHash], [SoftPath], [SoftPath])
+buildWalletTx net rcptsN (change, changeDeriv) walletAddrs coins feeByteN dustN = do
+    (selCoins, changeAmnt) <-
+        chooseCoins tot feeByte (length rcpts + 1) True (sortDesc coins)
+    let (allRcpts, outDeriv)
+            | changeAmnt <= dust = (rcpts, [])
+            | otherwise = ((change, changeAmnt) : rcpts, [changeDeriv])
+        ops = Store.unspentPoint <$> selCoins
+    tx <- buildAddrTx net ops =<< mapM (addrToText2 net) allRcpts
+    inCoinAddrs <- maybeToEither err $ mapM Store.unspentAddress selCoins
+    let inDerivMap = Map.restrictKeys walletAddrs $ Set.fromList inCoinAddrs
+    return
+        ( tx
+        , nub $ fmap outPointHash ops
+        , nub $ Map.elems inDerivMap
+        , nub $ outDeriv <> myDerivs)
+  where
+    rcpts = second fromIntegral <$> rcptsN :: [(Address, Word64)]
+    rcpMap = Map.fromList rcpts
+    myDerivs = Map.elems $ Map.intersection walletAddrs rcpMap
+    feeByte = fromIntegral feeByteN :: Word64
+    dust = fromIntegral dustN :: Word64
+    tot = fromIntegral $ sum $ snd <$> rcpts
+    err = "Could not read unspent address in buildWalletTx"
 
 {- Signing Transactions -}
 
@@ -39,104 +104,6 @@ signingKey net pass mnem acc = do
     return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
 
 {-
-
-data WalletCoin = WalletCoin
-    { walletCoinOutPoint     :: !OutPoint
-    , walletCoinScriptOutput :: !ScriptOutput
-    , walletCoinValue        :: !Natural
-    } deriving (Eq, Show)
-
-instance Coin WalletCoin where
-    coinValue = fromIntegral . walletCoinValue
-
-instance Ord WalletCoin where
-    compare = comparing walletCoinValue
-
-toWalletCoin :: (OutPoint, ScriptOutput, Natural) -> WalletCoin
-toWalletCoin (op, so, v) = WalletCoin op so v
-
-buildTxSignData ::
-       Network
-    -> AccountStore
-    -> Map Address Natural
-    -> Natural
-    -> Natural
-    -> IO (Either String (TxSignData, Commit AccountStore))
-buildTxSignData net store rcpMap feeByte dust
-    | Map.null rcpMap = return $ Left "No recipients provided"
-    | otherwise = do
-        allCoins <-
-            fmap toWalletCoin <$> httpUnspent net (Map.keys walletAddrMap)
-        case buildWalletTx
-                 net
-                 walletAddrMap
-                 allCoins
-                 change
-                 rcpMap
-                 feeByte
-                 dust of
-            Right (tx, depTxHash, inDeriv, outDeriv) -> do
-                depTxs <- httpRawTxs net depTxHash
-                return $
-                    Right
-                        ( TxSignData
-                              { txSignDataTx = tx
-                              , txSignDataInputs = depTxs
-                              , txSignDataInputPaths = inDeriv
-                              , txSignDataOutputPaths = outDeriv
-                              }
-                        , if null outDeriv
-                              then NoCommit store
-                              else newStore)
-            Left err -> return $ Left err
-  where
-    walletAddrMap =
-        Map.fromList $ fmap f $ extAddresses store <> intAddresses store
-    f (a,p,_) = (a,p)
-    (change, newStore) = genIntAddress store
-
-buildWalletTx ::
-       Network
-    -> Map Address SoftPath -- All account addresses
-    -> [WalletCoin]
-    -> (Address, SoftPath, Natural) -- change
-    -> Map Address Natural -- recipients
-    -> Natural -- Fee per byte
-    -> Natural -- Dust
-    -> Either String (Tx, [TxHash], [SoftPath], [SoftPath])
-buildWalletTx net walletAddrMap coins (change, changeDeriv, _) rcpMap feeByte dust = do
-    (selectedCoins, changeAmnt) <-
-        second fromIntegral <$>
-        chooseCoins
-            (fromIntegral tot)
-            (fromIntegral feeByte)
-            nRcps
-            True
-            descCoins
-    let (txRcpMap, outDeriv)
-            | changeAmnt <= dust = (rcpMap, [])
-            | otherwise = (Map.insert change changeAmnt rcpMap, [changeDeriv])
-        ops = fmap walletCoinOutPoint selectedCoins
-    tx <-
-        buildAddrTx net ops $
-        (addrStr net *** fromIntegral) <$> Map.assocs txRcpMap
-    inCoinAddrs <-
-        mapM
-            (maybeToEither "buildWalletTx Error" .
-             outputAddress . walletCoinScriptOutput)
-            selectedCoins
-    let inDerivMap = Map.restrictKeys walletAddrMap $ Set.fromList inCoinAddrs
-    return
-        ( tx
-        , nub $ fmap outPointHash ops
-        , nub $ Map.elems inDerivMap
-        , nub $ outDeriv <> myPaths)
-    -- Add recipients that are in our own wallet
-  where
-    myPaths = Map.elems $ Map.intersection walletAddrMap rcpMap
-    nRcps = Map.size rcpMap + 1
-    tot = sum $ Map.elems rcpMap
-    descCoins = sortOn Down coins
 
 buildSwipeTx ::
        Network
@@ -181,15 +148,6 @@ signingKey ::
 signingKey net pass mnem acc = do
     seed <- mnemonicToSeed pass mnem
     return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
-
-data TxSignData = TxSignData
-    { txSignDataTx          :: !Tx
-    , txSignDataInputs      :: ![Tx]
-    , txSignDataInputPaths  :: ![SoftPath]
-    , txSignDataOutputPaths :: ![SoftPath]
-    } deriving (Eq, Show)
-
-$(deriveJSON (dropFieldLabel 10) ''TxSignData)
 
 pubDetailedTx :: TxSignData -> XPubKey -> Either String DetailedTx
 pubDetailedTx (TxSignData tx inTxs inPaths outPaths) pubKey

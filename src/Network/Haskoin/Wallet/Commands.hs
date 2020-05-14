@@ -90,6 +90,12 @@ data Response
       , responseAccount      :: AccountStore
       , responseTransactions :: [WalletTx]
       }
+    | ResponsePrepareTx
+      { responseAccountName  :: Text
+      , responseAccount      :: AccountStore
+      , responseTxFile       :: Text
+      , responseTransaction  :: WalletUnsignedTx
+      }
     deriving (Eq, Show)
 
 jsonError :: String -> Json.Value
@@ -136,7 +142,7 @@ instance Json.ToJSON Response where
                     , "balance" .= b
                     ]
             ResponseAddresses n a addrs ->
-                case mapM (addrText2 (accountStoreNetwork a)) addrs of
+                case mapM (addrToText2 (accountStoreNetwork a)) addrs of
                     Right xs ->
                         object
                             [ "type" .= Json.String "addresses"
@@ -146,7 +152,7 @@ instance Json.ToJSON Response where
                             ]
                     Left err -> jsonError err
             ResponseReceive n a addr -> do
-                case addrText2 (accountStoreNetwork a) addr of
+                case addrToText2 (accountStoreNetwork a) addr of
                     Right x ->
                         object
                             [ "type" .= Json.String "receive"
@@ -202,13 +208,13 @@ instance Json.FromJSON Response where
                 "addresses" -> do
                     n <- o .: "accountname"
                     a <- o .: "account"
-                    let f = textAddr2 (accountStoreNetwork a)
+                    let f = textToAddr2 (accountStoreNetwork a)
                     xs <- either fail return . mapM f =<< o .: "addresses"
                     return $ ResponseAddresses n a xs
                 "receive" -> do
                     n <- o .: "accountname"
                     a <- o .: "account"
-                    let f = textAddr2 (accountStoreNetwork a)
+                    let f = textToAddr2 (accountStoreNetwork a)
                     x <- either fail return . f =<< o .: "address"
                     return $ ResponseReceive n a x
                 "transactions" -> do
@@ -263,12 +269,6 @@ addrsToAccBalance xs =
               fromIntegral $ sum $ Store.balanceTotalReceived <$> xs
         }
 
-addrText2 :: Network -> (Address, v) -> Either String (Text, v)
-addrText2 net (a, v) = (,v) <$> addrToStringE net a
-
-textAddr2 :: Network -> (Text, v) -> Either String (Address, v)
-textAddr2 net (a, v) = (,v) <$> stringToAddrE net a
-
 catchResponseError :: ExceptT String IO Response -> IO Response
 catchResponseError m = do
     resE <- runExceptT m
@@ -277,16 +277,19 @@ catchResponseError m = do
         Right res -> return res
 
 commandResponse :: Command -> IO Response
-commandResponse = \case
-    CommandMnemonic d e -> mnemonic d e
-    CommandCreateAcc n d -> createAcc n d
-    CommandImportAcc f k -> importAcc f k
-    CommandRenameAcc old new -> renameAcc old new
-    CommandAccounts -> accounts
-    CommandBalance accM -> balance accM
-    CommandAddresses accM p -> addresses accM p
-    CommandReceive accM -> receive accM
-    CommandTransactions accM p -> transactions accM p
+commandResponse =
+    \case
+        CommandMnemonic d e -> mnemonic d e
+        CommandCreateAcc n d -> createAcc n d
+        CommandImportAcc f k -> importAcc f k
+        CommandRenameAcc old new -> renameAcc old new
+        CommandAccounts -> accounts
+        CommandBalance accM -> balance accM
+        CommandAddresses accM p -> addresses accM p
+        CommandReceive accM -> receive accM
+        CommandTransactions accM p -> transactions accM p
+        CommandPrepareTx accM rcpts unit fee dust ->
+            prepareTx accM rcpts unit fee dust
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -373,8 +376,41 @@ transactions accM page =
                 addrMap = Map.fromList allAddrs
             best <- bestBlockHeight
             txs <- httpAddrTxs (fst <$> allAddrs) page
-            let walletTxs = fromStoreTransaction addrMap best <$> txs
+            let walletTxs = toWalletTx addrMap best <$> txs
             return $ ResponseTransactions key store walletTxs
+
+prepareTx ::
+       Maybe Text
+    -> [(Text, Text)]
+    -> AmountUnit
+    -> Natural
+    -> Natural
+    -> IO Response
+prepareTx accM rcpTxt unit feeByte dust =
+    catchResponseError $ do
+        (key, store) <- getAccountStore accM
+        let net = accountStoreNetwork store
+        rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
+        withNetwork net $ do
+            let walletAddrMap = storeAddressMap store
+            (signDat, commitStore) <- buildTxSignData store rcpts feeByte dust
+            path <- liftIO $ writeDoc signDat
+            wTx <- liftEither $ toUnsignedWalletTx walletAddrMap signDat
+            newStore <- commit key commitStore
+            return $ ResponsePrepareTx key newStore (cs path) wTx
+
+toRecipient ::
+       Network
+    -> AmountUnit
+    -> (Text, Text)
+    -> Either String (Address, Natural)
+toRecipient net unit (a, v) = do
+    addr <- textToAddrE net a 
+    val <- maybeToEither (cs badAmnt) (readAmount unit v)
+    return (addr, val)
+  where
+    badAmnt =
+        "Could not parse the amount " <> a <> " as " <> showUnit unit 1
 
 {- Haskeline Helpers -}
 

@@ -9,7 +9,6 @@ import           Data.Decimal
 import           Data.String.Conversions         (cs)
 import           Data.Text                       as Text
 import           Data.Text.Read                  as Read
-import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty
@@ -18,27 +17,7 @@ data AmountUnit
     = UnitBitcoin
     | UnitBit
     | UnitSatoshi
-    deriving (Eq)
-
-{- Printer functions -}
-
-amountDoc :: AmountUnit -> Natural -> Doc
-amountDoc unit = integerAmountDoc unit . fromIntegral
-
-integerAmountDoc :: AmountUnit -> Integer -> Doc
-integerAmountDoc unit amnt
-    | amnt >= 0 = integerAmountWithDoc posAmountDoc unit amnt
-    | otherwise = integerAmountWithDoc negAmountDoc unit amnt
-
-integerAmountWithDoc :: (Doc -> Doc) -> AmountUnit -> Integer -> Doc
-integerAmountWithDoc f unit amnt =
-    f (text $ cs $ showIntegerAmount unit amnt) <+> unitDoc unit amnt
-
-unitDoc :: AmountUnit -> Integer -> Doc
-unitDoc unit = text . unpack . showUnit unit
-
-feeBytesDoc :: Decimal -> Doc
-feeBytesDoc fee = feeDoc (text $ show fee) <+> text "sat/bytes"
+    deriving (Eq, Show)
 
 {- Amount Parsing -}
 

@@ -55,9 +55,11 @@ data Command
       , commandPage     :: Page
       }
     | CommandPrepareTx
-      { commandMaybeAcc :: Maybe Text
-      , commandFeeByte  :: Natural
-      , commandDust     :: Natural
+      { commandMaybeAcc   :: Maybe Text
+      , commandRecipients :: [(Text, Text)]
+      , commandUnit       :: AmountUnit
+      , commandFeeByte    :: Natural
+      , commandDust       :: Natural
       }
     deriving (Eq, Show)
 
@@ -145,7 +147,7 @@ addressesParser =
          (Page <$> offsetOption <*> limitOption)) $
     mconcat [progDesc "List the latest receiving addresses in the account"]
   where
-        
+
 
 receiveParser :: ParserInfo Command
 receiveParser =
@@ -162,11 +164,13 @@ transactionsParser =
 prepareTxParser :: ParserInfo Command
 prepareTxParser =
     info
-        (CommandPrepareTx <$> accountOption <*> feeOption <*> dustOption) $
+        (CommandPrepareTx <$> accountOption <*> some recipientArg <*> unitOption <*>
+         feeOption <*>
+         dustOption) $
     mconcat
-       [ progDesc "Prepare a new unsigned transaction"
-       , footer "Next command: signtx"
-       ]
+        [ progDesc "Prepare a new unsigned transaction"
+        , footer "Next command: signtx"
+        ]
 
 {- Option Parsers -}
 
@@ -200,7 +204,7 @@ entropyOption =
         , long "entropy"
         , help
               "Amount of entropy to use in bytes. Valid values are [16,20..32]"
-        , metavar "INT"
+        , metavar "BYTES"
         , value 16
         , showDefault
         , completeWith valid
@@ -218,7 +222,7 @@ derivationOption =
         [ short 'd'
         , long "derivation"
         , help "Specify a different bip44 account derivation"
-        , metavar "INT"
+        , metavar "NATURAL"
         , value 0
         , showDefault
         ]
@@ -263,6 +267,14 @@ accountArg desc =
         [ help desc
         , metavar "TEXT"
         , completer (mkCompleter accountCompleter)
+        ]
+
+recipientArg :: Parser (Text, Text)
+recipientArg =
+    argument ((,) <$> str <*> str) $
+    mconcat
+        [ help "List of recipient as: addr amount addr2 amount2 ..."
+        , metavar "{ADDRESS AMOUNT ...}"
         ]
 
 accountCompleter :: String -> IO [String]
@@ -318,17 +330,28 @@ dustOption =
         , showDefault
         ]
 
-{--
+unitOption :: Parser AmountUnit
+unitOption = satoshiOption <|> bitOption
 
-unitOpt :: Option String
-unitOpt =
-    option
-        'u'
-        "unit"
-        ["bitcoin", "bit", "satoshi"]
-        "bitcoin"
-        (fromLString <$> Argument.string)
-        "Specify the unit for displayed amounts."
+satoshiOption :: Parser AmountUnit
+satoshiOption =
+    flag UnitBitcoin UnitSatoshi $
+    mconcat
+        [ short 's'
+        , long "satoshi"
+        , help "Use satoshis for parsing amounts (default: bitcoin)"
+        ]
+
+bitOption :: Parser AmountUnit
+bitOption =
+    flag UnitBitcoin UnitBit $
+    mconcat
+        [ short 'b'
+        , long "bit"
+        , help "Use bits for parsing amounts (default: bitcoin)"
+        ]
+
+{--
 
 verboseOpt :: Option Bool
 verboseOpt =

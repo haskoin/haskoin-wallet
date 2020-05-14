@@ -1,5 +1,6 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Util where
 
 import           Control.Arrow            (second)
@@ -60,13 +61,19 @@ toPage :: Page -> [a] -> [a]
 toPage (Page offset limit) xs =
     take (fromIntegral limit) $ drop (fromIntegral offset) xs
 
-addrToStringE :: Network -> Address -> Either String Text
-addrToStringE net a =
+addrToTextE :: Network -> Address -> Either String Text
+addrToTextE net a =
     maybeToEither "Invalid Address in addrToStringE" (addrToString net a)
 
-stringToAddrE :: Network -> Text -> Either String Address
-stringToAddrE net a =
+textToAddrE :: Network -> Text -> Either String Address
+textToAddrE net a =
     maybeToEither "Invalid Address in stringToAddrE" (stringToAddr net a)
+
+addrToText2 :: Network -> (Address, v) -> Either String (Text, v)
+addrToText2 net (a, v) = (,v) <$> addrToTextE net a
+
+textToAddr2 :: Network -> (Text, v) -> Either String (Address, v)
+textToAddr2 net (a, v) = (,v) <$> textToAddrE net a
 
 lastList :: Natural -> [a] -> [a]
 lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs

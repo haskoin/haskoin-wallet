@@ -49,13 +49,26 @@ httpAddrTxs ::
 httpAddrTxs addrs p = do
     blockTxs <- batchQuery 20 $ AddressTransactions addrs Nothing (Just 500)
     let sortedTxs = sortDesc blockTxs
-    batchQuery 20 $ Transactions $ Store.blockTxHash <$> toPage p sortedTxs
+    batchQuery 20 $ Transactions $ Store.txRefHash <$> toPage p sortedTxs
 
 httpAddrBalances ::
        (MonadIO m, MonadReader Network m, MonadError String m)
     => [Address]
     -> m [Store.Balance]
 httpAddrBalances addrs = batchQuery 20 $ AddressBalances addrs
+
+httpAddrUnspent ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => [Address]
+    -> m [Store.Unspent]
+httpAddrUnspent addrs =
+    batchQuery 20 $ AddressUnspent addrs Nothing (Just 500)
+
+httpRawTxs ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => [TxHash]
+    -> m [Tx]
+httpRawTxs tids = batchQuery 20 $ TransactionsRaw tids
 
 bestBlockHeight ::
        (MonadIO m, MonadReader Network m, MonadError String m)
@@ -70,10 +83,15 @@ data ApiPoint a where
         { addrTxAddresses :: [Address]
         , addrTxHeight    :: Maybe String
         , addrTxLimit     :: Maybe Natural
-        }                 -> ApiPoint [Store.BlockTx]
+        }                 -> ApiPoint [Store.TxRef]
     AddressBalances ::
         { addrBalAddresses :: [Address]
         }                  -> ApiPoint [Store.Balance]
+    AddressUnspent ::
+        { addrUnspentAddresses :: [Address]
+        , addrUnspentHeight    :: Maybe String
+        , addrUnspentLimit     :: Maybe Natural
+        }                      -> ApiPoint [Store.Unspent]
     Transactions ::
         { txsTxids :: [TxHash]
         }          -> ApiPoint [Store.Transaction]
@@ -97,8 +115,9 @@ batchApiPoint i =
     \case
         AddressTransactions xs h l ->
             AddressTransactions <$> chunksOf i xs <*> pure h <*> pure l
-        AddressBalances xs ->
-            AddressBalances <$> chunksOf i xs
+        AddressBalances xs -> AddressBalances <$> chunksOf i xs
+        AddressUnspent xs h l ->
+            AddressUnspent <$> chunksOf i xs <*> pure h <*> pure l
         Transactions xs -> Transactions <$> chunksOf i xs
         TransactionsRaw xs -> TransactionsRaw <$> chunksOf i xs
         _ -> error "This ApiPoint does not support batching"
@@ -109,16 +128,23 @@ apiQuery point = do
     net <- network
     case point of
         AddressTransactions addrs heightM limitM -> do
-            addrsTxt <- liftEither $ addrToStringE net `mapM` addrs
+            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
             let url = apiHost net </> "address" </> "transactions"
                 opts = applyOpt "addresses" addrsTxt
                     <> applyOptM "height" ((:[]) . cs <$> heightM)
                     <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
             httpBinary opts url
         AddressBalances addrs -> do
-            addrsTxt <- liftEither $ addrToStringE net `mapM` addrs
+            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
             let url = apiHost net </> "address" </> "balances"
                 opts = applyOpt "addresses" addrsTxt
+            httpBinary opts url
+        AddressUnspent addrs heightM limitM -> do
+            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
+            let url = apiHost net </> "address" </> "unspent"
+                opts = applyOpt "addresses" addrsTxt
+                    <> applyOptM "height" ((:[]) . cs <$> heightM)
+                    <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
             httpBinary opts url
         Transactions tids -> do
             let txsTxt = txHashToHex <$> tids
