@@ -24,43 +24,48 @@ import           Options.Applicative.Help.Pretty     hiding ((</>))
 
 {- Command Parsers -}
 
-data Command
-    = CommandMnemonic
-      { commandUseDice :: Bool
-      , commandEntropy :: Natural
-      }
+data Command = CommandMnemonic
+    { commandUseDice :: Bool
+    , commandEntropy :: Natural
+    }
     | CommandCreateAcc
-      { commandNetwork    :: Network
-      , commandDerivation :: Natural
-      }
+    { commandNetwork    :: Network
+    , commandDerivation :: Natural
+    }
     | CommandImportAcc
-      { commandFilePath :: FilePath
-      , commandAccount  :: Text
-      }
+    { commandFilePath :: FilePath
+    , commandAccount  :: Text
+    }
     | CommandRenameAcc
-      { commandOldName :: Text
-      , commandNewName :: Text
-      }
+    { commandOldName :: Text
+    , commandNewName :: Text
+    }
     | CommandAccounts
     | CommandBalance
-      { commandMaybeAcc :: Maybe Text }
+    { commandMaybeAcc :: Maybe Text
+    }
     | CommandAddresses
-      { commandMaybeAcc :: Maybe Text
-      , commandPage     :: Page
-      }
+    { commandMaybeAcc :: Maybe Text
+    , commandPage     :: Page
+    }
     | CommandReceive
-      { commandMaybeAcc :: Maybe Text }
+    { commandMaybeAcc :: Maybe Text
+    }
     | CommandTransactions
-      { commandMaybeAcc :: Maybe Text
-      , commandPage     :: Page
-      }
+    { commandMaybeAcc :: Maybe Text
+    , commandPage     :: Page
+    }
     | CommandPrepareTx
-      { commandRecipients :: [(Text, Text)]
-      , commandMaybeAcc   :: Maybe Text
-      , commandUnit       :: AmountUnit
-      , commandFeeByte    :: Natural
-      , commandDust       :: Natural
-      }
+    { commandRecipients :: [(Text, Text)]
+    , commandMaybeAcc   :: Maybe Text
+    , commandUnit       :: AmountUnit
+    , commandFeeByte    :: Natural
+    , commandDust       :: Natural
+    }
+    | CommandSignTx
+    { commandFilePath   :: FilePath
+    , commandDerivation :: Natural
+    }
     deriving (Eq, Show)
 
 programParser :: ParserInfo Command
@@ -95,6 +100,7 @@ commandParser =
             [ commandGroup "Transaction management"
             , command "transactions" transactionsParser
             , command "preparetx" prepareTxParser
+            , command "signtx" signTxParser
             ]
         ]
 
@@ -117,8 +123,8 @@ createAccParser =
 importAccParser :: ParserInfo Command
 importAccParser =
     info
-        (CommandImportAcc <$> filepathArgument <*>
-         textArg "Name of the new account") $
+        (CommandImportAcc <$> filepathArgument
+                          <*> textArg "Name of the new account") $
     mconcat
         [ progDesc "Import an account file into the wallet"
         , footer "Next command: receive"
@@ -127,8 +133,8 @@ importAccParser =
 renameAccParser :: ParserInfo Command
 renameAccParser =
     info
-        (CommandRenameAcc <$> accountArg "Old account name" <*>
-         textArg "New account name") $
+        (CommandRenameAcc <$> accountArg "Old account name"
+                          <*> textArg "New account name") $
     mconcat [progDesc "Rename an account"]
 
 accountsParser :: ParserInfo Command
@@ -143,11 +149,9 @@ balanceParser =
 addressesParser :: ParserInfo Command
 addressesParser =
     info
-        (CommandAddresses <$> accountOption <*>
-         (Page <$> offsetOption <*> limitOption)) $
+        (CommandAddresses <$> accountOption
+                          <*> (Page <$> offsetOption <*> limitOption)) $
     mconcat [progDesc "List the latest receiving addresses in the account"]
-  where
-
 
 receiveParser :: ParserInfo Command
 receiveParser =
@@ -157,19 +161,31 @@ receiveParser =
 transactionsParser :: ParserInfo Command
 transactionsParser =
     info
-        (CommandTransactions <$> accountOption <*>
-         (Page <$> offsetOption <*> limitOption)) $
+        (CommandTransactions <$> accountOption
+                             <*> (Page <$> offsetOption <*> limitOption)) $
     mconcat [progDesc "Display the transactions in an account"]
 
 prepareTxParser :: ParserInfo Command
 prepareTxParser =
     info
-        (CommandPrepareTx <$> some recipientArg <*> accountOption <*> unitOption <*>
-         feeOption <*>
-         dustOption) $
+        (CommandPrepareTx <$> some recipientArg
+                          <*> accountOption
+                          <*> unitOption
+                          <*> feeOption
+                          <*> dustOption) $
     mconcat
         [ progDesc "Prepare a new unsigned transaction"
         , footer "Next command: signtx"
+        ]
+
+signTxParser :: ParserInfo Command
+signTxParser =
+    info
+        (CommandSignTx <$> filepathArgument
+                       <*> derivationOption) $
+    mconcat
+        [ progDesc "Sign a transaction that was created with preparetx"
+        , footer "Next command: sendtx"
         ]
 
 {- Option Parsers -}

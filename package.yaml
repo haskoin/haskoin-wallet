@@ -36,7 +36,6 @@ library:
   - Network.Haskoin.Wallet.Signing
   - Network.Haskoin.Wallet.HTTP
   - Network.Haskoin.Wallet.Amounts
-  - Network.Haskoin.Wallet.Doc
   - Network.Haskoin.Wallet.WalletTx
   - Network.Haskoin.Wallet.Util
   dependencies:

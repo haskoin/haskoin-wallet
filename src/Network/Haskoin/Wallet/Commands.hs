@@ -44,58 +44,62 @@ import qualified System.Console.Haskeline            as Haskeline
 import qualified System.Directory                    as D
 import           System.IO                           (IOMode (..), withFile)
 
-data Response
-    = ResponseError
-      { responseError         :: Text
-      }
+data Response = ResponseError
+    { responseError :: Text
+    }
     | ResponseMnemonic
-      { responseEntropySource :: Text
-      , responseMnemonic      :: [Text]
-      }
+    { responseEntropySource :: Text
+    , responseMnemonic      :: [Text]
+    }
     | ResponseCreateAcc
-      { responsePubKey     :: XPubKey
-      , responseDerivation :: HardPath
-      , responsePubKeyFile :: Text
-      , responseNetwork    :: Network
-      }
+    { responsePubKey     :: XPubKey
+    , responseDerivation :: HardPath
+    , responsePubKeyFile :: Text
+    , responseNetwork    :: Network
+    }
     | ResponseImportAcc
-      { responseAccountName :: Text
-      , responseAccount     :: AccountStore
-      }
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    }
     | ResponseRenameAcc
-      { responseOldName :: Text
-      , responseNewName :: Text
-      , responseAccount :: AccountStore
-      }
+    { responseOldName :: Text
+    , responseNewName :: Text
+    , responseAccount :: AccountStore
+    }
     | ResponseAccounts
-      { responseAccounts :: AccountMap
-      }
+    { responseAccounts :: AccountMap
+    }
     | ResponseBalance
-      { responseAccountName :: Text
-      , responseAccount     :: AccountStore
-      , responseBalance     :: AccountBalance
-      }
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    , responseBalance     :: AccountBalance
+    }
     | ResponseAddresses
-      { responseAccountName :: Text
-      , responseAccount     :: AccountStore
-      , responseAddresses   :: [(Address, SoftPath)]
-      }
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    , responseAddresses   :: [(Address, SoftPath)]
+    }
     | ResponseReceive
-      { responseAccountName :: Text
-      , responseAccount     :: AccountStore
-      , responseAddress     :: (Address, SoftPath)
-      }
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    , responseAddress     :: (Address, SoftPath)
+    }
     | ResponseTransactions
-      { responseAccountName  :: Text
-      , responseAccount      :: AccountStore
-      , responseTransactions :: [WalletTx]
-      }
+    { responseAccountName  :: Text
+    , responseAccount      :: AccountStore
+    , responseTransactions :: [WalletTx]
+    }
     | ResponsePrepareTx
-      { responseAccountName  :: Text
-      , responseAccount      :: AccountStore
-      , responseTxFile       :: Text
-      , responseTransaction  :: WalletUnsignedTx
-      }
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    , responseTxFile      :: Text
+    , responseUnsignedTx  :: WalletUnsignedTx
+    }
+    | ResponseSignTx
+    { responseTxFile      :: Text
+    , responseTransaction :: WalletTx
+    , responseNetwork     :: Network
+    }
     deriving (Eq, Show)
 
 jsonError :: String -> Json.Value
@@ -151,7 +155,7 @@ instance Json.ToJSON Response where
                             , "addresses" .= xs
                             ]
                     Left err -> jsonError err
-            ResponseReceive n a addr -> do
+            ResponseReceive n a addr ->
                 case addrToText2 (accountStoreNetwork a) addr of
                     Right x ->
                         object
@@ -179,7 +183,17 @@ instance Json.ToJSON Response where
                             , "accountname" .= n
                             , "account" .= a
                             , "txfile" .= f
+                            , "unsignedtx" .= tJ
+                            ]
+                    Left err -> jsonError err
+            ResponseSignTx f t net ->
+                case walletTxToJSON net t of
+                    Right tJ ->
+                        object
+                            [ "type" .= Json.String "signtx"
+                            , "txfile" .= f
                             , "transaction" .= tJ
+                            , "network" .= getNetworkName net
                             ]
                     Left err -> jsonError err
 
@@ -239,22 +253,28 @@ instance Json.FromJSON Response where
                     a <- o .: "account"
                     f <- o .: "txfile"
                     let g = walletUnsignedTxParseJSON (accountStoreNetwork a)
-                    t <- g =<< o .: "transaction"
+                    t <- g =<< o .: "unsignedtx"
                     return $ ResponsePrepareTx n a f t
+                "signtx" -> do
+                    net <- maybe mzero return . netByName =<< o .: "network"
+                    f <- o .: "txfile"
+                    t <- walletTxParseJSON net =<< o .: "transaction"
+                    return $ ResponseSignTx f t net
                 _ -> fail "Invalid JSON response type"
 
 data AccountBalance = AccountBalance
     { balanceAmount        :: !Natural
-      -- ^ confirmed balance
+    -- ^ confirmed balance
     , balanceZero          :: !Natural
-      -- ^ unconfirmed balance
+    -- ^ unconfirmed balance
     , balanceUnspentCount  :: !Natural
-      -- ^ number of unspent outputs
+    -- ^ number of unspent outputs
     , balanceTxCount       :: !Natural
-      -- ^ number of transactions
+    -- ^ number of transactions
     , balanceTotalReceived :: !Natural
-      -- ^ total amount from all outputs in this address
-    } deriving (Show, Read, Eq, Ord)
+    -- ^ total amount from all outputs in this address
+    }
+    deriving (Show, Read, Eq, Ord)
 
 instance Json.ToJSON AccountBalance where
     toJSON b =
@@ -308,6 +328,7 @@ commandResponse =
         CommandTransactions accM p -> transactions accM p
         CommandPrepareTx rcpts accM unit fee dust ->
             prepareTx rcpts accM unit fee dust
+        CommandSignTx file deriv -> cmdSignTx file deriv
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -413,7 +434,8 @@ prepareTx rcpTxt accM unit feeByte dust =
             (signDat, commitStore) <- buildTxSignData store rcpts feeByte dust
             path <- liftIO $ writeDoc signDat
             wTx <-
-                liftEither $ parseTxSignData (accountStoreXPubKey store) signDat
+                liftEither $
+                parseTxSignData net (accountStoreXPubKey store) signDat
             newStore <- commit key commitStore
             return $ ResponsePrepareTx key newStore (cs path) wTx
 
@@ -423,12 +445,25 @@ toRecipient ::
     -> (Text, Text)
     -> Either String (Address, Natural)
 toRecipient net unit (a, v) = do
-    addr <- textToAddrE net a 
+    addr <- textToAddrE net a
     val <- maybeToEither (cs badAmnt) (readAmount unit v)
     return (addr, val)
   where
     badAmnt =
         "Could not parse the amount " <> a <> " as " <> showUnit unit 1
+
+cmdSignTx ::
+       FilePath
+    -> Natural
+    -> IO Response
+cmdSignTx fp deriv =
+    catchResponseError $ do
+        txSignData <- readJsonFile fp
+        let net = txSignDataNetwork txSignData
+        prvKey <- askSigningKey net deriv
+        (tx, wTx) <- liftEither $ signWalletTx txSignData prvKey
+        path <- liftIO $ writeDoc $ SignedTx tx net
+        return $ ResponseSignTx (cs path) wTx net
 
 {- Haskeline Helpers -}
 

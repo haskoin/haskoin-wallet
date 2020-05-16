@@ -24,7 +24,6 @@ import           Haskoin.Util                        (dropFieldLabel)
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Commands
-import           Network.Haskoin.Wallet.Doc
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
@@ -46,67 +45,6 @@ jsonPrinter :: Response -> IO ()
 jsonPrinter = C8.putStrLn . encodeJsonPretty
 
 {--
-
-preparetx :: Command IO
-preparetx =
-    command
-        "preparetx"
-        "Prepare a new unsigned transaction"
-        (Just CommandOnline)
-        [signtx] $
-    withOption accOpt $ \acc ->
-    withOption feeOpt $ \feeByte ->
-    withOption dustOpt $ \dust ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \netStr ->
-    withNonOptions Argument.string "{address value ...}" $ \as ->
-        io $ do
-            let !net = parseNetwork netStr
-                !unit = parseUnit u
-                !rcps =
-                    Map.fromList $
-                    fromMaybe rcptErr $ mapM (toRecipient net unit) $
-                    groupIn 2 $ fmap fromLString as
-            printNetworkHeader net
-            withAccountStore net acc $ \(k, store) -> do
-                resE <- buildTxSignData net store rcps feeByte dust
-                case resE of
-                    Right (signDat, store') -> do
-                        savePrepareTx net store unit "tx" signDat
-                        when (store /= store') $
-                            updateAccountStore net k $ const store'
-                    Left err  -> exitError err
-  where
-    rcptErr = exitError "Could not parse the recipients"
-    toRecipient :: Network -> AmountUnit -> [String] -> Maybe (Address, Satoshi)
-    toRecipient net unit [a, v] =
-        (,) <$> stringToAddr net (toText a) <*> readAmount unit v
-    toRecipient _ _ _ = Nothing
-
-savePrepareTx ::
-       Network -> AccountStore -> AmountUnit -> LString -> TxSignData -> IO ()
-savePrepareTx net store unit str signDat =
-    case pubDetailedTx net signDat (accountStoreXPubKey store) of
-        Right info -> do
-            let chsum = txChksum $ txSignDataTx signDat
-                fname =
-                    fromString $ str <> "-" <> toLString chsum <> "-unsigned"
-            path <- writeDoc net fname signDat
-            renderIO $
-                vcat
-                    [ detailedTxFormat
-                          (accountStoreDeriv store)
-                          unit
-                          (Just False)
-                          Nothing
-                          info
-                    , formatTitle "Unsigned Tx Data File"
-                    , indent 4 $ formatFilePath $ filePathToString path
-                    ]
-        Left err -> exitError err
-
-txChksum :: Tx -> String
-txChksum = take 16 . fromText . txHashToHex . nosigTxHash
 
 signtx :: Command IO
 signtx =

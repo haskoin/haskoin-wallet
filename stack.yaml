@@ -1,6 +1,6 @@
 resolver: lts-15.11
 extra-deps:
-- haskoin-core-0.13.3
+- haskoin-core-0.13.5
 - haskoin-store-data-0.29.0
 - murmur3-1.0.3
 - ansi-terminal-0.10.3

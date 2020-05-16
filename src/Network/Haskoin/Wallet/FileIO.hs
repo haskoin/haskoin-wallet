@@ -43,7 +43,8 @@ class HasFilePath a where
 data PubKeyDoc = PubKeyDoc
     { documentPubKey  :: XPubKey
     , documentNetwork :: Network
-    } deriving (Eq, Show)
+    }
+    deriving (Eq, Show)
 
 instance FromJSON PubKeyDoc where
     parseJSON =
@@ -68,14 +69,15 @@ data TxSignData = TxSignData
     , txSignDataInputPaths  :: [SoftPath]
     , txSignDataOutputPaths :: [SoftPath]
     , txSignDataNetwork     :: Network
-    } deriving (Eq, Show)
+    }
+    deriving (Eq, Show)
 
 instance FromJSON TxSignData where
     parseJSON =
         withObject "txsigndata" $ \o -> do
             net <- maybe mzero return . netByName =<< o .: "network"
             TxSignData <$> o .: "tx"
-                       <*> o .: "inputs"
+                       <*> o .: "txinputs"
                        <*> o .: "inputpaths"
                        <*> o .: "outputpaths"
                        <*> pure net
@@ -84,15 +86,39 @@ instance ToJSON TxSignData where
     toJSON (TxSignData t i oi op net) =
         object
             [ "tx" .= t
-            , "inputs" .= i
+            , "txinputs" .= i
             , "inputpaths" .= oi
             , "outputpaths" .= op
             , "network" .= getNetworkName net
             ]
 
 instance HasFilePath TxSignData where
-    getFilePath (TxSignData t _ _ _ net) =
-        getNetworkName net <> "-unsignedtx-" <> cs (txChecksum t) <> ".json"
+    getFilePath (TxSignData tx _ _ _ net) =
+        getNetworkName net <> "-unsignedtx-" <> cs (txChecksum tx) <> ".json"
+
+data SignedTx = SignedTx
+    { signedTxTx      :: Tx
+    , signedTxNetwork :: Network
+    }
+    deriving (Eq, Show)
+
+instance ToJSON SignedTx where
+    toJSON (SignedTx tx net) =
+        object
+            [ "tx" .= tx
+            , "network" .= getNetworkName net
+            ]
+
+instance FromJSON SignedTx where
+    parseJSON =
+        withObject "SignedTx" $ \o -> do
+            net <- maybe mzero return . netByName =<< o .: "network"
+            SignedTx <$> o .: "tx"
+                     <*> pure net
+
+instance HasFilePath SignedTx where
+    getFilePath (SignedTx tx net) =
+        getNetworkName net <> "-signedtx-" <> cs (txChecksum tx) <> ".json"
 
 writeDoc :: (Json.ToJSON a, HasFilePath a) => a -> IO FilePath
 writeDoc doc = do

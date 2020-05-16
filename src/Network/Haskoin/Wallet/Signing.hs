@@ -30,6 +30,7 @@ import qualified Haskoin.Store.Data                  as Store
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
+import           Network.Haskoin.Wallet.WalletTx
 import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Util
@@ -103,6 +104,29 @@ signingKey net pass mnem acc = do
     seed <- mnemonicToSeed pass mnem
     return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
 
+signWalletTx ::
+       TxSignData
+    -> XPrvKey
+    -> Either String (Tx, WalletTx)
+signWalletTx tsd@(TxSignData tx _ inPaths _ net) signKey = do
+    wTx <- parseTxSignData net pubKey tsd
+        -- signing
+    let myInputs = walletUnsignedTxMyInputs wTx
+        sigInputs = mconcat $ lst3 <$> Map.elems myInputs
+    signedTx <- signTx net tx sigInputs prvKeys
+        -- validation
+    let f i = (sigInputScript i, sigInputValue i, sigInputOP i)
+        vDat = f <$> sigInputs
+        isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx vDat
+    unless isSigned $ Left "The transaction could not be signed"
+    return (signedTx, unsignedToWalletTx signedTx wTx)
+  where
+    pubKey = deriveXPubKey signKey
+    prvKeys = xPrvKey . (`derivePath` signKey) <$> inPaths
+
+noEmptyInputs :: Tx -> Bool
+noEmptyInputs = (not . any BS.null) . fmap scriptInput . txIn
+
 {-
 
 buildSwipeTx ::
@@ -167,32 +191,6 @@ pubDetailedTx (TxSignData tx inTxs inPaths outPaths) pubKey
     inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
 
-signWalletTx ::
-       Network
-    -> TxSignData
-    -> XPrvKey
-    -> Either String (DetailedTx, Tx, Bool)
-signWalletTx net tsd@(TxSignData tx _ inPaths _) signKey = do
-    sigDat <- mapM g myCoins
-    signedTx <-
-        signTx net tx (fmap f sigDat) prvKeys
-    let vDat = rights $ fmap g allCoins
-        isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx vDat
-    info <- pubDetailedTx tsd pubKey
-    return
-        ( if isSigned
-              then detailedTxFillTx signedTx info
-              else info
-        , signedTx
-        , isSigned)
-  where
-    pubKey = deriveXPubKey signKey
-    (myCoins, othCoins) = parseTxCoins tsd pubKey
-    allCoins = myCoins <> othCoins
-    prvKeys = fmap (xPrvKey . (`derivePath` signKey)) inPaths
-    f (so, val, op) = SigInput so val op (maybeSetForkId net sigHashAll) Nothing
-    g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
-
 signSwipeTx ::
        Network
     -> TxSignData
@@ -213,26 +211,6 @@ signSwipeTx net (TxSignData tx inTxs _ _) prvKeys = do
     coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
     f (so, val, op) = SigInput so val op (maybeSetForkId net sigHashAll) Nothing
     g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
-
-maybeSetForkId :: Network -> SigHash -> SigHash
-maybeSetForkId net
-    | isJust (getSigHashForkId net) = setForkIdFlag
-    | otherwise = id
-
-noEmptyInputs :: Tx -> Bool
-noEmptyInputs = all (not . BS.null) . fmap scriptInput . txIn
-
-parseTxCoins ::
-       TxSignData -> XPubKey -> ([(OutPoint, TxOut)], [(OutPoint, TxOut)])
-parseTxCoins (TxSignData tx inTxs inPaths _) pubKey =
-    partition (isMyCoin . snd) coins
-  where
-    inAddrs = nub $ fmap (pathToAddr pubKey) inPaths
-    coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
-    isMyCoin to =
-        case decodeTxOutAddr to of
-            Right a -> a `elem` inAddrs
-            _       -> False
 
 findCoin :: [Tx] -> OutPoint -> Maybe (OutPoint, TxOut)
 findCoin txs op@(OutPoint h i) = do
