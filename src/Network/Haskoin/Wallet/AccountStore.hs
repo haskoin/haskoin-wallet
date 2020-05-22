@@ -7,13 +7,15 @@ module Network.Haskoin.Wallet.AccountStore where
 import           Control.Arrow                   (first)
 import           Control.Monad
 import           Control.Monad.Except
+import           Control.Monad.Reader
 import qualified Data.Aeson                      as Json
 import qualified Data.Aeson.Encode.Pretty        as Pretty
 import           Data.Aeson.Types
+import           Data.Bits                       (clearBit)
 import qualified Data.ByteString.Char8           as C8
 import qualified Data.ByteString.Lazy            as BL
 import qualified Data.HashMap.Strict             as HMap
-import           Data.List                       (nub)
+import           Data.List                       (find, nub)
 import           Data.Map.Strict                 (Map)
 import qualified Data.Map.Strict                 as Map
 import           Data.Maybe                      (fromMaybe, maybe)
@@ -39,7 +41,8 @@ data AccountStore = AccountStore
     , accountStoreInternal :: Natural
     , accountStoreDeriv    :: HardPath
     , accountStoreNetwork  :: Network
-    } deriving (Eq, Show)
+    }
+    deriving (Eq, Show)
 
 instance FromJSON AccountStore where
     parseJSON =
@@ -67,6 +70,12 @@ intDeriv = Deriv :/ 1
 
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| getBip44Coin net :| fromIntegral a
+
+accountStoreAccount :: AccountStore -> Either String Natural
+accountStoreAccount as =
+    case pathToList $ accountStoreDeriv as of
+        [] -> Left "Invalid account derivation"
+        xs -> return $ fromIntegral $ (`clearBit` 31) $ last xs
 
 newAccountStore :: Network -> XPubKey -> AccountStore
 newAccountStore net xpub =
@@ -100,7 +109,7 @@ writeAccountMap accMap = do
 
 validAccountMap :: AccountMap -> Either String ()
 validAccountMap accMap
-    | (length $ nub pubKeys) /= length pubKeys =
+    | length (nub pubKeys) /= length pubKeys =
       Left "Duplicate account public keys"
     | otherwise = return ()
   where
@@ -123,6 +132,18 @@ getAccountStore keyM = do
             case key `Map.lookup` accMap of
                 Just val -> return (key, val)
                 _ -> throwError $ "The account " <> cs key <> "does not exist"
+
+getAccountStoreByDeriv ::
+       (MonadIO m, MonadError String m, MonadReader Network m)
+    => Natural
+    -> m (Text, AccountStore)
+getAccountStoreByDeriv acc = do
+    net <- network
+    let path = bip44Deriv net acc
+    accMap <- readAccountMap
+    case find ((== path) . accountStoreDeriv . snd) $ Map.assocs accMap of
+        Just res -> return res
+        Nothing -> throwError $ "No account exists with derivation " <> show acc
 
 alterAccountStore ::
       (MonadIO m, MonadError String m)
@@ -171,9 +192,12 @@ renameAccountStore oldName newName
                 return store
             _ -> throwError "Account does not exist"
 
-data Commit a
-    = NoCommit { commitValue :: a }
-    | Commit { commitValue :: a }
+data Commit a = NoCommit
+    { commitValue :: a
+    }
+    | Commit
+    { commitValue :: a
+    }
 
 commit ::
        (MonadIO m, MonadError String m)
@@ -200,7 +224,7 @@ genAddress_ ::
     -> ((AccountStore -> Natural) -> AccountStore -> AccountStore)
     -> AccountStore
     -> ((Address, SoftPath), Commit AccountStore)
-genAddress_ getIdx deriv updAcc store = do
+genAddress_ getIdx deriv updAcc store =
     ((fst addr, deriv :/ (fromIntegral idx)), Commit newStore)
   where
     idx = getIdx store

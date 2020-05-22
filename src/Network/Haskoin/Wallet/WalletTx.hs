@@ -1,43 +1,34 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards   #-}
 {-# LANGUAGE Strict            #-}
-{-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.WalletTx where
 
-import           Control.Applicative             ((<|>))
-import           Control.Arrow                   (second, (&&&))
-import           Control.Monad                   (fail, unless)
+import           Control.Arrow                   ((&&&))
+import           Control.Monad                   (unless)
 import           Data.Aeson                      (object, (.:), (.=))
 import qualified Data.Aeson                      as Json
-import           Data.Aeson.TH
 import           Data.Aeson.Types                (Parser)
 import qualified Data.ByteString                 as BS
 import           Data.Decimal                    as Decimal
 import           Data.Either                     (partitionEithers)
-import           Data.List                       (sortOn, sum)
 import           Data.Map.Strict                 (Map)
 import qualified Data.Map.Strict                 as Map
-import           Data.Maybe                      (fromMaybe, isJust, mapMaybe)
-import           Data.Monoid
+import           Data.Maybe                      (fromMaybe, isJust)
 import qualified Data.Serialize                  as S
 import           Data.String.Conversions         (cs)
 import           Data.String.ToString
 import           Data.Text                       (Text)
 import           Haskoin.Address
-import           Haskoin.Block
 import           Haskoin.Constants
 import           Haskoin.Keys
 import           Haskoin.Script
 import qualified Haskoin.Store.Data              as Store
 import           Haskoin.Transaction
 import           Haskoin.Util
-import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
-import           Options.Applicative.Help.Pretty
 
 data TxType = TxDebit | TxInternal | TxCredit
     deriving (Show, Eq)
@@ -58,6 +49,7 @@ instance Json.FromJSON TxType where
             "debit" -> return TxDebit
             "internal" -> return TxInternal
             "credit" -> return TxCredit
+            _ -> fail "Invalid TxType"
 
 data WalletTx = WalletTx
     { walletTxId            :: TxHash
@@ -104,26 +96,24 @@ walletTxToJSON net tx = do
 
 walletTxParseJSON :: Network -> Json.Value -> Parser WalletTx
 walletTxParseJSON net =
-    Json.withObject "wallettx" $ \o -> do
-        myOutputsT <- o .: "myoutputs"
-        othOutputsT <- o .: "otheroutputs"
-        myInputsT <- o .: "myinputs"
-        othInputsT <- o .: "otherinputs"
+    Json.withObject "wallettx" $ \o ->
         WalletTx
             <$> o .: "txid"
             <*> o .: "type"
             <*> o .: "amount"
-            <*> (either fail return $ mapTextAddr net myOutputsT)
-            <*> (either fail return $ mapTextAddr net othOutputsT)
+            <*> (f =<< o .: "myoutputs")
+            <*> (f =<< o .: "otheroutputs")
             <*> (mapM (Store.storeOutputParseJSON net) =<< o .: "nonstdoutputs")
-            <*> (either fail return $ mapTextAddr net myInputsT)
-            <*> (either fail return $ mapTextAddr net othInputsT)
+            <*> (f =<< o .: "myinputs")
+            <*> (f =<< o .: "otherinputs")
             <*> (mapM (Store.storeInputParseJSON net) =<< o .: "nonstdinputs")
             <*> o .: "size"
             <*> o .: "fee"
             <*> (read <$> o .: "feebyte")
             <*> o .: "block"
             <*> o .: "confirmations"
+      where
+        f = either fail return . mapTextAddr net
 
 mapAddrText :: Network -> Map Address v -> Either String (Map Text v)
 mapAddrText net m = do
@@ -157,7 +147,7 @@ toWalletTx walletAddrs currHeight sTx =
   where
     size = fromIntegral $ Store.transactionSize sTx :: Natural
     fee = fromIntegral $ Store.transactionFees sTx :: Natural
-    feeByte = Decimal.roundTo 2 $ (fromIntegral fee) / (fromIntegral size)
+    feeByte = Decimal.roundTo 2 $ fromIntegral fee / fromIntegral size
     (outputMap, nonStdOut) = outputAddressMap $ Store.transactionOutputs sTx
     myOutputsMap = Map.intersectionWith (,) outputMap walletAddrs
     othOutputsMap = Map.difference outputMap walletAddrs
@@ -264,7 +254,7 @@ unsignedToWalletTx tx uTx =
     size = BS.length $ S.encode tx
     feeByte =
         Decimal.roundTo 2 $
-        (fromIntegral $ walletUnsignedTxFee uTx) / fromIntegral size
+        fromIntegral (walletUnsignedTxFee uTx) / fromIntegral size
     myInputs = Map.map f $ walletUnsignedTxMyInputs uTx
     f (n,p,_) = (n,p)
 
@@ -288,29 +278,28 @@ walletUnsignedTxToJSON net tx = do
 
 walletUnsignedTxParseJSON :: Network -> Json.Value -> Parser WalletUnsignedTx
 walletUnsignedTxParseJSON net =
-    Json.withObject "walletunsignedtx" $ \o -> do
-        myOutputsT <- o .: "myoutputs"
-        othOutputsT <- o .: "otheroutputs"
-        myInputsT <- o .: "myinputs"
+    Json.withObject "walletunsignedtx" $ \o ->
         WalletUnsignedTx
             <$> o .: "type"
             <*> o .: "amount"
-            <*> (either fail return $ mapTextAddr net myOutputsT)
-            <*> (either fail return $ mapTextAddr net othOutputsT)
-            <*> (either fail return $ mapTextAddr net myInputsT)
+            <*> (f =<< o .: "myoutputs")
+            <*> (f =<< o .: "otheroutputs")
+            <*> (f =<< o .: "myinputs")
             <*> o .: "size"
             <*> o .: "fee"
             <*> (read <$> o .: "feebyte")
+      where
+        f = either fail return . mapTextAddr net
 
 parseTxSignData ::
        Network -> XPubKey -> TxSignData -> Either String WalletUnsignedTx
-parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _) = do
+parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
     coins <- txSignDataCoins tsd
         -- Fees
     let outSum = fromIntegral $ sum $ outValue <$> txOut tx :: Natural
         inSum = fromIntegral $ sum $ outValue . snd <$> coins :: Natural
     fee <- maybeToEither "Fee is negative" $ inSum `safeSubtract` outSum
-    let feeByte = Decimal.roundTo 2 $ (fromIntegral fee) / (fromIntegral size)
+    let feeByte = Decimal.roundTo 2 $ fromIntegral fee / fromIntegral size
         -- Outputs
         (outputMap, nonStdOut) = txOutAddressMap $ txOut tx
         myOutputsMap = Map.intersectionWith (,) outputMap outPathAddrs
@@ -357,14 +346,14 @@ parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _) = do
     size = guessTxSize (length $ txIn tx) [] (length $ txOut tx) 0
 
 txSignDataCoins :: TxSignData -> Either String [(OutPoint, TxOut)]
-txSignDataCoins (TxSignData tx depTxs _ _ _) =
+txSignDataCoins (TxSignData tx depTxs _ _ _ _ _) =
     maybeToEither "Referenced input transactions are missing" $ mapM f ops
   where
     ops = prevOutput <$> txIn tx :: [OutPoint]
     txMap = Map.fromList $ (txHash &&& txOut) <$> depTxs :: Map TxHash [TxOut]
     f :: OutPoint -> Maybe (OutPoint, TxOut)
     f op@(OutPoint h i) =
-        (op, ) <$> ((!!? (fromIntegral i)) =<< Map.lookup h txMap)
+        (op, ) <$> ((!!? fromIntegral i) =<< Map.lookup h txMap)
 
 txType :: Integer -> Natural -> TxType
 txType amount fee
@@ -375,162 +364,3 @@ txType amount fee
 pathToAddr :: XPubKey -> SoftPath -> Address
 pathToAddr pubKey = xPubAddr . (`derivePubPath` pubKey)
 
-{-
-
-data DetailedTx = DetailedTx
-    { detailedTxHash          :: Maybe TxHash
-    , detailedTxSize          :: Maybe Natural
-    , detailedTxAmount        :: Maybe Integer
-    , detailedTxType          :: Maybe TxType
-    , detailedTxOutbound      :: Map Text Natural
-    , detailedTxNonStdOutputs :: Natural
-    , detailedTxInbound       :: Map Text (Natural, Maybe SoftPath)
-    , detailedTxMyInputs      :: Map Text (Natural, Maybe SoftPath)
-    , detailedTxOtherInputs   :: Map Text Natural
-    , detailedTxNonStdInputs  :: Natural
-    , detailedTxFee           :: Maybe Natural
-    , detailedTxFeeByte       :: Maybe Text
-    , detailedTxHeight        :: Maybe Natural
-    , detailedTxBlockHash     :: Maybe BlockHash
-    } deriving (Eq, Show)
-
-$(deriveJSON (dropFieldLabel 8) ''DetailedTx)
-
-emptyDetailedTx :: DetailedTx
-emptyDetailedTx =
-    DetailedTx
-    { detailedTxHash = Nothing
-    , detailedTxSize = Nothing
-    , detailedTxAmount = Nothing
-    , detailedTxType = Nothing
-    , detailedTxOutbound = Map.empty
-    , detailedTxNonStdOutputs = 0
-    , detailedTxInbound = Map.empty
-    , detailedTxMyInputs = Map.empty
-    , detailedTxOtherInputs = Map.empty
-    , detailedTxNonStdInputs = 0
-    , detailedTxFee = Nothing
-    , detailedTxFeeByte = Nothing
-    , detailedTxHeight = Nothing
-    , detailedTxBlockHash = Nothing
-    }
-
-buildDetailedTx :: Endo DetailedTx -> DetailedTx
-buildDetailedTx e = appEndo (e <> fillAmountFee) emptyDetailedTx
-
-fillAmountFee :: Endo DetailedTx
-fillAmountFee =
-    Endo $ \dtx ->
-        dtx
-            { detailedTxAmount = Just $ amnt dtx
-            , detailedTxFeeByte = cs . show <$> feeByteM dtx
-            , detailedTxType = Just $ txType dtx
-            }
-  where
-    inboundSum dtx = sum $ fst <$> Map.elems (detailedTxInbound dtx)
-    myCoinsSum dtx = sum $ fst <$> Map.elems (detailedTxMyInputs dtx)
-    amnt dtx = toInteger (inboundSum dtx) - toInteger (myCoinsSum dtx)
-    feeByteM dtx = do
-        sat <- fromIntegral <$> detailedTxFee dtx :: Maybe Decimal
-        bytes <- fromIntegral <$> detailedTxSize dtx :: Maybe Decimal
-        return $ roundTo 2 $ sat / bytes
-    txType dtx
-        | amnt dtx > 0 = TxInbound
-        | Just (fromIntegral $ abs (amnt dtx)) == detailedTxFee dtx = TxInternal
-        | otherwise = TxOutbound
-
-fillSoftPath :: Map Text SoftPath -> Endo DetailedTx
-fillSoftPath addrMap =
-    Endo $ \dtx ->
-        dtx
-            { detailedTxInbound = mergeSoftPath (detailedTxInbound dtx)
-            , detailedTxMyInputs = mergeSoftPath (detailedTxMyInputs dtx)
-            }
-  where
-    mergeSoftPath = Map.intersectionWith f addrMap
-    f path (amnt, _) = (amnt, Just path)
-
-fillUnsignedTx :: Network -> Tx -> Endo DetailedTx
-fillUnsignedTx net tx = fillTx net tx <> go
-  where
-    go =
-        Endo $ \dtx ->
-            dtx
-                { detailedTxHash = Nothing
-                , detailedTxSize =
-                      Just $
-                      fromIntegral $
-                      guessTxSize (length $ txIn tx) [] (length $ txOut tx) 0
-                }
-
-fillTx :: Network -> Tx -> Endo DetailedTx
-fillTx net tx =
-    Endo $ \dtx ->
-        dtx
-            { detailedTxOutbound = outbound dtx
-            , detailedTxNonStdOutputs = nonStd
-            , detailedTxHash = Just $ txHash tx
-            , detailedTxSize =
-                  Just $ fromIntegral $ BS.length $ Serialize.encode tx
-            , detailedTxFee = detailedTxFee dtx <|> feeM dtx
-            }
-  where
-    (outAddrMap, nonStd) = txOutAddressMap net $ txOut tx
-    outbound dtx = Map.difference outAddrMap (detailedTxInbound dtx)
-    outSum = fromIntegral $ sum $ outValue <$> txOut tx :: Natural
-    myInSum dtx = sum $ fst <$> Map.elems (detailedTxMyInputs dtx) :: Natural
-    othInSum dtx = sum $ Map.elems (detailedTxOtherInputs dtx) :: Natural
-    feeM dtx = (myInSum dtx + othInSum dtx) `safeSubtract` outSum
-
-fillInputs ::
-       Network
-    -> Map Text SoftPath
-    -> [TxOut]
-    -> Endo DetailedTx
-fillInputs net walletAddrs txOs =
-    Endo $ \dtx ->
-        dtx
-            { detailedTxMyInputs = Map.map (second Just) myValMap
-            , detailedTxOtherInputs = othValMap
-            }
-  where
-    valMap = fst $ txOutAddressMap net txOs
-    myValMap = Map.intersectionWith (,) valMap walletAddrs
-    othValMap = Map.difference valMap myValMap
-
-fillInbound ::
-       Network
-    -> Map Text SoftPath
-    -> [TxOut]
-    -> Endo DetailedTx
-fillInbound net walletAddrs txOs =
-    Endo $ \dtx -> dtx {detailedTxInbound = Map.map (second Just) inboundMap}
-  where
-    (outValMap, _) = txOutAddressMap net txOs
-    inboundMap = Map.intersectionWith (,) outValMap walletAddrs
-
-txOutAddressMap :: Network -> [TxOut] -> (Map Text Natural, Natural)
-txOutAddressMap net txout =
-    (Map.fromListWith (+) rs, sum ls)
-  where
-    xs = (decodeTxOutAddr net &&& outValue) <$> txout
-    (ls, rs) = partitionEithers $ partE <$> xs
-    partE (Right a, v) = Right (a, fromIntegral v)
-    partE (Left _, v)  = Left (fromIntegral v)
-
-decodeTxOutAddr :: Network -> TxOut -> Either String Text
-decodeTxOutAddr net to = do
-    so <- decodeTxOutSO to
-    addr <- maybeToEither err $ outputAddress so
-    maybeToEither err $ addrToString net addr
-  where
-    err = "Could not decode Address in decodeTxOutAddr"
-
-decodeTxOutSO :: TxOut -> Either String ScriptOutput
-decodeTxOutSO = decodeOutputBS . scriptOutput
-
-isExternal :: SoftPath -> Bool
-isExternal (Deriv :/ 0 :/ _) = True
-isExternal _                 = False
-
--}

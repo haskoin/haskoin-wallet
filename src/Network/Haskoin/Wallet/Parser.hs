@@ -62,9 +62,14 @@ data Command = CommandMnemonic
     , commandFeeByte    :: Natural
     , commandDust       :: Natural
     }
+    | CommandReview
+    { commandFilePath :: FilePath
+    }
     | CommandSignTx
-    { commandFilePath   :: FilePath
-    , commandDerivation :: Natural
+    { commandFilePath :: FilePath
+    }
+    | CommandSendTx
+    { commandFilePath :: FilePath
     }
     deriving (Eq, Show)
 
@@ -100,7 +105,9 @@ commandParser =
             [ commandGroup "Transaction management"
             , command "transactions" transactionsParser
             , command "preparetx" prepareTxParser
+            , command "review" reviewParser
             , command "signtx" signTxParser
+            , command "sendtx" sendTxParser
             ]
         ]
 
@@ -175,18 +182,29 @@ prepareTxParser =
                           <*> dustOption) $
     mconcat
         [ progDesc "Prepare a new unsigned transaction"
-        , footer "Next command: signtx"
+        , footer "Next command: review, signtx"
+        ]
+
+reviewParser :: ParserInfo Command
+reviewParser =
+    info (CommandReview <$> filepathArgument) $
+    mconcat
+        [ progDesc "Review the contents of a transaction file"
+        , footer "Next command: signtx, sendtx"
         ]
 
 signTxParser :: ParserInfo Command
 signTxParser =
-    info
-        (CommandSignTx <$> filepathArgument
-                       <*> derivationOption) $
+    info (CommandSignTx <$> filepathArgument) $
     mconcat
         [ progDesc "Sign a transaction that was created with preparetx"
         , footer "Next command: sendtx"
         ]
+
+sendTxParser :: ParserInfo Command
+sendTxParser =
+    info (CommandSendTx <$> filepathArgument) $
+    mconcat [progDesc "Broadcast a signed transaction to the network"]
 
 {- Option Parsers -}
 

@@ -8,11 +8,12 @@ module Network.Haskoin.Wallet.Commands where
 import           Control.Arrow                       (first)
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
-import           Data.Aeson                          (object, (.:), (.=))
+import           Data.Aeson                          (object, (.:), (.:?), (.=))
 import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
 import qualified Data.Aeson.Types                    as Json
 import qualified Data.ByteString.Char8               as C8
+import           Data.Either                         (fromRight)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
 import           Data.Map.Strict                     (Map)
@@ -25,6 +26,7 @@ import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Keys
 import qualified Haskoin.Store.Data                  as Store
+import           Haskoin.Transaction
 import           Haskoin.Util                        (dropFieldLabel,
                                                       dropSumLabels,
                                                       maybeToEither)
@@ -95,10 +97,22 @@ data Response = ResponseError
     , responseTxFile      :: Text
     , responseUnsignedTx  :: WalletUnsignedTx
     }
+    | ResponseReview
+    { responseAccountName  :: Text
+    , responseAccount      :: AccountStore
+    , responseTransactionM :: Maybe WalletTx
+    , responseUnsignedTxM  :: Maybe WalletUnsignedTx
+    }
     | ResponseSignTx
     { responseTxFile      :: Text
     , responseTransaction :: WalletTx
     , responseNetwork     :: Network
+    }
+    | ResponseSendTx
+    { responseAccountName :: Text
+    , responseAccount     :: AccountStore
+    , responseTransaction :: WalletTx
+    , responseNetworkTxId :: TxHash
     }
     deriving (Eq, Show)
 
@@ -186,6 +200,23 @@ instance Json.ToJSON Response where
                             , "unsignedtx" .= tJ
                             ]
                     Left err -> jsonError err
+            ResponseReview n a wTxM uTxM -> do
+                let net = accountStoreNetwork a
+                    wTxE = walletTxToJSON net <$> wTxM
+                    uTxE = walletUnsignedTxToJSON net <$> uTxM
+                case (wTxE, uTxE) of
+                    (Just (Left err), _) -> jsonError err
+                    (_, Just (Left err)) -> jsonError err
+                    (wTx, uTx) ->
+                        object
+                            [ "type" .= Json.String "review"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "transaction" .=
+                              maybe Json.Null (fromRight Json.Null) wTx
+                            , "unsignedtx" .=
+                              maybe Json.Null (fromRight Json.Null) uTx
+                            ]
             ResponseSignTx f t net ->
                 case walletTxToJSON net t of
                     Right tJ ->
@@ -194,6 +225,17 @@ instance Json.ToJSON Response where
                             , "txfile" .= f
                             , "transaction" .= tJ
                             , "network" .= getNetworkName net
+                            ]
+                    Left err -> jsonError err
+            ResponseSendTx n a t h ->
+                case walletTxToJSON (accountStoreNetwork a) t of
+                    Right tJ ->
+                        object
+                            [ "type" .= Json.String "sendtx"
+                            , "accountname" .= n
+                            , "account" .= a
+                            , "transaction" .= tJ
+                            , "networktxid" .= h
                             ]
                     Left err -> jsonError err
 
@@ -255,11 +297,30 @@ instance Json.FromJSON Response where
                     let g = walletUnsignedTxParseJSON (accountStoreNetwork a)
                     t <- g =<< o .: "unsignedtx"
                     return $ ResponsePrepareTx n a f t
+                "review" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    let f = walletTxParseJSON (accountStoreNetwork a)
+                    let g = walletUnsignedTxParseJSON (accountStoreNetwork a)
+                    wTxM <-
+                        maybe (return Nothing) ((Just <$>) . f) =<<
+                        o .:? "transaction"
+                    uTxM <-
+                        maybe (return Nothing) ((Just <$>) . g) =<<
+                        o .:? "unsignedtx"
+                    return $ ResponseReview n a wTxM uTxM
                 "signtx" -> do
                     net <- maybe mzero return . netByName =<< o .: "network"
                     f <- o .: "txfile"
                     t <- walletTxParseJSON net =<< o .: "transaction"
                     return $ ResponseSignTx f t net
+                "sendtx" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    let f = walletTxParseJSON (accountStoreNetwork a)
+                    t <- f =<< o .: "transaction"
+                    h <- o .: "networktxid"
+                    return $ ResponseSendTx n a t h
                 _ -> fail "Invalid JSON response type"
 
 data AccountBalance = AccountBalance
@@ -278,7 +339,7 @@ data AccountBalance = AccountBalance
 
 instance Json.ToJSON AccountBalance where
     toJSON b =
-        object $
+        object
         [ "confirmed" .= balanceAmount b
         , "unconfirmed" .= balanceZero b
         , "utxo" .= balanceUnspentCount b
@@ -288,7 +349,7 @@ instance Json.ToJSON AccountBalance where
 
 instance Json.FromJSON AccountBalance where
     parseJSON =
-        Json.withObject "accountbalance" $ \o -> do
+        Json.withObject "accountbalance" $ \o ->
             AccountBalance <$> o .: "confirmed"
                            <*> o .: "unconfirmed"
                            <*> o .: "utxo"
@@ -328,7 +389,9 @@ commandResponse =
         CommandTransactions accM p -> transactions accM p
         CommandPrepareTx rcpts accM unit fee dust ->
             prepareTx rcpts accM unit fee dust
-        CommandSignTx file deriv -> cmdSignTx file deriv
+        CommandReview file -> cmdReview file
+        CommandSignTx file -> cmdSignTx file
+        CommandSendTx file -> cmdSendTx file
 
 mnemonic :: Bool -> Natural -> IO Response
 mnemonic useDice ent =
@@ -383,40 +446,40 @@ accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
 balance :: Maybe Text -> IO Response
 balance accM =
     catchResponseError $ do
-        (key, store) <- getAccountStore accM
+        (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         withNetwork net $ do
             let allAddrs = extAddresses store <> intAddresses store
             bals <- httpAddrBalances $ fst <$> allAddrs
-            return $ ResponseBalance key store $ addrsToAccBalance bals
+            return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
 addresses accM page =
     catchResponseError $ do
-        (key, store) <- getAccountStore accM
+        (storeName, store) <- getAccountStore accM
         let addrs = toPage page $ reverse $ extAddresses store
-        return $ ResponseAddresses key store addrs
+        return $ ResponseAddresses storeName store addrs
 
 receive :: Maybe Text -> IO Response
 receive accM =
     catchResponseError $ do
-        (key, store) <- getAccountStore accM
+        (storeName, store) <- getAccountStore accM
         let (addr, store') = genExtAddress store
-        newStore <- commit key store'
-        return $ ResponseReceive key newStore addr
+        newStore <- commit storeName store'
+        return $ ResponseReceive storeName newStore addr
 
 transactions :: Maybe Text -> Page -> IO Response
 transactions accM page =
     catchResponseError $ do
-        (key, store) <- getAccountStore accM
+        (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         withNetwork net $ do
             let allAddrs = extAddresses store <> intAddresses store
                 addrMap = Map.fromList allAddrs
-            best <- bestBlockHeight
+            best <- httpBestBlock
             txs <- httpAddrTxs (fst <$> allAddrs) page
             let walletTxs = toWalletTx addrMap best <$> txs
-            return $ ResponseTransactions key store walletTxs
+            return $ ResponseTransactions storeName store walletTxs
 
 prepareTx ::
        [(Text, Text)]
@@ -427,7 +490,7 @@ prepareTx ::
     -> IO Response
 prepareTx rcpTxt accM unit feeByte dust =
     catchResponseError $ do
-        (key, store) <- getAccountStore accM
+        (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
         withNetwork net $ do
@@ -436,8 +499,8 @@ prepareTx rcpTxt accM unit feeByte dust =
             wTx <-
                 liftEither $
                 parseTxSignData net (accountStoreXPubKey store) signDat
-            newStore <- commit key commitStore
-            return $ ResponsePrepareTx key newStore (cs path) wTx
+            newStore <- commit storeName commitStore
+            return $ ResponsePrepareTx storeName newStore (cs path) wTx
 
 toRecipient ::
        Network
@@ -454,16 +517,44 @@ toRecipient net unit (a, v) = do
 
 cmdSignTx ::
        FilePath
-    -> Natural
     -> IO Response
-cmdSignTx fp deriv =
+cmdSignTx fp =
     catchResponseError $ do
         txSignData <- readJsonFile fp
         let net = txSignDataNetwork txSignData
-        prvKey <- askSigningKey net deriv
-        (tx, wTx) <- liftEither $ signWalletTx txSignData prvKey
-        path <- liftIO $ writeDoc $ SignedTx tx net
+            acc = txSignDataAccount txSignData
+        prvKey <- askSigningKey net acc
+        (newSignData, wTx) <- liftEither $ signWalletTx txSignData prvKey
+        path <- liftIO $ writeDoc newSignData
         return $ ResponseSignTx (cs path) wTx net
+
+cmdReview :: FilePath -> IO Response
+cmdReview fp =
+    catchResponseError $ do
+        tsd@(TxSignData tx _ _ _ acc signed net) <- readJsonFile fp
+        withNetwork net $ do
+            (storeName, store) <- getAccountStoreByDeriv acc
+            let pub = accountStoreXPubKey store
+            uTx <- liftEither $ parseTxSignData net pub tsd
+            let wTx = unsignedToWalletTx tx uTx
+            return $
+                if signed
+                    then ResponseReview storeName store (Just wTx) Nothing
+                    else ResponseReview storeName store Nothing (Just uTx)
+
+cmdSendTx :: FilePath -> IO Response
+cmdSendTx fp =
+    catchResponseError $ do
+        tsd@(TxSignData signedTx _ _ _ acc signed net) <- readJsonFile fp
+        unless signed $
+            throwError "The transaction is not signed"
+        withNetwork net $ do
+            (storeName, store) <- getAccountStoreByDeriv acc
+            let pub = accountStoreXPubKey store
+            uTx <- liftEither $ parseTxSignData net pub tsd
+            let wTx = unsignedToWalletTx signedTx uTx
+            netTxId <- httpBroadcastTx signedTx
+            return $ ResponseSendTx storeName store wTx netTxId
 
 {- Haskeline Helpers -}
 

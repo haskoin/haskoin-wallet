@@ -49,13 +49,14 @@ buildTxSignData store rcpts feeByte dust
     | null rcpts = throwError "No recipients provided"
     | otherwise = do
         net <- network
+        acc <- liftEither $ accountStoreAccount store
         allCoins <- httpAddrUnspent $ Map.keys walletAddrMap
         (tx, depTxHash, inDeriv, outDeriv) <-
             liftEither $
             buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
         depTxs <- httpRawTxs depTxHash
         return
-            ( TxSignData tx depTxs inDeriv outDeriv net
+            ( TxSignData tx depTxs inDeriv outDeriv acc False net
             , if null outDeriv
                   then NoCommit store
                   else newStore)
@@ -107,8 +108,9 @@ signingKey net pass mnem acc = do
 signWalletTx ::
        TxSignData
     -> XPrvKey
-    -> Either String (Tx, WalletTx)
-signWalletTx tsd@(TxSignData tx _ inPaths _ net) signKey = do
+    -> Either String (TxSignData, WalletTx)
+signWalletTx tsd@(TxSignData tx _ inPaths _ _ signed net) signKey = do
+    when signed $ Left "The transaction is already signed"
     wTx <- parseTxSignData net pubKey tsd
         -- signing
     let myInputs = walletUnsignedTxMyInputs wTx
@@ -119,7 +121,9 @@ signWalletTx tsd@(TxSignData tx _ inPaths _ net) signKey = do
         vDat = f <$> sigInputs
         isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx vDat
     unless isSigned $ Left "The transaction could not be signed"
-    return (signedTx, unsignedToWalletTx signedTx wTx)
+    return
+        ( tsd {txSignDataTx = signedTx, txSignDataSigned = True}
+        , unsignedToWalletTx signedTx wTx)
   where
     pubKey = deriveXPubKey signKey
     prvKeys = xPrvKey . (`derivePath` signKey) <$> inPaths

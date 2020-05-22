@@ -16,7 +16,7 @@ import qualified Data.Aeson                      as J
 import           Data.Aeson.Lens
 import qualified Data.ByteString                 as BS
 import qualified Data.ByteString.Lazy            as BL
-import           Data.List                       (nub, sum, sort)
+import           Data.List                       (nub, sort, sum)
 import           Data.Map                        (Map)
 import qualified Data.Map                        as Map
 import           Data.Maybe
@@ -70,11 +70,18 @@ httpRawTxs ::
     -> m [Tx]
 httpRawTxs tids = batchQuery 20 $ TransactionsRaw tids
 
-bestBlockHeight ::
+httpBestBlock ::
        (MonadIO m, MonadReader Network m, MonadError String m)
     => m Natural
-bestBlockHeight =
+httpBestBlock =
     fromIntegral . Store.blockDataHeight <$> apiQuery (BlockBest True)
+    
+httpBroadcastTx ::
+       (MonadIO m, MonadReader Network m, MonadError String m)
+    => Tx -> m TxHash
+httpBroadcastTx tx = do
+    Store.TxId res <- apiQuery $ PostTransactions tx
+    return res
 
 {- Helper API -}
 
@@ -83,23 +90,19 @@ data ApiPoint a where
         { addrTxAddresses :: [Address]
         , addrTxHeight    :: Maybe String
         , addrTxLimit     :: Maybe Natural
-        }                 -> ApiPoint [Store.TxRef]
+        } -> ApiPoint [Store.TxRef]
     AddressBalances ::
         { addrBalAddresses :: [Address]
-        }                  -> ApiPoint [Store.Balance]
+        } -> ApiPoint [Store.Balance]
     AddressUnspent ::
         { addrUnspentAddresses :: [Address]
         , addrUnspentHeight    :: Maybe String
         , addrUnspentLimit     :: Maybe Natural
-        }                      -> ApiPoint [Store.Unspent]
-    Transactions ::
-        { txsTxids :: [TxHash]
-        }          -> ApiPoint [Store.Transaction]
-    TransactionsRaw ::
-        { txsRawTxids :: [TxHash]
-        }             -> ApiPoint [Tx]
-    BlockBest ::
-        { blockBestNoTx :: Bool } -> ApiPoint Store.BlockData
+        } -> ApiPoint [Store.Unspent]
+    Transactions :: { txsTxids :: [TxHash]} -> ApiPoint [Store.Transaction]
+    PostTransactions :: { postTx :: Tx } -> ApiPoint Store.TxId
+    TransactionsRaw :: { txsRawTxids :: [TxHash] } -> ApiPoint [Tx]
+    BlockBest :: { blockBestNoTx :: Bool } -> ApiPoint Store.BlockData
     Health :: ApiPoint Store.HealthCheck
 
 apiHost :: Network -> String
@@ -133,44 +136,61 @@ apiQuery point = do
                 opts = applyOpt "addresses" addrsTxt
                     <> applyOptM "height" ((:[]) . cs <$> heightM)
                     <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
-            httpBinary opts url
+            getBinary opts url
         AddressBalances addrs -> do
             addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
             let url = apiHost net </> "address" </> "balances"
                 opts = applyOpt "addresses" addrsTxt
-            httpBinary opts url
+            getBinary opts url
         AddressUnspent addrs heightM limitM -> do
             addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
             let url = apiHost net </> "address" </> "unspent"
                 opts = applyOpt "addresses" addrsTxt
                     <> applyOptM "height" ((:[]) . cs <$> heightM)
                     <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
-            httpBinary opts url
+            getBinary opts url
         Transactions tids -> do
             let txsTxt = txHashToHex <$> tids
                 url = apiHost net </> "transactions"
                 opts = applyOpt "txids" txsTxt
-            httpBinary opts url
+            getBinary opts url
+        PostTransactions tx -> do
+            let url = apiHost net </> "transactions"
+            postBinary (Endo id) url tx
         TransactionsRaw tids -> do
             let txsTxt = txHashToHex <$> tids
                 url = apiHost net </> "transactions" </> "raw"
                 opts = applyOpt "txids" txsTxt
-            httpBinary opts url
+            getBinary opts url
         BlockBest notx -> do
             let url = apiHost net </> "block" </> "best"
                 opts = optBool "notx" notx
-            httpBinary opts url
+            getBinary opts url
         Health -> do
             let url = apiHost net </> "health"
-            httpBinary (Endo id) url
+            getBinary (Endo id) url
 
-httpBinary ::
+getBinary ::
        (MonadIO m, MonadError String m, S.Serialize a)
     => Endo HTTP.Options
     -> String
     -> m a
-httpBinary opts url = do
+getBinary opts url = do
     res <- liftIO $ HTTP.getWith opts' url
+    liftEither $ S.decodeLazy $ res ^. HTTP.responseBody
+  where
+    opts' = appEndo (opts <> accept <> stat) HTTP.defaults
+    accept = Endo $ HTTP.header "Accept" .~ ["application/octet-stream"]
+    stat   = Endo $ HTTP.checkResponse ?~ checkStatus
+
+postBinary ::
+       (MonadIO m, MonadError String m, S.Serialize a, S.Serialize r)
+    => Endo HTTP.Options
+    -> String
+    -> a
+    -> m r
+postBinary opts url body = do
+    res <- liftIO $ HTTP.postWith opts' url (S.encode body)
     liftEither $ S.decodeLazy $ res ^. HTTP.responseBody
   where
     opts' = appEndo (opts <> accept <> stat) HTTP.defaults
@@ -190,7 +210,7 @@ checkStatus _ r
 {- Helpers -}
 
 applyOpt :: Text -> [Text] -> Endo HTTP.Options
-applyOpt p t = Endo $ HTTP.param p .~ t
+applyOpt p t = Endo $ HTTP.param p .~ [Text.intercalate "," t]
 
 applyOptM :: Text -> Maybe [Text] -> Endo HTTP.Options
 applyOptM p =

@@ -46,27 +46,6 @@ jsonPrinter = C8.putStrLn . encodeJsonPretty
 
 {--
 
-signtx :: Command IO
-signtx =
-    command
-        "signtx"
-        "Sign a transaction that was created with preparetx"
-        (Just CommandOffline)
-        [sendtx] $
-    withOption derivOpt $ \d ->
-    withOption unitOpt $ \u ->
-    withOption netOpt $ \netStr ->
-    withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            let !net = parseNetwork netStr
-                !unit = parseUnit u
-            printNetworkHeader net
-            dat <- readDoc net (fromString fp) Json.parseJSON
-            signKey <- askSigningKey net $ fromIntegral d
-            case signWalletTx net dat signKey of
-                Right res -> saveSignedTx net d unit "tx" res
-                Left err  -> exitError err
-
 prepareswipetx :: Command IO
 prepareswipetx =
     command
@@ -140,44 +119,6 @@ askInputs msg f = go []
                     else return acc
     noInput = exitError "No input provided"
     noParse = exitError "Could not parse the input"
-
-saveSignedTx ::
-       Network
-    -> Natural
-    -> AmountUnit
-    -> LString
-    -> (DetailedTx, Tx, Bool)
-    -> IO ()
-saveSignedTx net d unit str (info, signedTx, isSigned) = do
-    renderIO $ detailedTxFormat (bip44Deriv net d) unit (Just isSigned) Nothing info
-    let signedHex = encodeHexText $ encodeBytes signedTx
-        chsum = txChksum signedTx
-        fname = fromString $ str <> "-" <> toLString chsum <> "-signed"
-    path <- writeDoc net fname signedHex
-    renderIO $
-        vcat
-            [ formatTitle "Signed Tx File"
-            , indent 4 $ formatFilePath $ filePathToString path
-            ]
-
-sendtx :: Command IO
-sendtx =
-    command
-        "sendtx"
-        "Broadcast a signed transaction"
-        (Just CommandOnline)
-        [] $
-    withOption netOpt $ \netStr ->
-    withNonOption Argument.file "{filename}" $ \fp ->
-        io $ do
-            let !net = parseNetwork netStr
-            printNetworkHeader net
-            tx <- readDoc net (fromString fp) Json.parseJSON
-            httpBroadcastTx net tx
-            renderIO $
-                formatStatic "Tx" <+>
-                formatTxHash (fromText $ txHashToHex $ txHash tx) <+>
-                formatStatic "has been broadcast"
 
 --}
 
