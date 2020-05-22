@@ -1,3 +1,8 @@
+nix:
+  packages:
+    - zlib
+    - secp256k1
+    - pkg-config
 resolver: lts-15.11
 extra-deps:
 - haskoin-core-0.13.5
