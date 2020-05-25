@@ -1,174 +1,236 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE GADTs             #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections     #-}
+{-# LANGUAGE FlexibleContexts       #-}
+{-# LANGUAGE FlexibleInstances      #-}
+{-# LANGUAGE FunctionalDependencies #-}
+{-# LANGUAGE GADTs                  #-}
+{-# LANGUAGE LambdaCase             #-}
+{-# LANGUAGE OverloadedStrings      #-}
+{-# LANGUAGE TupleSections          #-}
+{-# LANGUAGE TypeFamilies           #-}
+{-# LANGUAGE TypeOperators          #-}
 module Network.Haskoin.Wallet.HTTP
 
 where
 
-import           Control.Lens                    ((&), (.~), (?~), (^.), (^..),
-                                                  (^?))
+import           Control.Lens                ((.~), (?~), (^.))
 import           Control.Monad.Except
 import           Control.Monad.Reader
-import           Data.Aeson                      as Json
-import qualified Data.Aeson                      as J
-import           Data.Aeson.Lens
-import qualified Data.ByteString                 as BS
-import qualified Data.ByteString.Lazy            as BL
-import           Data.List                       (nub, sort, sum)
-import           Data.Map                        (Map)
-import qualified Data.Map                        as Map
-import           Data.Maybe
 import           Data.Monoid
-import qualified Data.Serialize                  as S
-import           Data.String.Conversions         (cs)
-import           Data.Text                       (Text)
-import qualified Data.Text                       as Text
+import qualified Data.Serialize              as S
+import           Data.String.Conversions     (cs)
+import           Data.Text                   (Text)
+import qualified Data.Text                   as Text
 import           Haskoin.Address
 import           Haskoin.Block
 import           Haskoin.Constants
-import           Haskoin.Script
-import qualified Haskoin.Store.Data              as Store
+import           Haskoin.Keys
+import qualified Haskoin.Store.Data          as Store
 import           Haskoin.Transaction
-import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
 import           Network.HTTP.Types.Status
-import qualified Network.Wreq                    as HTTP
-import           Network.Wreq.Types              (ResponseChecker)
+import qualified Network.Wreq                as HTTP
+import           Network.Wreq.Types          (ResponseChecker)
 import           Numeric.Natural
-import           Options.Applicative.Help.Pretty hiding ((</>))
-
-{- Application -}
-
-httpAddrTxs ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => [Address]
-    -> Page
-    -> m [Store.Transaction]
-httpAddrTxs addrs p = do
-    blockTxs <- batchQuery 20 $ AddressTransactions addrs Nothing (Just 500)
-    let sortedTxs = sortDesc blockTxs
-    batchQuery 20 $ Transactions $ Store.txRefHash <$> toPage p sortedTxs
-
-httpAddrBalances ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => [Address]
-    -> m [Store.Balance]
-httpAddrBalances addrs = batchQuery 20 $ AddressBalances addrs
-
-httpAddrUnspent ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => [Address]
-    -> m [Store.Unspent]
-httpAddrUnspent addrs =
-    batchQuery 20 $ AddressUnspent addrs Nothing (Just 500)
-
-httpRawTxs ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => [TxHash]
-    -> m [Tx]
-httpRawTxs tids = batchQuery 20 $ TransactionsRaw tids
-
-httpBestBlock ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => m Natural
-httpBestBlock =
-    fromIntegral . Store.blockDataHeight <$> apiQuery (BlockBest True)
-    
-httpBroadcastTx ::
-       (MonadIO m, MonadReader Network m, MonadError String m)
-    => Tx -> m TxHash
-httpBroadcastTx tx = do
-    Store.TxId res <- apiQuery $ PostTransactions tx
-    return res
-
-{- Helper API -}
-
-data ApiPoint a where
-    AddressTransactions ::
-        { addrTxAddresses :: [Address]
-        , addrTxHeight    :: Maybe String
-        , addrTxLimit     :: Maybe Natural
-        } -> ApiPoint [Store.TxRef]
-    AddressBalances ::
-        { addrBalAddresses :: [Address]
-        } -> ApiPoint [Store.Balance]
-    AddressUnspent ::
-        { addrUnspentAddresses :: [Address]
-        , addrUnspentHeight    :: Maybe String
-        , addrUnspentLimit     :: Maybe Natural
-        } -> ApiPoint [Store.Unspent]
-    Transactions :: { txsTxids :: [TxHash]} -> ApiPoint [Store.Transaction]
-    PostTransactions :: { postTx :: Tx } -> ApiPoint Store.TxId
-    TransactionsRaw :: { txsRawTxids :: [TxHash] } -> ApiPoint [Tx]
-    BlockBest :: { blockBestNoTx :: Bool } -> ApiPoint Store.BlockData
-    Health :: ApiPoint Store.HealthCheck
 
 apiHost :: Network -> String
 apiHost net = "https://api.haskoin.com" </> getNetworkName net
 
-batchQuery ::
-       (MonadIO m, MonadReader Network m, MonadError String m, Monoid a)
-    =>  Natural -> ApiPoint a -> m a
-batchQuery i a = mconcat <$> mapM apiQuery (batchApiPoint i a)
-
-batchApiPoint :: Natural -> ApiPoint a -> [ApiPoint a]
-batchApiPoint i =
-    \case
-        AddressTransactions xs h l ->
-            AddressTransactions <$> chunksOf i xs <*> pure h <*> pure l
-        AddressBalances xs -> AddressBalances <$> chunksOf i xs
-        AddressUnspent xs h l ->
-            AddressUnspent <$> chunksOf i xs <*> pure h <*> pure l
-        Transactions xs -> Transactions <$> chunksOf i xs
-        TransactionsRaw xs -> TransactionsRaw <$> chunksOf i xs
-        _ -> error "This ApiPoint does not support batching"
-
-apiQuery :: (MonadIO m, MonadReader Network m, MonadError String m) =>
-            ApiPoint a -> m a
-apiQuery point = do
+-- | Make a call to the haskoin-store API.
+--
+-- Usage:
+-- > apiCall (AddressTxs addrs) noOpts
+--
+-- Add an option:
+-- > apiCall (AddressUnspent addrs) (optLimit 10)
+--
+-- Multiple options can be passed with <>:
+-- > apiCall (AddressUnspent addrs) (optOffset 5 <> optLimit 10)
+--
+-- Options are of type (Endo Network.Wreq.Options) so you can customize them.
+--
+-- Batch commands that have a large list of arguments:
+-- > apiBatch 20 (AddressTxs addrs) noOpts
+apiCall ::
+       (MonadIO m, MonadError String m, MonadReader Network m, S.Serialize a)
+    => ApiResource a
+    -> Endo HTTP.Options
+    -> m a
+apiCall res opts = do
     net <- network
-    case point of
-        AddressTransactions addrs heightM limitM -> do
-            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
-            let url = apiHost net </> "address" </> "transactions"
-                opts = applyOpt "addresses" addrsTxt
-                    <> applyOptM "height" ((:[]) . cs <$> heightM)
-                    <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
-            getBinary opts url
-        AddressBalances addrs -> do
-            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
-            let url = apiHost net </> "address" </> "balances"
-                opts = applyOpt "addresses" addrsTxt
-            getBinary opts url
-        AddressUnspent addrs heightM limitM -> do
-            addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
-            let url = apiHost net </> "address" </> "unspent"
-                opts = applyOpt "addresses" addrsTxt
-                    <> applyOptM "height" ((:[]) . cs <$> heightM)
-                    <> applyOptM "limit" ((:[]) . cs . show <$> limitM)
-            getBinary opts url
-        Transactions tids -> do
-            let txsTxt = txHashToHex <$> tids
-                url = apiHost net </> "transactions"
-                opts = applyOpt "txids" txsTxt
-            getBinary opts url
-        PostTransactions tx -> do
-            let url = apiHost net </> "transactions"
-            postBinary (Endo id) url tx
-        TransactionsRaw tids -> do
-            let txsTxt = txHashToHex <$> tids
-                url = apiHost net </> "transactions" </> "raw"
-                opts = applyOpt "txids" txsTxt
-            getBinary opts url
-        BlockBest notx -> do
-            let url = apiHost net </> "block" </> "best"
-                opts = optBool "notx" notx
-            getBinary opts url
-        Health -> do
-            let url = apiHost net </> "health"
-            getBinary (Endo id) url
+    args <- liftEither $ resourceArgs net res
+    let url = apiHost net <> resourcePath net res
+    case res of
+        PostTx tx -> postBinary (args <> opts) url tx
+        _ -> getBinary (args <> opts) url
+
+apiBatch ::
+       ( MonadIO m
+       , MonadError String m
+       , MonadReader Network m
+       , S.Serialize a
+       , Monoid a
+       )
+    => Natural
+    -> ApiResource a
+    -> Endo HTTP.Options
+    -> m a
+apiBatch i res opts = mconcat <$> mapM (`apiCall` opts) (resourceBatch i res)
+
+{- API Resources -}
+
+data ApiResource a where
+    AddressTxs :: [Address] -> ApiResource [Store.TxRef]
+    AddressTxsFull :: [Address] -> ApiResource [Store.Transaction]
+    AddressBalances :: [Address] -> ApiResource [Store.Balance]
+    AddressUnspent :: [Address] -> ApiResource [Store.Unspent]
+    XPubEvict :: XPubKey -> ApiResource (Store.GenericResult Bool)
+    XPubSummary :: XPubKey -> ApiResource Store.XPubSummary
+    XPubTxs :: XPubKey -> ApiResource [Store.TxRef]
+    XPubTxsFull :: XPubKey -> ApiResource [Store.Transaction]
+    XPubBalances :: XPubKey -> ApiResource [Store.XPubBal]
+    XPubUnspent :: XPubKey -> ApiResource [Store.XPubUnspent]
+    TxsDetails :: [TxHash] -> ApiResource [Store.Transaction]
+    PostTx :: Tx -> ApiResource Store.TxId
+    TxsRaw :: [TxHash] -> ApiResource [Tx]
+    TxAfter :: TxHash -> Natural -> ApiResource (Store.GenericResult Bool)
+    TxsBlock :: BlockHash -> ApiResource [Store.Transaction]
+    TxsBlockRaw :: BlockHash -> ApiResource [Tx]
+    Mempool :: ApiResource [TxHash]
+    Events :: ApiResource [Store.Event]
+    BlockBest :: ApiResource Store.BlockData
+    BlockBestRaw :: ApiResource (Store.GenericResult Block)
+    BlockLatest :: ApiResource [Store.BlockData]
+    Blocks :: [BlockHash] -> ApiResource [Store.BlockData]
+    BlockRaw :: BlockHash -> ApiResource (Store.GenericResult Block)
+    BlockHeight :: Natural -> ApiResource [Store.BlockData]
+    BlockHeightRaw :: Natural -> ApiResource [Block]
+    BlockHeights :: [Natural] -> ApiResource [Store.BlockData]
+    BlockTime :: Natural -> ApiResource Store.BlockData
+    BlockTimeRaw :: Natural -> ApiResource (Store.GenericResult Block)
+    Health :: ApiResource Store.HealthCheck
+    Peers :: ApiResource [Store.PeerInformation]
+
+{- API Options -}
+
+noOpts :: Endo HTTP.Options
+noOpts = Endo id
+
+optBlockHeight :: Natural -> Endo HTTP.Options 
+optBlockHeight h = applyOpt "height" [cs $ show h]
+
+optBlockHash :: BlockHash -> Endo HTTP.Options 
+optBlockHash h = applyOpt "height" [blockHashToHex h]
+
+optUnix :: Natural -> Endo HTTP.Options 
+optUnix u = applyOpt "height" [cs $ show u]
+
+optTxHash :: TxHash -> Endo HTTP.Options 
+optTxHash h = applyOpt "height" [txHashToHex h]
+
+optOffset :: Natural -> Endo HTTP.Options 
+optOffset o = applyOpt "offset" [cs $ show o]
+
+optLimit :: Natural -> Endo HTTP.Options 
+optLimit l = applyOpt "limit" [cs $ show l]
+
+optStandard :: Endo HTTP.Options 
+optStandard = applyOpt "derive" ["standard"]
+
+optSegwit :: Endo HTTP.Options 
+optSegwit = applyOpt "derive" ["segwit"]
+
+optCompat :: Endo HTTP.Options 
+optCompat = applyOpt "derive" ["compat"]
+
+optNoCache :: Endo HTTP.Options 
+optNoCache = applyOpt "nocache" ["true"]
+
+optNoTx :: Endo HTTP.Options 
+optNoTx = applyOpt "notx" ["true"]
+
+{- API Internal -}
+
+resourceArgs :: Network -> ApiResource a -> Either String (Endo HTTP.Options)
+resourceArgs net =
+    \case
+        AddressTxs as -> argAddrs net as
+        AddressTxsFull as -> argAddrs net as
+        AddressBalances as -> argAddrs net as
+        AddressUnspent as -> argAddrs net as
+        TxsDetails hs -> return $ applyOpt "txids" (txHashToHex <$> hs)
+        TxsRaw hs -> return $ applyOpt "txids" (txHashToHex <$> hs)
+        TxAfter h i ->
+            return $
+            applyOpt "txid" [txHashToHex h] <> applyOpt "height" [cs $ show i]
+        TxsBlock b -> return $ applyOpt "block" [blockHashToHex b]
+        TxsBlockRaw b -> return $ applyOpt "block" [blockHashToHex b]
+        Blocks bs -> return $ applyOpt "blocks" (blockHashToHex <$> bs)
+        BlockRaw b -> return $ applyOpt "block" [blockHashToHex b]
+        BlockHeight i -> return $ applyOpt "height" [cs $ show i]
+        BlockHeightRaw i -> return $ applyOpt "height" [cs $ show i]
+        BlockHeights is -> return $ applyOpt "heights" (cs . show <$> is)
+        BlockTime i -> return $ applyOpt "time" [cs $ show i]
+        BlockTimeRaw i -> return $ applyOpt "time" [cs $show i]
+        _ -> return noOpts
+
+argAddrs :: Network -> [Address] -> Either String (Endo HTTP.Options)
+argAddrs net addrs = do
+    addrsTxt <- liftEither $ addrToTextE net `mapM` addrs
+    return $ applyOpt "addresses" addrsTxt
+
+resourcePath :: Network -> ApiResource a -> String
+resourcePath net =
+    \case
+        AddressTxs {} -> "/address/transactions"
+        AddressTxsFull {} -> "/address/transactions/full"
+        AddressBalances {} -> "/address/balances"
+        AddressUnspent {} -> "/address/unspent"
+        XPubEvict pub -> "/xpub/" <> cs (xPubExport net pub) <> "/evict"
+        XPubSummary pub -> "/xpub/" <> cs (xPubExport net pub)
+        XPubTxs pub -> "/xpub/" <> cs (xPubExport net pub) <> "/transactions"
+        XPubTxsFull pub ->
+            "/xpub/" <> cs (xPubExport net pub) <> "/transactions/full"
+        XPubBalances pub -> "/xpub/" <> cs (xPubExport net pub) <> "/balances"
+        XPubUnspent pub -> "/xpub/" <> cs (xPubExport net pub) <> "/unspent"
+        TxsDetails {} -> "/transactions"
+        PostTx {} -> "/transactions"
+        TxsRaw {} -> "/transactions"
+        TxAfter h i ->
+            "/transactions/" <> cs (txHashToHex h) <> "/after/" <> show i
+        TxsBlock b -> "/transactions/block/" <> cs (blockHashToHex b)
+        TxsBlockRaw b ->
+            "/transactions/block/" <> cs (blockHashToHex b) <> "/raw"
+        Mempool -> "/mempool"
+        Events -> "/events"
+        BlockBest -> "/block/best"
+        BlockBestRaw -> "/block/best/raw"
+        BlockLatest -> "/block/latest"
+        Blocks {} -> "/blocks"
+        BlockRaw b -> "/block/" <> cs (blockHashToHex b) <> "/raw"
+        BlockHeight i -> "/block/height/" <> show i
+        BlockHeightRaw i -> "/block/height/" <> show i <> "/raw"
+        BlockHeights {} -> "/block/heights"
+        BlockTime t -> "/block/time/" <> show t
+        BlockTimeRaw t -> "/block/time/" <> show t <> "/raw"
+        Health -> "/health"
+        Peers -> "/peers"
+
+resourceBatch :: Natural -> ApiResource a -> [ApiResource a]
+resourceBatch i =
+    \case
+        AddressTxs xs -> AddressTxs <$> chunksOf i xs
+        AddressTxsFull xs -> AddressTxsFull <$> chunksOf i xs
+        AddressBalances xs -> AddressBalances <$> chunksOf i xs
+        AddressUnspent xs -> AddressUnspent <$> chunksOf i xs
+        TxsDetails xs -> TxsDetails <$> chunksOf i xs
+        TxsRaw xs -> TxsRaw <$> chunksOf i xs
+        Blocks xs -> Blocks <$> chunksOf i xs
+        BlockHeights xs -> BlockHeights <$> chunksOf i xs
+        res -> [res]
+
+{- API Helpers -}
+
+applyOpt :: Text -> [Text] -> Endo HTTP.Options
+applyOpt p t = Endo $ HTTP.param p .~ [Text.intercalate "," t]
 
 getBinary ::
        (MonadIO m, MonadError String m, S.Serialize a)
@@ -176,12 +238,8 @@ getBinary ::
     -> String
     -> m a
 getBinary opts url = do
-    res <- liftIO $ HTTP.getWith opts' url
+    res <- liftIO $ HTTP.getWith (binaryOpts opts) url
     liftEither $ S.decodeLazy $ res ^. HTTP.responseBody
-  where
-    opts' = appEndo (opts <> accept <> stat) HTTP.defaults
-    accept = Endo $ HTTP.header "Accept" .~ ["application/octet-stream"]
-    stat   = Endo $ HTTP.checkResponse ?~ checkStatus
 
 postBinary ::
        (MonadIO m, MonadError String m, S.Serialize a, S.Serialize r)
@@ -190,10 +248,13 @@ postBinary ::
     -> a
     -> m r
 postBinary opts url body = do
-    res <- liftIO $ HTTP.postWith opts' url (S.encode body)
+    res <- liftIO $ HTTP.postWith (binaryOpts opts) url (S.encode body)
     liftEither $ S.decodeLazy $ res ^. HTTP.responseBody
+
+binaryOpts :: Endo HTTP.Options -> HTTP.Options
+binaryOpts opts =
+    appEndo (opts <> accept <> stat) HTTP.defaults
   where
-    opts' = appEndo (opts <> accept <> stat) HTTP.defaults
     accept = Endo $ HTTP.header "Accept" .~ ["application/octet-stream"]
     stat   = Endo $ HTTP.checkResponse ?~ checkStatus
 
@@ -207,191 +268,3 @@ checkStatus _ r
     message = r ^. HTTP.responseStatus . HTTP.statusMessage
     status = mkStatus code message
 
-{- Helpers -}
-
-applyOpt :: Text -> [Text] -> Endo HTTP.Options
-applyOpt p t = Endo $ HTTP.param p .~ [Text.intercalate "," t]
-
-applyOptM :: Text -> Maybe [Text] -> Endo HTTP.Options
-applyOptM p =
-    \case
-        Just t -> applyOpt p t
-        _ -> Endo id
-
-optBool :: Text -> Bool -> Endo HTTP.Options
-optBool _ False = Endo id
-optBool p True  = applyOpt p ["true"]
-
-{-
-
-httpAddressTxs :: Network -> [Address] -> IO [(Address, TxHash)]
-httpAddressTxs net = (mconcat <$>) . mapM (httpAddressTxs_ net) . chunksOf 50
-
-httpAddressTxs_ :: Network -> [Address] -> IO [(Address, TxHash)]
-httpAddressTxs_ net addrs = do
-    v <- httpJsonGet opts url
-    let resM = mapM parseAddrTx $ v ^.. values
-    maybe (exitError "Could not parse addrTx") return resM
-  where
-    url = baseUrl net <> "/address/transactions"
-    aList = Text.intercalate "," $ addrStr net <$> addrs
-    opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
-    parseAddrTx v = do
-        tid <- hexToTxHash =<< v ^? key "txid" . _String
-        addrB58 <- v ^? key "address" . _String
-        addr <- stringToAddr net addrB58
-        return (addr, tid)
-
-httpTxs :: Network -> [TxHash] -> IO [Json.Value]
-httpTxs net = (mconcat <$>) . mapM (httpTxs_ net) . chunksOf 50
-
-httpTxs_ :: Network -> [TxHash] -> IO [Json.Value]
-httpTxs_ _ [] = return []
-httpTxs_ net tids = do
-    v <- httpJsonGet opts url
-    return $ v ^.. values
-  where
-    url = baseUrl net <> "/transactions"
-    opts = HTTP.defaults & HTTP.param "txids" .~ [tList]
-    tList = Text.intercalate "," $ txHashToHex <$> tids
-
-httpRawTxs :: Network -> [TxHash] -> IO [Tx]
-httpRawTxs net = (mconcat <$>) . mapM (httpRawTxs_ net) . chunksOf 100
-
-httpRawTxs_ :: Network -> [TxHash] -> IO [Tx]
-httpRawTxs_ _ [] = return []
-httpRawTxs_ net tids = do
-    v <- httpJsonGet opts url
-    let xs = mapM parseTx $ v ^.. values
-    maybe (exitError "Could not decode the transaction") return xs
-  where
-    url = baseUrl net <> "/transactions/hex"
-    opts = HTTP.defaults & HTTP.param "txids" .~ [tList]
-    tList = Text.intercalate "," $ txHashToHex <$> tids
-    parseTx = (eitherToMaybe . S.decode =<<) . decodeHex . (^. _String)
-
-httpBalance :: Network -> [Address] -> IO Natural
-httpBalance net = (sum <$>) . mapM (httpBalance_ net) . chunksOf 50
-
-httpBalance_ :: Network -> [Address] -> IO Natural
-httpBalance_ net addrs = do
-    v <- httpJsonGet opts url
-    return $ fromIntegral $ sum $ v ^.. values . key "confirmed" . _Integer
-  where
-    url = baseUrl net <> "/address/balances"
-    opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
-    aList = Text.intercalate "," $ addrStr net <$> addrs
-
-httpUnspent :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Natural)]
-httpUnspent net = (mconcat <$>) . mapM (httpUnspent_ net) . chunksOf 50
-
-httpUnspent_ :: Network -> [Address] -> IO [(OutPoint, ScriptOutput, Natural)]
-httpUnspent_ net addrs = do
-    v <- httpJsonGet opts url
-    let resM = mapM parseCoin $ v ^.. values
-    maybe (exitError "Could not parse coin") return resM
-  where
-    url = baseUrl net <> "/address/unspent"
-    opts = HTTP.defaults & HTTP.param "addresses" .~ [aList]
-    aList = Text.intercalate "," $ addrStr net <$> addrs
-    parseCoin v = do
-        tid <- hexToTxHash =<< v ^? key "txid" . _String
-        pos <- v ^? key "index" . _Integral
-        val <- v ^? key "output" . key "value" . _Integral
-        scpHex <- v ^? key "output" . key "pkscript" . _String
-        scp <- eitherToMaybe . decodeOutputBS =<< decodeHex scpHex
-        return (OutPoint tid pos, scp, val)
-
-httpDetailedTx :: Network -> [Address] -> IO [DetailedTx]
-httpDetailedTx net addrs = do
-    aTxs <- httpAddressTxs net addrs
-    txVals <- httpTxs net $ nub $ snd <$> aTxs
-    return $ toDetailedTx net (fst <$> aTxs) <$> txVals
-
-toDetailedTx :: Network -> [Address] -> Json.Value -> DetailedTx
-toDetailedTx net addrs v =
-    DetailedTx
-    { detailedTxHash = hexToTxHash =<< v ^? key "txid" . _String
-    , detailedTxSize = v ^? key "size" . _Integral
-    , detailedTxOutbound = othOs
-    , detailedTxNonStdOutputs = os Map.! Nothing
-    , detailedTxInbound = Map.map (,Nothing) myOs
-    , detailedTxMyInputs = Map.map (,Nothing) myIs
-    , detailedTxOtherInputs = othIs
-    , detailedTxNonStdInputs = is Map.! Nothing
-    , detailedTxFee = v ^? key "fee" . _Integral
-    , detailedTxHeight = v ^? key "block" . key "height" . _Integral
-    , detailedTxBlockHash =
-          hexToBlockHash =<< v ^? key "block" . key "hash" . _String
-    }
-  where
-    is, os :: Map (Maybe Address) Natural
-    is = Map.fromListWith (+) $ mapMaybe f $ v ^.. key "inputs" . values
-    os = Map.fromListWith (+) $ mapMaybe f $ v ^.. key "outputs" . values
-    f x =
-        (stringToAddr net =<< x ^? key "address" . _String, ) <$>
-        (fromIntegral <$> x ^? key "value" . _Integer)
-    (myIs, othIs) = Map.partitionWithKey isMine $ g is
-    (myOs, othOs) = Map.partitionWithKey isMine $ g os
-    g = Map.fromList . catMaybes . (h <$>) . Map.toList
-    h (Nothing,_) = Nothing
-    h (Just a,b)  = Just (a,b)
-    isMine k _ = k `elem` addrs
-
-httpBestHeight :: Network -> IO Natural
-httpBestHeight net = do
-    v <- httpJsonGet HTTP.defaults url
-    let resM = fromIntegral <$> v ^? key "height" . _Integer
-    maybe err return resM
-  where
-    url = baseUrl net <> "/block/best"
-    err = exitError "Could not get the best block height"
-
-httpBroadcastTx :: Network -> Tx -> IO ()
-httpBroadcastTx net tx = do
-    _ <- HTTP.postWith (addStatusCheck HTTP.defaults) url val
-    return ()
-  where
-    url = baseUrl net <> "/transaction"
-    val =
-        J.object ["transaction" J..= J.String (encodeHex $ S.encode tx)]
-
-httpJsonGet :: HTTP.Options -> String -> IO Json.Value
-httpJsonGet = httpJsonGen id
-
-httpJsonGen ::
-       (HTTP.Response BL.ByteString -> HTTP.Response BL.ByteString)
-    -> HTTP.Options
-    -> String
-    -> IO Json.Value
-httpJsonGen f opts url = do
-    r <- HTTP.asValue . f =<< HTTP.getWith (addStatusCheck opts) url
-    return $ r ^. HTTP.responseBody
-
-checkStatus :: ResponseChecker
-checkStatus _ r
-    | statusIsSuccessful status = return ()
-    | otherwise =
-        exitCustomError $
-        vcat
-            [ errorDoc "Received an HTTP error response:"
-            , nest 4 $
-              vcat
-                  [ keyDoc 10 "Status:" <> errorDoc (text $ show code)
-                  , keyDoc 10 "Message:" <>
-                    text (cs message)
-                  ]
-            ]
-  where
-    code = r ^. HTTP.responseStatus . HTTP.statusCode
-    message = r ^. HTTP.responseStatus . HTTP.statusMessage
-    status = mkStatus code message
-
-addStatusCheck :: HTTP.Options -> HTTP.Options
-addStatusCheck opts = opts & (HTTP.checkResponse ?~ checkStatus)
-
-chunksOf :: Int -> [a] -> [[a]]
-chunksOf _ [] = []
-chunksOf i xs = take i xs : chunksOf i (drop i xs)
-
--}

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: caad11ca25cd44e81922a06cc266abe145dd6f55e6d85c64ff08c52667347046
+-- hash: ebd9f64709a9ba6a9a2aaf0ab5cb75ce01d08f23ce9d33094279ff00b5b52dcd
 
 name:           haskoin-wallet
 version:        0.6.0.0
@@ -44,6 +44,7 @@ library
     , bytestring
     , cereal
     , containers
+    , data-default
     , directory
     , entropy
     , haskeline

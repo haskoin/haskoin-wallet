@@ -450,7 +450,7 @@ balance accM =
         let net = accountStoreNetwork store
         withNetwork net $ do
             let allAddrs = extAddresses store <> intAddresses store
-            bals <- httpAddrBalances $ fst <$> allAddrs
+            bals <- apiCall (AddressBalances (fst <$> allAddrs)) noOpts
             return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
@@ -476,9 +476,12 @@ transactions accM page =
         withNetwork net $ do
             let allAddrs = extAddresses store <> intAddresses store
                 addrMap = Map.fromList allAddrs
-            best <- httpBestBlock
-            txs <- httpAddrTxs (fst <$> allAddrs) page
-            let walletTxs = toWalletTx addrMap best <$> txs
+            best <- Store.blockDataHeight <$> apiCall BlockBest noOpts
+            -- TODO: This only works for small wallets.
+            txRefs <- apiBatch 20 (AddressTxs $ fst <$> allAddrs) (optLimit 100)
+            let sortedRefs = Store.txRefHash <$> sortDesc txRefs
+            txs <- apiBatch 20 (TxsDetails $ toPage page sortedRefs) noOpts
+            let walletTxs = toWalletTx addrMap (fromIntegral best) <$> txs
             return $ ResponseTransactions storeName store walletTxs
 
 prepareTx ::
@@ -553,7 +556,7 @@ cmdSendTx fp =
             let pub = accountStoreXPubKey store
             uTx <- liftEither $ parseTxSignData net pub tsd
             let wTx = unsignedToWalletTx signedTx uTx
-            netTxId <- httpBroadcastTx signedTx
+            Store.TxId netTxId <- apiCall (PostTx signedTx) noOpts
             return $ ResponseSendTx storeName store wTx netTxId
 
 {- Haskeline Helpers -}

@@ -50,11 +50,11 @@ buildTxSignData store rcpts feeByte dust
     | otherwise = do
         net <- network
         acc <- liftEither $ accountStoreAccount store
-        allCoins <- httpAddrUnspent $ Map.keys walletAddrMap
+        allCoins <- apiBatch 20 (AddressUnspent $ Map.keys walletAddrMap) noOpts
         (tx, depTxHash, inDeriv, outDeriv) <-
             liftEither $
             buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
-        depTxs <- httpRawTxs depTxHash
+        depTxs <- apiBatch 20 (TxsRaw depTxHash) noOpts
         return
             ( TxSignData tx depTxs inDeriv outDeriv acc False net
             , if null outDeriv

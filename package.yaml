@@ -47,6 +47,7 @@ library:
   - bytestring
   - cereal
   - containers
+  - data-default
   - directory
   - Decimal
   - entropy
