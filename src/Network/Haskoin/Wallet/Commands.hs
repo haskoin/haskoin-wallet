@@ -13,6 +13,7 @@ import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
 import qualified Data.Aeson.Types                    as Json
 import qualified Data.ByteString.Char8               as C8
+import           Data.Default                        (def)
 import           Data.Either                         (fromRight)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
@@ -26,6 +27,7 @@ import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Keys
 import qualified Haskoin.Store.Data                  as Store
+import           Haskoin.Store.WebClient
 import           Haskoin.Transaction
 import           Haskoin.Util                        (dropFieldLabel,
                                                       dropSumLabels,
@@ -34,7 +36,6 @@ import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.FileIO
-import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Parser
 import           Network.Haskoin.Wallet.Signing
 import           Network.Haskoin.Wallet.Util
@@ -46,74 +47,75 @@ import qualified System.Console.Haskeline            as Haskeline
 import qualified System.Directory                    as D
 import           System.IO                           (IOMode (..), withFile)
 
-data Response = ResponseError
-    { responseError :: Text
-    }
+data Response
+    = ResponseError
+          { responseError :: Text
+          }
     | ResponseMnemonic
-    { responseEntropySource :: Text
-    , responseMnemonic      :: [Text]
-    }
+          { responseEntropySource :: Text
+          , responseMnemonic      :: [Text]
+          }
     | ResponseCreateAcc
-    { responsePubKey     :: XPubKey
-    , responseDerivation :: HardPath
-    , responsePubKeyFile :: Text
-    , responseNetwork    :: Network
-    }
+          { responsePubKey     :: XPubKey
+          , responseDerivation :: HardPath
+          , responsePubKeyFile :: Text
+          , responseNetwork    :: Network
+          }
     | ResponseImportAcc
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          }
     | ResponseRenameAcc
-    { responseOldName :: Text
-    , responseNewName :: Text
-    , responseAccount :: AccountStore
-    }
+          { responseOldName :: Text
+          , responseNewName :: Text
+          , responseAccount :: AccountStore
+          }
     | ResponseAccounts
-    { responseAccounts :: AccountMap
-    }
+          { responseAccounts :: AccountMap
+          }
     | ResponseBalance
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    , responseBalance     :: AccountBalance
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          , responseBalance     :: AccountBalance
+          }
     | ResponseAddresses
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    , responseAddresses   :: [(Address, SoftPath)]
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          , responseAddresses   :: [(Address, SoftPath)]
+          }
     | ResponseReceive
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    , responseAddress     :: (Address, SoftPath)
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          , responseAddress     :: (Address, SoftPath)
+          }
     | ResponseTransactions
-    { responseAccountName  :: Text
-    , responseAccount      :: AccountStore
-    , responseTransactions :: [WalletTx]
-    }
+          { responseAccountName  :: Text
+          , responseAccount      :: AccountStore
+          , responseTransactions :: [WalletTx]
+          }
     | ResponsePrepareTx
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    , responseTxFile      :: Text
-    , responseUnsignedTx  :: WalletUnsignedTx
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          , responseTxFile      :: Text
+          , responseUnsignedTx  :: WalletUnsignedTx
+          }
     | ResponseReview
-    { responseAccountName  :: Text
-    , responseAccount      :: AccountStore
-    , responseTransactionM :: Maybe WalletTx
-    , responseUnsignedTxM  :: Maybe WalletUnsignedTx
-    }
+          { responseAccountName  :: Text
+          , responseAccount      :: AccountStore
+          , responseTransactionM :: Maybe WalletTx
+          , responseUnsignedTxM  :: Maybe WalletUnsignedTx
+          }
     | ResponseSignTx
-    { responseTxFile      :: Text
-    , responseTransaction :: WalletTx
-    , responseNetwork     :: Network
-    }
+          { responseTxFile      :: Text
+          , responseTransaction :: WalletTx
+          , responseNetwork     :: Network
+          }
     | ResponseSendTx
-    { responseAccountName :: Text
-    , responseAccount     :: AccountStore
-    , responseTransaction :: WalletTx
-    , responseNetworkTxId :: TxHash
-    }
+          { responseAccountName :: Text
+          , responseAccount     :: AccountStore
+          , responseTransaction :: WalletTx
+          , responseNetworkTxId :: TxHash
+          }
     deriving (Eq, Show)
 
 jsonError :: String -> Json.Value
@@ -323,39 +325,42 @@ instance Json.FromJSON Response where
                     return $ ResponseSendTx n a t h
                 _ -> fail "Invalid JSON response type"
 
-data AccountBalance = AccountBalance
-    { balanceAmount        :: !Natural
-    -- ^ confirmed balance
-    , balanceZero          :: !Natural
-    -- ^ unconfirmed balance
-    , balanceUnspentCount  :: !Natural
-    -- ^ number of unspent outputs
-    , balanceTxCount       :: !Natural
-    -- ^ number of transactions
-    , balanceTotalReceived :: !Natural
-    -- ^ total amount from all outputs in this address
-    }
+data AccountBalance =
+    AccountBalance
+        { balanceAmount        :: !Natural
+        -- ^ confirmed balance
+        , balanceZero          :: !Natural
+        -- ^ unconfirmed balance
+        , balanceUnspentCount  :: !Natural
+        -- ^ number of unspent outputs
+        , balanceTxCount       :: !Natural
+        -- ^ number of transactions
+        , balanceTotalReceived :: !Natural
+        -- ^ total amount from all outputs in this address
+        }
     deriving (Show, Read, Eq, Ord)
 
 instance Json.ToJSON AccountBalance where
     toJSON b =
         object
-        [ "confirmed" .= balanceAmount b
-        , "unconfirmed" .= balanceZero b
-        , "utxo" .= balanceUnspentCount b
-        , "txs" .= balanceTxCount b
-        , "received" .= balanceTotalReceived b
-        ]
+            [ "confirmed" .= balanceAmount b
+            , "unconfirmed" .= balanceZero b
+            , "utxo" .= balanceUnspentCount b
+            , "txs" .= balanceTxCount b
+            , "received" .= balanceTotalReceived b
+            ]
 
 instance Json.FromJSON AccountBalance where
     parseJSON =
         Json.withObject "accountbalance" $ \o ->
-            AccountBalance <$> o .: "confirmed"
-                           <*> o .: "unconfirmed"
-                           <*> o .: "utxo"
-                           <*> o .: "txs"
-                           <*> o .: "received"
+            AccountBalance
+                <$> o .: "confirmed"
+                <*> o .: "unconfirmed"
+                <*> o .: "utxo"
+                <*> o .: "txs"
+                <*> o .: "received"
 
+--TODO: This is wrong. Fix it!
 addrsToAccBalance :: [Store.Balance] -> AccountBalance
 addrsToAccBalance xs =
     AccountBalance
@@ -448,10 +453,12 @@ balance accM =
     catchResponseError $ do
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
-        withNetwork net $ do
-            let allAddrs = extAddresses store <> intAddresses store
-            bals <- apiCall (AddressBalances (fst <$> allAddrs)) noOpts
-            return $ ResponseBalance storeName store $ addrsToAccBalance bals
+            allAddrs = extAddresses store <> intAddresses store
+        bals <-
+            apiCall
+                def {configNetwork = net}
+                (GetAddrsBalance (fst <$> allAddrs))
+        return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
 addresses accM page =
@@ -473,16 +480,25 @@ transactions accM page =
     catchResponseError $ do
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
-        withNetwork net $ do
-            let allAddrs = extAddresses store <> intAddresses store
-                addrMap = Map.fromList allAddrs
-            best <- Store.blockDataHeight <$> apiCall BlockBest noOpts
-            -- TODO: This only works for small wallets.
-            txRefs <- apiBatch 20 (AddressTxs $ fst <$> allAddrs) (optLimit 100)
-            let sortedRefs = Store.txRefHash <$> sortDesc txRefs
-            txs <- apiBatch 20 (TxsDetails $ toPage page sortedRefs) noOpts
-            let walletTxs = toWalletTx addrMap (fromIntegral best) <$> txs
-            return $ ResponseTransactions storeName store walletTxs
+            allAddrs = extAddresses store <> intAddresses store
+            addrMap = Map.fromList allAddrs
+        best <-
+            Store.blockDataHeight <$>
+            apiCall def {configNetwork = net} (GetBlockBest def)
+        -- TODO: This only works for small wallets.
+        txRefs <-
+            apiBatch
+                20
+                def {configNetwork = net}
+                (GetAddrsTxs (fst <$> allAddrs) def {paramLimit = Just 100})
+        let sortedRefs = Store.txRefHash <$> sortDesc txRefs
+        txs <-
+            apiBatch
+                20
+                def {configNetwork = net}
+                (GetTxs (toPage page sortedRefs))
+        let walletTxs = toWalletTx addrMap (fromIntegral best) <$> txs
+        return $ ResponseTransactions storeName store walletTxs
 
 prepareTx ::
        [(Text, Text)]
@@ -549,14 +565,14 @@ cmdSendTx :: FilePath -> IO Response
 cmdSendTx fp =
     catchResponseError $ do
         tsd@(TxSignData signedTx _ _ _ acc signed net) <- readJsonFile fp
-        unless signed $
-            throwError "The transaction is not signed"
+        unless signed $ throwError "The transaction is not signed"
         withNetwork net $ do
             (storeName, store) <- getAccountStoreByDeriv acc
             let pub = accountStoreXPubKey store
             uTx <- liftEither $ parseTxSignData net pub tsd
             let wTx = unsignedToWalletTx signedTx uTx
-            Store.TxId netTxId <- apiCall (PostTx signedTx) noOpts
+            Store.TxId netTxId <-
+                apiCall def {configNetwork = net} (PostTx signedTx)
             return $ ResponseSendTx storeName store wTx netTxId
 
 {- Haskeline Helpers -}

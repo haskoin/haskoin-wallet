@@ -11,6 +11,7 @@ import           Control.Monad.Except
 import           Control.Monad.Reader
 import           Data.Aeson.TH                       (deriveJSON)
 import qualified Data.ByteString                     as BS
+import           Data.Default                        (def)
 import           Data.Either                         (rights)
 import           Data.List                           (find, nub, partition,
                                                       sortOn, sum)
@@ -27,13 +28,13 @@ import           Haskoin.Crypto
 import           Haskoin.Keys
 import           Haskoin.Script
 import qualified Haskoin.Store.Data                  as Store
+import           Haskoin.Store.WebClient
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
-import           Network.Haskoin.Wallet.WalletTx
 import           Network.Haskoin.Wallet.FileIO
-import           Network.Haskoin.Wallet.HTTP
 import           Network.Haskoin.Wallet.Util
+import           Network.Haskoin.Wallet.WalletTx
 import           Numeric.Natural
 
 {- Building Transactions -}
@@ -50,11 +51,16 @@ buildTxSignData store rcpts feeByte dust
     | otherwise = do
         net <- network
         acc <- liftEither $ accountStoreAccount store
-        allCoins <- apiBatch 20 (AddressUnspent $ Map.keys walletAddrMap) noOpts
+        allCoins <-
+            apiBatch
+                20
+                def {configNetwork = net}
+                (GetAddrsUnspent (Map.keys walletAddrMap) def)
         (tx, depTxHash, inDeriv, outDeriv) <-
             liftEither $
             buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
-        depTxs <- apiBatch 20 (TxsRaw depTxHash) noOpts
+        depTxsRaw <- apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
+        let depTxs = Store.getRawResultList depTxsRaw
         return
             ( TxSignData tx depTxs inDeriv outDeriv acc False net
             , if null outDeriv

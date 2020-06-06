@@ -4,30 +4,29 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: ebd9f64709a9ba6a9a2aaf0ab5cb75ce01d08f23ce9d33094279ff00b5b52dcd
+-- hash: c112e495777024aaefab5ef74f5bc2c80fe64cc406237fec4c1bd5d6256c3b18
 
 name:           haskoin-wallet
-version:        0.6.0.0
-synopsis:       Lightweight command-line Bitcoin wallet
-description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics
-                and BIP32 key derivations. It requires a full blockchain index such as
-                haskoin-store to query balances and unspent outputs. The wallet can both
-                build transactions in read-only (xpub-only) mode and sign them in an
-                offline environment.
+version:        0.6.0
+synopsis:       Lightweight command-line wallet for Bitcoin and Bitcoin Cash
+description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
+                BIP44 account structure. It requires a full blockchain index such as
+                haskoin-store to query balances and unspent outputs. The wallet can both build
+                transactions in read-only (xpub-only) mode and sign them in an offline
+                environment.
 category:       Bitcoin, Finance, Network
-homepage:       http://github.com/haskoin/haskoin
-bug-reports:    http://github.com/haskoin/haskoin/issues
+homepage:       http://github.com/haskoin/haskoin-wallet
+bug-reports:    http://github.com/haskoin/haskoin-wallet/issues
 author:         Philippe Laprade,
                 Jean-Pierre Rupp
-maintainer:     xenog@protonmail.com
+maintainer:     jprupp@protonmail.ch
 license:        PublicDomain
 license-file:   UNLICENSE
-tested-with:    GHC==8.0.2
 build-type:     Simple
 
 source-repository head
   type: git
-  location: git://github.com/haskoin/haskoin.git
+  location: https://github.com/haskoin/haskoin-wallet.git
 
 library
   hs-source-dirs:
@@ -70,7 +69,6 @@ library
       Network.Haskoin.Wallet.AccountStore
       Network.Haskoin.Wallet.FileIO
       Network.Haskoin.Wallet.Signing
-      Network.Haskoin.Wallet.HTTP
       Network.Haskoin.Wallet.Amounts
       Network.Haskoin.Wallet.WalletTx
       Network.Haskoin.Wallet.Util
@@ -82,7 +80,7 @@ executable hw
   main-is: Main.hs
   hs-source-dirs:
       app
-  ghc-options: -Wall -O3 -threaded -eventlog -rtsopts -with-rtsopts=-N4
+  ghc-options: -Wall -rtsopts -threaded
   build-depends:
       base >=4.7 && <5
     , haskoin-wallet
@@ -92,26 +90,19 @@ executable hw
 
 test-suite test-haskoin-wallet
   type: exitcode-stdio-1.0
-  main-is: Main.hs
+  main-is: Spec.hs
   hs-source-dirs:
       test
   ghc-options: -Wall
   build-depends:
-      HUnit
-    , QuickCheck
-    , aeson
+      HUnit >=1.6.0.0
+    , QuickCheck >=2.13.2
     , base >=4.7 && <5
-    , bytestring
-    , cereal
-    , containers
-    , haskoin-core
-    , haskoin-wallet
-    , hspec
-    , lens
-    , string-conversions
-    , text
+    , haskoin-wallet ==0.6.0
+    , hspec >=2.7.1
   other-modules:
       Network.Haskoin.Wallet.Arbitrary
       Network.Haskoin.Wallet.Spec
       Paths_haskoin_wallet
   default-language: Haskell2010
+  build-tool-depends: hspec-discover:hspec-discover

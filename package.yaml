@@ -1,99 +1,91 @@
 name: haskoin-wallet
-version: '0.6.0.0'
-synopsis: Lightweight command-line Bitcoin wallet
-description: ! 'haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics
+version: &version 0.6.0
+synopsis: Lightweight command-line wallet for Bitcoin and Bitcoin Cash
+description: !
+  haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
 
-  and BIP32 key derivations. It requires a full blockchain index such as
+  BIP44 account structure. It requires a full blockchain index such as
 
-  haskoin-store to query balances and unspent outputs. The wallet can both
+  haskoin-store to query balances and unspent outputs. The wallet can both build
 
-  build transactions in read-only (xpub-only) mode and sign them in an
+  transactions in read-only (xpub-only) mode and sign them in an offline
 
-  offline environment.'
+  environment.
 category: Bitcoin, Finance, Network
 author:
-- Philippe Laprade
-- Jean-Pierre Rupp
-maintainer: xenog@protonmail.com
+  - Philippe Laprade
+  - Jean-Pierre Rupp
+maintainer: jprupp@protonmail.ch
 license: PublicDomain
 license-file: UNLICENSE
-homepage: http://github.com/haskoin/haskoin
-git: git://github.com/haskoin/haskoin.git
-bug-reports: http://github.com/haskoin/haskoin/issues
-tested-with: GHC==8.0.2
+github: haskoin/haskoin-wallet.git
+homepage: http://github.com/haskoin/haskoin-wallet
+bug-reports: http://github.com/haskoin/haskoin-wallet/issues
 dependencies:
   - base >=4.7 && <5
 library:
   source-dirs: src
   ghc-options: -Wall
   exposed-modules:
-  - Network.Haskoin.Wallet
-  - Network.Haskoin.Wallet.Commands
-  - Network.Haskoin.Wallet.Parser
-  - Network.Haskoin.Wallet.Entropy
-  - Network.Haskoin.Wallet.AccountStore
-  - Network.Haskoin.Wallet.FileIO
-  - Network.Haskoin.Wallet.Signing
-  - Network.Haskoin.Wallet.HTTP
-  - Network.Haskoin.Wallet.Amounts
-  - Network.Haskoin.Wallet.WalletTx
-  - Network.Haskoin.Wallet.Util
-  dependencies:
-  - aeson
-  - ansi-terminal
-  - aeson-pretty
-  - base16-bytestring
-  - base64-bytestring
-  - bytestring
-  - cereal
-  - containers
-  - data-default
-  - directory
-  - Decimal
-  - entropy
-  - haskeline
-  - haskoin-core
-  - haskoin-store-data
-  - http-types
-  - lens
-  - lens-aeson
-  - mtl
-  - optparse-applicative
-  - pretty
-  - string-conversions
-  - text
-  - tostring
-  - transformers
-  - unordered-containers
-  - wreq
+    - Network.Haskoin.Wallet
+    - Network.Haskoin.Wallet.Commands
+    - Network.Haskoin.Wallet.Parser
+    - Network.Haskoin.Wallet.Entropy
+    - Network.Haskoin.Wallet.AccountStore
+    - Network.Haskoin.Wallet.FileIO
+    - Network.Haskoin.Wallet.Signing
+    - Network.Haskoin.Wallet.Amounts
+    - Network.Haskoin.Wallet.WalletTx
+    - Network.Haskoin.Wallet.Util
+  dependencies: &lib-deps
+    - aeson
+    - ansi-terminal
+    - aeson-pretty
+    - base16-bytestring
+    - base64-bytestring
+    - bytestring
+    - cereal
+    - containers
+    - data-default
+    - directory
+    - Decimal
+    - entropy
+    - haskeline
+    - haskoin-core
+    - haskoin-store-data
+    - http-types
+    - lens
+    - lens-aeson
+    - mtl
+    - optparse-applicative
+    - pretty
+    - string-conversions
+    - text
+    - tostring
+    - transformers
+    - unordered-containers
+    - wreq
 executables:
   hw:
     main: Main.hs
     source-dirs: app
     ghc-options:
-    - -Wall
-    - -O3
-    - -threaded
-    - -eventlog
-    - -rtsopts
-    - -with-rtsopts=-N4
+      - -Wall
+      - -rtsopts
+      - -threaded
     dependencies:
-    - haskoin-wallet
+      - haskoin-wallet
 tests:
   test-haskoin-wallet:
-    main: Main.hs
+    main: Spec.hs
     source-dirs: test
+    verbatim:
+      build-tool-depends:
+        hspec-discover:hspec-discover
     ghc-options: -Wall
     dependencies:
-    - aeson
-    - bytestring
-    - cereal
-    - containers
-    - haskoin-core
-    - haskoin-wallet
-    - hspec
-    - lens
-    - string-conversions
-    - text
-    - HUnit
-    - QuickCheck
+      <<: *lib-deps
+      haskoin-wallet: *version
+      hspec: ">= 2.7.1"
+      QuickCheck: ">= 2.13.2"
+      HUnit: ">= 1.6.0.0"

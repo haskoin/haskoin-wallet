@@ -5,8 +5,8 @@ nix:
     - pkg-config
 resolver: lts-15.11
 extra-deps:
-- haskoin-core-0.13.5
-- haskoin-store-data-0.29.0
+- haskoin-core-0.13.6
+- ../haskoin-store/data
 - murmur3-1.0.3
 - ansi-terminal-0.10.3
 - parsec-extra-0.2.0.0
