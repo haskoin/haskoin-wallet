@@ -22,6 +22,7 @@ import qualified Data.Text                as Text
 import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Keys
+import qualified Haskoin.Store.Data       as Store
 import           Haskoin.Util
 import           Numeric.Natural
 
@@ -52,14 +53,21 @@ encodeJsonPrettyLn =
 {- Haskoin helper functions -}
 
 data Page = Page
-    { pageOffset :: Natural
-    , pageLimit  :: Natural
+    { pageOffset :: !Natural
+    , pageLimit  :: !Natural
     }
     deriving (Eq, Show)
 
 toPage :: Page -> [a] -> [a]
 toPage (Page offset limit) xs =
     take (fromIntegral limit) $ drop (fromIntegral offset) xs
+
+liftExcept :: MonadError String m => ExceptT Store.Except m a -> m a
+liftExcept action = do
+    e <- runExceptT action
+    case e of
+        Right a -> return a
+        Left err -> throwError $ show (err :: Store.Except)
 
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =

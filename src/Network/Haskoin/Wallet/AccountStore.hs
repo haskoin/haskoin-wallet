@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Strict            #-}
 module Network.Haskoin.Wallet.AccountStore where
 
 import           Control.Arrow                   (first)
@@ -36,11 +35,11 @@ import qualified System.Directory                as D
 type AccountMap = Map Text AccountStore
 
 data AccountStore = AccountStore
-    { accountStoreXPubKey  :: XPubKey
-    , accountStoreExternal :: Natural
-    , accountStoreInternal :: Natural
-    , accountStoreDeriv    :: HardPath
-    , accountStoreNetwork  :: Network
+    { accountStoreXPubKey  :: !XPubKey
+    , accountStoreExternal :: !Natural
+    , accountStoreInternal :: !Natural
+    , accountStoreDeriv    :: !HardPath
+    , accountStoreNetwork  :: !Network
     }
     deriving (Eq, Show)
 
@@ -192,12 +191,13 @@ renameAccountStore oldName newName
                 return store
             _ -> throwError "Account does not exist"
 
-data Commit a = NoCommit
-    { commitValue :: a
-    }
+data Commit a
+    = NoCommit
+          { commitValue :: !a
+          }
     | Commit
-    { commitValue :: a
-    }
+          { commitValue :: !a
+          }
 
 commit ::
        (MonadIO m, MonadError String m)

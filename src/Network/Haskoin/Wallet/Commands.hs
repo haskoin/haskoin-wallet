@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Strict            #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Commands where
@@ -49,72 +48,72 @@ import           System.IO                           (IOMode (..), withFile)
 
 data Response
     = ResponseError
-          { responseError :: Text
+          { responseError :: !Text
           }
     | ResponseMnemonic
-          { responseEntropySource :: Text
-          , responseMnemonic      :: [Text]
+          { responseEntropySource :: !Text
+          , responseMnemonic      :: ![Text]
           }
     | ResponseCreateAcc
-          { responsePubKey     :: XPubKey
-          , responseDerivation :: HardPath
-          , responsePubKeyFile :: Text
-          , responseNetwork    :: Network
+          { responsePubKey     :: !XPubKey
+          , responseDerivation :: !HardPath
+          , responsePubKeyFile :: !Text
+          , responseNetwork    :: !Network
           }
     | ResponseImportAcc
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
           }
     | ResponseRenameAcc
-          { responseOldName :: Text
-          , responseNewName :: Text
-          , responseAccount :: AccountStore
+          { responseOldName :: !Text
+          , responseNewName :: !Text
+          , responseAccount :: !AccountStore
           }
     | ResponseAccounts
-          { responseAccounts :: AccountMap
+          { responseAccounts :: !AccountMap
           }
     | ResponseBalance
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
-          , responseBalance     :: AccountBalance
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
+          , responseBalance     :: !AccountBalance
           }
     | ResponseAddresses
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
-          , responseAddresses   :: [(Address, SoftPath)]
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
+          , responseAddresses   :: ![(Address, SoftPath)]
           }
     | ResponseReceive
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
-          , responseAddress     :: (Address, SoftPath)
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
+          , responseAddress     :: !(Address, SoftPath)
           }
     | ResponseTransactions
-          { responseAccountName  :: Text
-          , responseAccount      :: AccountStore
-          , responseTransactions :: [WalletTx]
+          { responseAccountName  :: !Text
+          , responseAccount      :: !AccountStore
+          , responseTransactions :: ![WalletTx]
           }
     | ResponsePrepareTx
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
-          , responseTxFile      :: Text
-          , responseUnsignedTx  :: WalletUnsignedTx
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
+          , responseTxFile      :: !Text
+          , responseUnsignedTx  :: !WalletUnsignedTx
           }
     | ResponseReview
-          { responseAccountName  :: Text
-          , responseAccount      :: AccountStore
-          , responseTransactionM :: Maybe WalletTx
-          , responseUnsignedTxM  :: Maybe WalletUnsignedTx
+          { responseAccountName  :: !Text
+          , responseAccount      :: !AccountStore
+          , responseTransactionM :: !(Maybe WalletTx)
+          , responseUnsignedTxM  :: !(Maybe WalletUnsignedTx)
           }
     | ResponseSignTx
-          { responseTxFile      :: Text
-          , responseTransaction :: WalletTx
-          , responseNetwork     :: Network
+          { responseTxFile      :: !Text
+          , responseTransaction :: !WalletTx
+          , responseNetwork     :: !Network
           }
     | ResponseSendTx
-          { responseAccountName :: Text
-          , responseAccount     :: AccountStore
-          , responseTransaction :: WalletTx
-          , responseNetworkTxId :: TxHash
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
+          , responseTransaction :: !WalletTx
+          , responseNetworkTxId :: !TxHash
           }
     deriving (Eq, Show)
 
@@ -455,6 +454,7 @@ balance accM =
         let net = accountStoreNetwork store
             allAddrs = extAddresses store <> intAddresses store
         bals <-
+            liftExcept $
             apiCall
                 def {configNetwork = net}
                 (GetAddrsBalance (fst <$> allAddrs))
@@ -484,15 +484,17 @@ transactions accM page =
             addrMap = Map.fromList allAddrs
         best <-
             Store.blockDataHeight <$>
-            apiCall def {configNetwork = net} (GetBlockBest def)
+            liftExcept (apiCall def {configNetwork = net} (GetBlockBest def))
         -- TODO: This only works for small wallets.
         txRefs <-
+            liftExcept $
             apiBatch
                 20
                 def {configNetwork = net}
                 (GetAddrsTxs (fst <$> allAddrs) def {paramLimit = Just 100})
         let sortedRefs = Store.txRefHash <$> sortDesc txRefs
         txs <-
+            liftExcept $
             apiBatch
                 20
                 def {configNetwork = net}
@@ -572,7 +574,7 @@ cmdSendTx fp =
             uTx <- liftEither $ parseTxSignData net pub tsd
             let wTx = unsignedToWalletTx signedTx uTx
             Store.TxId netTxId <-
-                apiCall def {configNetwork = net} (PostTx signedTx)
+                liftExcept $ apiCall def {configNetwork = net} (PostTx signedTx)
             return $ ResponseSendTx storeName store wTx netTxId
 
 {- Haskeline Helpers -}

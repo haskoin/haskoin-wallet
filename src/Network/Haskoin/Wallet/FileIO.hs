@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Strict            #-}
 {-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet.FileIO where
 
@@ -41,8 +40,8 @@ class HasFilePath a where
     getFilePath :: a -> String
 
 data PubKeyDoc = PubKeyDoc
-    { documentPubKey  :: XPubKey
-    , documentNetwork :: Network
+    { documentPubKey  :: !XPubKey
+    , documentNetwork :: !Network
     }
     deriving (Eq, Show)
 
@@ -64,13 +63,13 @@ instance HasFilePath PubKeyDoc where
         getNetworkName net <> "-account-" <> cs (xPubChecksum xpub) <> ".json"
 
 data TxSignData = TxSignData
-    { txSignDataTx          :: Tx
-    , txSignDataInputs      :: [Tx]
-    , txSignDataInputPaths  :: [SoftPath]
-    , txSignDataOutputPaths :: [SoftPath]
-    , txSignDataAccount     :: Natural
-    , txSignDataSigned      :: Bool
-    , txSignDataNetwork     :: Network
+    { txSignDataTx          :: !Tx
+    , txSignDataInputs      :: ![Tx]
+    , txSignDataInputPaths  :: ![SoftPath]
+    , txSignDataOutputPaths :: ![SoftPath]
+    , txSignDataAccount     :: !Natural
+    , txSignDataSigned      :: !Bool
+    , txSignDataNetwork     :: !Network
     }
     deriving (Eq, Show)
 

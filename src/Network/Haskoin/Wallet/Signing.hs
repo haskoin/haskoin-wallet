@@ -1,7 +1,6 @@
 {-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards   #-}
-{-# LANGUAGE Strict            #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Signing where
@@ -52,6 +51,7 @@ buildTxSignData store rcpts feeByte dust
         net <- network
         acc <- liftEither $ accountStoreAccount store
         allCoins <-
+            liftExcept $
             apiBatch
                 20
                 def {configNetwork = net}
@@ -59,7 +59,9 @@ buildTxSignData store rcpts feeByte dust
         (tx, depTxHash, inDeriv, outDeriv) <-
             liftEither $
             buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
-        depTxsRaw <- apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
+        depTxsRaw <-
+            liftExcept $
+            apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
         let depTxs = Store.getRawResultList depTxsRaw
         return
             ( TxSignData tx depTxs inDeriv outDeriv acc False net

@@ -1,6 +1,5 @@
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Strict            #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.WalletTx where
 
@@ -52,20 +51,20 @@ instance Json.FromJSON TxType where
             _ -> fail "Invalid TxType"
 
 data WalletTx = WalletTx
-    { walletTxId            :: TxHash
-    , walletTxType          :: TxType
-    , walletTxAmount        :: Integer
-    , walletTxMyOutputs     :: Map Address (Natural, SoftPath)
-    , walletTxOtherOutputs  :: Map Address Natural
-    , walletTxNonStdOutputs :: [Store.StoreOutput]
-    , walletTxMyInputs      :: Map Address (Natural, SoftPath)
-    , walletTxOtherInputs   :: Map Address Natural
-    , walletTxNonStdInputs  :: [Store.StoreInput]
-    , walletTxSize          :: Natural
-    , walletTxFee           :: Natural
-    , walletTxFeeByte       :: Decimal
-    , walletTxBlockRef      :: Store.BlockRef
-    , walletTxConfirmations :: Natural
+    { walletTxId            :: !TxHash
+    , walletTxType          :: !TxType
+    , walletTxAmount        :: !Integer
+    , walletTxMyOutputs     :: !(Map Address (Natural, SoftPath))
+    , walletTxOtherOutputs  :: !(Map Address Natural)
+    , walletTxNonStdOutputs :: ![Store.StoreOutput]
+    , walletTxMyInputs      :: !(Map Address (Natural, SoftPath))
+    , walletTxOtherInputs   :: !(Map Address Natural)
+    , walletTxNonStdInputs  :: ![Store.StoreInput]
+    , walletTxSize          :: !Natural
+    , walletTxFee           :: !Natural
+    , walletTxFeeByte       :: !Decimal
+    , walletTxBlockRef      :: !Store.BlockRef
+    , walletTxConfirmations :: !Natural
     } deriving (Eq, Show)
 
 walletTxToJSON :: Network -> WalletTx -> Either String Json.Value
@@ -220,16 +219,14 @@ maybeSetForkId net
 {- Unsigned Transactions -}
 
 data WalletUnsignedTx = WalletUnsignedTx
-    { walletUnsignedTxType         :: TxType
-    , walletUnsignedTxAmount       :: Integer
-    , walletUnsignedTxMyOutputs    :: Map Address (Natural, SoftPath)
-    , walletUnsignedTxOtherOutputs :: Map Address Natural
-    , walletUnsignedTxMyInputs     :: Map Address ( Natural
-                                                  , SoftPath
-                                                  , [SigInput])
-    , walletUnsignedTxSize         :: Natural
-    , walletUnsignedTxFee          :: Natural
-    , walletUnsignedTxFeeByte      :: Decimal
+    { walletUnsignedTxType         :: !TxType
+    , walletUnsignedTxAmount       :: !Integer
+    , walletUnsignedTxMyOutputs    :: !(Map Address (Natural, SoftPath))
+    , walletUnsignedTxOtherOutputs :: !(Map Address Natural)
+    , walletUnsignedTxMyInputs     :: !(Map Address ( Natural , SoftPath , [SigInput]))
+    , walletUnsignedTxSize         :: !Natural
+    , walletUnsignedTxFee          :: !Natural
+    , walletUnsignedTxFeeByte      :: !Decimal
     } deriving (Eq, Show)
 
 unsignedToWalletTx :: Tx -> WalletUnsignedTx -> WalletTx

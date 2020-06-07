@@ -1,5 +1,4 @@
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE Strict            #-}
 module Network.Haskoin.Wallet.Parser where
 
 import           Control.Monad                       (forM, join, unless, when)
@@ -26,51 +25,51 @@ import           Options.Applicative.Help.Pretty     hiding ((</>))
 
 data Command
     = CommandMnemonic
-          { commandUseDice :: Bool
-          , commandEntropy :: Natural
+          { commandUseDice :: !Bool
+          , commandEntropy :: !Natural
           }
     | CommandCreateAcc
-          { commandNetwork    :: Network
-          , commandDerivation :: Natural
+          { commandNetwork    :: !Network
+          , commandDerivation :: !Natural
           }
     | CommandImportAcc
-          { commandFilePath :: FilePath
-          , commandAccount  :: Text
+          { commandFilePath :: !FilePath
+          , commandAccount  :: !Text
           }
     | CommandRenameAcc
-          { commandOldName :: Text
-          , commandNewName :: Text
+          { commandOldName :: !Text
+          , commandNewName :: !Text
           }
     | CommandAccounts
     | CommandBalance
-          { commandMaybeAcc :: Maybe Text
+          { commandMaybeAcc :: !(Maybe Text)
           }
     | CommandAddresses
-          { commandMaybeAcc :: Maybe Text
-          , commandPage     :: Page
+          { commandMaybeAcc :: !(Maybe Text)
+          , commandPage     :: !Page
           }
     | CommandReceive
-          { commandMaybeAcc :: Maybe Text
+          { commandMaybeAcc :: !(Maybe Text)
           }
     | CommandTransactions
-          { commandMaybeAcc :: Maybe Text
-          , commandPage     :: Page
+          { commandMaybeAcc :: !(Maybe Text)
+          , commandPage     :: !Page
           }
     | CommandPrepareTx
-          { commandRecipients :: [(Text, Text)]
-          , commandMaybeAcc   :: Maybe Text
-          , commandUnit       :: AmountUnit
-          , commandFeeByte    :: Natural
-          , commandDust       :: Natural
+          { commandRecipients :: ![(Text, Text)]
+          , commandMaybeAcc   :: !(Maybe Text)
+          , commandUnit       :: !AmountUnit
+          , commandFeeByte    :: !Natural
+          , commandDust       :: !Natural
           }
     | CommandReview
-          { commandFilePath :: FilePath
+          { commandFilePath :: !FilePath
           }
     | CommandSignTx
-          { commandFilePath :: FilePath
+          { commandFilePath :: !FilePath
           }
     | CommandSendTx
-          { commandFilePath :: FilePath
+          { commandFilePath :: !FilePath
           }
     deriving (Eq, Show)
 
