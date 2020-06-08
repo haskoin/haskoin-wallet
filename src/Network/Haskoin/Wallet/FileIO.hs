@@ -106,9 +106,16 @@ instance HasFilePath TxSignData where
       where
         heading = if s then "-signedtx-" else "-unsignedtx-"
 
+hwDataDirectory :: Maybe FilePath -> IO FilePath  
+hwDataDirectory subDirM = do
+    appDir <- D.getAppUserDataDirectory "hw"
+    let dir = maybe appDir (appDir </>) subDirM
+    D.createDirectoryIfMissing True dir
+    return dir
+
 writeDoc :: (Json.ToJSON a, HasFilePath a) => a -> IO FilePath
 writeDoc doc = do
-    dir <- D.getUserDocumentsDirectory
+    dir <- hwDataDirectory $ Just "transactions"
     let path = dir </> getFilePath doc
     writeJsonFile path doc
     return path

@@ -44,8 +44,9 @@ buildTxSignData ::
     -> [(Address, Natural)]
     -> Natural
     -> Natural
+    -> Bool
     -> m (TxSignData, Commit AccountStore)
-buildTxSignData store rcpts feeByte dust
+buildTxSignData store rcpts feeByte dust rcptPay
     | null rcpts = throwError "No recipients provided"
     | otherwise = do
         net <- network
@@ -56,53 +57,93 @@ buildTxSignData store rcpts feeByte dust
                 20
                 def {configNetwork = net}
                 (GetAddrsUnspent (Map.keys walletAddrMap) def)
-        (tx, depTxHash, inDeriv, outDeriv) <-
+        (tx, selCoins) <-
             liftEither $
-            buildWalletTx net rcpts change walletAddrMap allCoins feeByte dust
+            buildWalletTx net rcpts change allCoins feeByte dust rcptPay
+        (inDerivs, outDerivs) <-
+            liftEither $ getDerivs tx selCoins rcpts walletAddrMap changeDeriv
+        -- Get dependant transactions
+        let depTxHash = outPointHash . prevOutput <$> txIn tx
         depTxsRaw <-
             liftExcept $
             apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
         let depTxs = Store.getRawResultList depTxsRaw
         return
-            ( TxSignData tx depTxs inDeriv outDeriv acc False net
-            , if null outDeriv
-                  then NoCommit store
+            ( TxSignData tx depTxs inDerivs outDerivs acc False net
+            , if length (txOut tx) == length rcpts
+                  then NoCommit store -- No change address was used
                   else newStore)
   where
     walletAddrMap = storeAddressMap store
-    (change, newStore) = genIntAddress store
+    ((change, changeDeriv), newStore) = genIntAddress store
 
 buildWalletTx ::
        Network
     -> [(Address, Natural)] -- recipients
-    -> (Address, SoftPath) -- change
-    -> Map Address SoftPath -- All account addresses
+    -> Address -- change
     -> [Store.Unspent] -- Coins to choose from
     -> Natural -- Fee per byte
     -> Natural -- Dust
-    -> Either String (Tx, [TxHash], [SoftPath], [SoftPath])
-buildWalletTx net rcptsN (change, changeDeriv) walletAddrs coins feeByteN dustN = do
+    -> Bool -- Recipients Pay for Fee
+    -> Either String (Tx, [Store.Unspent])
+buildWalletTx net rcptsN change coins feeByteN dustN rcptPay = do
     (selCoins, changeAmnt) <-
-        chooseCoins tot feeByte (length rcpts + 1) True (sortDesc coins)
-    let (allRcpts, outDeriv)
-            | changeAmnt <= dust = (rcpts, [])
-            | otherwise = ((change, changeAmnt) : rcpts, [changeDeriv])
+        chooseCoins tot feeCoinSel (length rcptsN + 1) True (sortDesc coins)
+    let nOuts =
+            if changeAmnt <= dust
+                then length rcptsN
+                else length rcptsN + 1
+        totFee = guessTxFee (fromIntegral feeByteN) nOuts (length selCoins)
+    rcptsPayN <-
+        if rcptPay
+            then makeRcptsPay (fromIntegral totFee) rcptsN
+            else return rcptsN
+    let rcpts = second fromIntegral <$> rcptsPayN
+        allRcpts
+            | changeAmnt <= dust = rcpts
+            | otherwise = (change, changeAmnt) : rcpts -- TODO: Randomize this
         ops = Store.unspentPoint <$> selCoins
+    when (any ((<= dust) . snd) allRcpts) $
+        Left "Recipient output is smaller than the dust value"
     tx <- buildAddrTx net ops =<< mapM (addrToText2 net) allRcpts
-    inCoinAddrs <- maybeToEither err $ mapM Store.unspentAddress selCoins
-    let inDerivMap = Map.restrictKeys walletAddrs $ Set.fromList inCoinAddrs
-    return
-        ( tx
-        , nub $ fmap outPointHash ops
-        , nub $ Map.elems inDerivMap
-        , nub $ outDeriv <> myDerivs)
+    return (tx, selCoins)
   where
-    rcpts = second fromIntegral <$> rcptsN :: [(Address, Word64)]
-    rcpMap = Map.fromList rcpts
-    myDerivs = Map.elems $ Map.intersection walletAddrs rcpMap
-    feeByte = fromIntegral feeByteN :: Word64
+    feeCoinSel =
+        if rcptPay
+            then 0
+            else fromIntegral feeByteN :: Word64
     dust = fromIntegral dustN :: Word64
-    tot = fromIntegral $ sum $ snd <$> rcpts
+    tot = fromIntegral $ sum $ snd <$> rcptsN :: Word64
+
+makeRcptsPay ::
+       Natural -> [(Address, Natural)] -> Either String [(Address, Natural)]
+makeRcptsPay fee rcpts =
+    mapM f rcpts
+  where
+    f (a, v) = (a,) <$> maybeToEither err (v `safeSubtract` toPay)
+    err = "Recipients can't pay for the fee"
+    (q, r) = fee `quotRem` fromIntegral (length rcpts)
+    toPay = if r == 0 then q else q + 1
+
+getDerivs ::
+       Tx
+    -> [Store.Unspent]
+    -> [(Address, Natural)]
+    -> Map Address SoftPath
+    -> SoftPath
+    -> Either String ([SoftPath], [SoftPath])
+getDerivs tx selCoins rcpts walletAddrMap changeDeriv = do
+    selCoinAddrs <- maybeToEither err $ mapM Store.unspentAddress selCoins
+    let inDerivs =
+            Map.elems $
+            Map.restrictKeys walletAddrMap $ Set.fromList selCoinAddrs
+    return (inDerivs, outDerivs)
+  where
+    myOutDeriv = Map.elems $ Map.intersection walletAddrMap $ Map.fromList rcpts
+    outDerivs =
+        if length (txOut tx) == length rcpts
+            then myOutDeriv -- No change address was used
+            else changeDeriv : myOutDeriv
     err = "Could not read unspent address in buildWalletTx"
 
 {- Signing Transactions -}

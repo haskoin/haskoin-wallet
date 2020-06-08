@@ -61,6 +61,7 @@ data Command
           , commandUnit       :: !AmountUnit
           , commandFeeByte    :: !Natural
           , commandDust       :: !Natural
+          , commandRcptPay    :: !Bool
           }
     | CommandReview
           { commandFilePath :: !FilePath
@@ -175,11 +176,13 @@ transactionsParser =
 prepareTxParser :: ParserInfo Command
 prepareTxParser =
     info
-        (CommandPrepareTx <$> some recipientArg
-                          <*> accountOption
-                          <*> unitOption
-                          <*> feeOption
-                          <*> dustOption) $
+        (CommandPrepareTx
+            <$> some recipientArg
+            <*> accountOption
+            <*> unitOption
+            <*> feeOption
+            <*> dustOption
+            <*> rcptPayOption) $
     mconcat
         [ progDesc "Prepare a new unsigned transaction"
         , footer "Next command: review, signtx"
@@ -303,19 +306,40 @@ accountArg desc =
         , completer (mkCompleter accountCompleter)
         ]
 
-recipientArg :: Parser (Text, Text)
-recipientArg = (,) <$> addrParser <*> amntParser
-  where
-    addrParser =
-        strArgument $ mconcat [help "Recipient address", metavar "ADDRESS"]
-    amntParser =
-        strArgument $ mconcat [help "Recipient amount", metavar "AMOUNT"]
-
-
 accountCompleter :: String -> IO [String]
 accountCompleter pref = do
     keys <- either (const []) id <$> runExceptT accountMapKeys
     return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
+
+recipientArg :: Parser (Text, Text)
+recipientArg =
+    (,) <$> addressArg <*> amountArg
+
+amountArg :: Parser Text
+amountArg =
+    strArgument $
+    mconcat
+        [ help "Recipient amount"
+        , metavar "AMOUNT"
+        ]
+    
+addressArg :: Parser Text
+addressArg =
+    strArgument $
+    mconcat
+        [ help "Recipient address"
+        , metavar "ADDRESS"
+        ]
+
+rcptPayOption :: Parser Bool
+rcptPayOption =
+    switch $
+    mconcat
+        [ short 'r'
+        , long "recipientpay"
+        , help "The transaction fee will be deducted from the recipient amounts"
+        , showDefault
+        ]
 
 offsetOption :: Parser Natural
 offsetOption =

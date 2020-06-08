@@ -88,8 +88,7 @@ newAccountStore net xpub =
 
 accountMapFilePath :: IO FilePath
 accountMapFilePath = do
-    dir <- D.getAppUserDataDirectory "hw"
-    D.createDirectoryIfMissing True dir
+    dir <- hwDataDirectory Nothing
     return $ dir </> "bip44accounts.json"
 
 readAccountMap :: (MonadIO m, MonadError String m) => m AccountMap

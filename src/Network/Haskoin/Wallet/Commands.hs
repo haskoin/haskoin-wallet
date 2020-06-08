@@ -332,10 +332,6 @@ data AccountBalance =
         -- ^ unconfirmed balance
         , balanceUnspentCount  :: !Natural
         -- ^ number of unspent outputs
-        , balanceTxCount       :: !Natural
-        -- ^ number of transactions
-        , balanceTotalReceived :: !Natural
-        -- ^ total amount from all outputs in this address
         }
     deriving (Show, Read, Eq, Ord)
 
@@ -345,8 +341,6 @@ instance Json.ToJSON AccountBalance where
             [ "confirmed" .= balanceAmount b
             , "unconfirmed" .= balanceZero b
             , "utxo" .= balanceUnspentCount b
-            , "txs" .= balanceTxCount b
-            , "received" .= balanceTotalReceived b
             ]
 
 instance Json.FromJSON AccountBalance where
@@ -356,8 +350,6 @@ instance Json.FromJSON AccountBalance where
                 <$> o .: "confirmed"
                 <*> o .: "unconfirmed"
                 <*> o .: "utxo"
-                <*> o .: "txs"
-                <*> o .: "received"
 
 --TODO: This is wrong. Fix it!
 addrsToAccBalance :: [Store.Balance] -> AccountBalance
@@ -367,9 +359,6 @@ addrsToAccBalance xs =
         , balanceZero = fromIntegral $ sum $ Store.balanceZero <$> xs
         , balanceUnspentCount =
               fromIntegral $ sum $ Store.balanceUnspentCount <$> xs
-        , balanceTxCount = fromIntegral $ sum $ Store.balanceTxCount <$> xs
-        , balanceTotalReceived =
-              fromIntegral $ sum $ Store.balanceTotalReceived <$> xs
         }
 
 catchResponseError :: ExceptT String IO Response -> IO Response
@@ -391,8 +380,8 @@ commandResponse =
         CommandAddresses accM p -> addresses accM p
         CommandReceive accM -> receive accM
         CommandTransactions accM p -> transactions accM p
-        CommandPrepareTx rcpts accM unit fee dust ->
-            prepareTx rcpts accM unit fee dust
+        CommandPrepareTx rcpts accM unit fee dust rcptPay ->
+            prepareTx rcpts accM unit fee dust rcptPay
         CommandReview file -> cmdReview file
         CommandSignTx file -> cmdSignTx file
         CommandSendTx file -> cmdSendTx file
@@ -508,14 +497,16 @@ prepareTx ::
     -> AmountUnit
     -> Natural
     -> Natural
+    -> Bool
     -> IO Response
-prepareTx rcpTxt accM unit feeByte dust =
+prepareTx rcpTxt accM unit feeByte dust rcptPay =
     catchResponseError $ do
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
         withNetwork net $ do
-            (signDat, commitStore) <- buildTxSignData store rcpts feeByte dust
+            (signDat, commitStore) <-
+                buildTxSignData store rcpts feeByte dust rcptPay
             path <- liftIO $ writeDoc signDat
             wTx <-
                 liftEither $
