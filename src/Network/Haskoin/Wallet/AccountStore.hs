@@ -7,6 +7,7 @@ import           Control.Arrow                   (first)
 import           Control.Monad
 import           Control.Monad.Except
 import           Control.Monad.Reader
+import           Control.Monad.State
 import qualified Data.Aeson                      as Json
 import qualified Data.Aeson.Encode.Pretty        as Pretty
 import           Data.Aeson.Types
@@ -208,27 +209,50 @@ commit key (Commit val) = do
     void $ alterAccountStore key $ const $ return (Just val)
     return val
 
-genExtAddress, genIntAddress ::
-       AccountStore -> ((Address, SoftPath), Commit AccountStore)
+runAccountStoreT ::
+       Monad m
+    => AccountStore
+    -> StateT AccountStore m a
+    -> m (a, Commit AccountStore)
+runAccountStoreT origStore m = do
+    (a, newStore) <- runStateT m origStore
+    return $
+        if newStore == origStore
+            then (a, NoCommit newStore)
+            else (a, Commit newStore)
+
+runAccountStore ::
+       AccountStore -> State AccountStore a -> (a, Commit AccountStore)
+runAccountStore origStore m =
+    let (a, newStore) = runState m origStore
+     in if newStore == origStore
+            then (a, NoCommit newStore)
+            else (a, Commit newStore)
+
+genExtAddress :: MonadState AccountStore m => m (Address, SoftPath)
 genExtAddress =
     genAddress_ accountStoreExternal extDeriv $ \f s ->
         s {accountStoreExternal = f s}
+
+genIntAddress :: MonadState AccountStore m => m (Address, SoftPath)
 genIntAddress =
     genAddress_ accountStoreInternal intDeriv $ \f s ->
         s {accountStoreInternal = f s}
 
 genAddress_ ::
-       (AccountStore -> Natural)
+       MonadState AccountStore m
+    => (AccountStore -> Natural)
     -> SoftPath
     -> ((AccountStore -> Natural) -> AccountStore -> AccountStore)
-    -> AccountStore
-    -> ((Address, SoftPath), Commit AccountStore)
-genAddress_ getIdx deriv updAcc store =
-    ((fst addr, deriv :/ (fromIntegral idx)), Commit newStore)
-  where
-    idx = getIdx store
-    addr = derivePathAddr (accountStoreXPubKey store) deriv $ fromIntegral idx
-    newStore = updAcc ((+ 1) . getIdx) store
+    -> m (Address, SoftPath)
+genAddress_ getIdx deriv updAcc = do
+    store <- get
+    let idx = getIdx store
+        addr =
+            derivePathAddr (accountStoreXPubKey store) deriv $ fromIntegral idx
+        newStore = updAcc ((+ 1) . getIdx) store
+    put newStore
+    return (fst addr, deriv :/ fromIntegral idx)
 
 extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath)]
 extAddresses = addresses_ accountStoreExternal extDeriv

@@ -14,8 +14,10 @@ import qualified Data.Aeson                      as Json
 import qualified Data.Aeson.Encode.Pretty        as Pretty
 import           Data.Aeson.TH
 import qualified Data.Aeson.Types                as Json
+import qualified Data.ByteString                 as BS
 import qualified Data.ByteString.Char8           as C8
 import qualified Data.ByteString.Lazy            as BL
+import qualified Data.ByteString.Short           as BSS
 import qualified Data.HashMap.Strict             as HMap
 import           Data.List                       (nub)
 import           Data.Map.Strict                 (Map)
@@ -27,6 +29,7 @@ import           Data.Text                       (Text)
 import qualified Data.Text                       as Text
 import           Haskoin.Address
 import           Haskoin.Constants
+import           Haskoin.Crypto
 import           Haskoin.Keys
 import           Haskoin.Transaction
 import           Haskoin.Util
@@ -106,22 +109,41 @@ instance HasFilePath TxSignData where
       where
         heading = if s then "-signedtx-" else "-unsignedtx-"
 
-hwDataDirectory :: Maybe FilePath -> IO FilePath  
+hwDataDirectory :: Maybe FilePath -> IO FilePath
 hwDataDirectory subDirM = do
     appDir <- D.getAppUserDataDirectory "hw"
     let dir = maybe appDir (appDir </>) subDirM
     D.createDirectoryIfMissing True dir
     return dir
 
-writeDoc :: (Json.ToJSON a, HasFilePath a) => a -> IO FilePath
-writeDoc doc = do
-    dir <- hwDataDirectory $ Just "transactions"
+data HWFolder
+    = TxFolder
+    | PubKeyFolder
+    | SweepFolder !String
+    deriving (Eq, Show)
+
+toFolder :: HWFolder -> String
+toFolder =
+    \case
+        TxFolder -> "transactions"
+        PubKeyFolder -> "pubkeys"
+        SweepFolder chksum -> "sweep-" <> chksum
+
+writeDoc :: (Json.ToJSON a, HasFilePath a) => HWFolder -> a -> IO FilePath
+writeDoc folder doc = do
+    dir <- hwDataDirectory $ Just $ toFolder folder
     let path = dir </> getFilePath doc
     writeJsonFile path doc
     return path
 
 txChecksum :: Tx -> Text
-txChecksum = Text.take 16 . txHashToHex . nosigTxHash
+txChecksum = Text.take 8 . txHashToHex . nosigTxHash
+
+txsChecksum :: [Tx] -> Text
+txsChecksum txs =
+    Text.take 8 $ txHashToHex $ TxHash $ sha256 $ mconcat bss
+  where
+    bss = BSS.fromShort . getHash256 . getTxHash . nosigTxHash <$> txs
 
 {- JSON IO Helpers-}
 

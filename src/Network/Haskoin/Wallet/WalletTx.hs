@@ -3,26 +3,26 @@
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.WalletTx where
 
-import           Control.Arrow                   ((&&&))
-import           Control.Monad                   (unless)
-import           Data.Aeson                      (object, (.:), (.=))
-import qualified Data.Aeson                      as Json
-import           Data.Aeson.Types                (Parser)
-import qualified Data.ByteString                 as BS
-import           Data.Decimal                    as Decimal
-import           Data.Either                     (partitionEithers)
-import           Data.Map.Strict                 (Map)
-import qualified Data.Map.Strict                 as Map
-import           Data.Maybe                      (fromMaybe, isJust)
-import qualified Data.Serialize                  as S
-import           Data.String.Conversions         (cs)
+import           Control.Arrow                 ((&&&))
+import           Control.Monad                 (unless)
+import           Data.Aeson                    (object, (.:), (.=))
+import qualified Data.Aeson                    as Json
+import           Data.Aeson.Types              (Parser)
+import qualified Data.ByteString               as BS
+import           Data.Decimal                  as Decimal
+import           Data.Either                   (partitionEithers)
+import           Data.Map.Strict               (Map)
+import qualified Data.Map.Strict               as Map
+import           Data.Maybe                    (fromMaybe, isJust)
+import qualified Data.Serialize                as S
+import           Data.String.Conversions       (cs)
 import           Data.String.ToString
-import           Data.Text                       (Text)
+import           Data.Text                     (Text)
 import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Keys
 import           Haskoin.Script
-import qualified Haskoin.Store.Data              as Store
+import qualified Haskoin.Store.Data            as Store
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.FileIO
@@ -172,7 +172,7 @@ outputAddressMap outs =
   where
     (ls, rs) = partitionEithers $ f <$> outs
     f (Store.StoreOutput v _ _ (Just a)) = Right (a, fromIntegral v)
-    f s = Left s
+    f s                                  = Left s
 
 inputAddressMap ::
        [Store.StoreInput] -> (Map Address Natural, [Store.StoreInput])
@@ -181,7 +181,7 @@ inputAddressMap ins =
   where
     (ls, rs) = partitionEithers $ f <$> ins
     f (Store.StoreInput _ _ _ _ v _ (Just a)) = Right (a, fromIntegral v)
-    f s = Left s
+    f s                                       = Left s
 
 txOutAddressMap :: [TxOut] -> (Map Address Natural, [TxOut])
 txOutAddressMap outs =
@@ -223,7 +223,8 @@ data WalletUnsignedTx = WalletUnsignedTx
     , walletUnsignedTxAmount       :: !Integer
     , walletUnsignedTxMyOutputs    :: !(Map Address (Natural, SoftPath))
     , walletUnsignedTxOtherOutputs :: !(Map Address Natural)
-    , walletUnsignedTxMyInputs     :: !(Map Address ( Natural , SoftPath , [SigInput]))
+    , walletUnsignedTxMyInputs     :: !(Map Address (Natural, SoftPath, [SigInput]))
+    , walletUnsignedTxOtherInputs  :: !(Map Address (Natural, [SigInput]))
     , walletUnsignedTxSize         :: !Natural
     , walletUnsignedTxFee          :: !Natural
     , walletUnsignedTxFeeByte      :: !Decimal
@@ -239,7 +240,7 @@ unsignedToWalletTx tx uTx =
         , walletTxOtherOutputs = walletUnsignedTxOtherOutputs uTx
         , walletTxNonStdOutputs = []
         , walletTxMyInputs = myInputs
-        , walletTxOtherInputs = Map.empty
+        , walletTxOtherInputs = Map.map fst $ walletUnsignedTxOtherInputs uTx
         , walletTxNonStdInputs = []
         , walletTxSize = fromIntegral size
         , walletTxFee = walletUnsignedTxFee uTx
@@ -261,6 +262,7 @@ walletUnsignedTxToJSON net tx = do
     myOutputsT <- mapAddrText net $ walletUnsignedTxMyOutputs tx
     othOutputsT <- mapAddrText net $ walletUnsignedTxOtherOutputs tx
     myInputsT <- mapAddrText net $ walletUnsignedTxMyInputs tx
+    othInputsT <- mapAddrText net $ walletUnsignedTxOtherInputs tx
     return $
         object
             [ "type" .= walletUnsignedTxType tx
@@ -268,6 +270,7 @@ walletUnsignedTxToJSON net tx = do
             , "myoutputs" .= myOutputsT
             , "otheroutputs" .= othOutputsT
             , "myinputs" .= myInputsT
+            , "otherinputs" .= othInputsT
             , "size" .= walletUnsignedTxSize tx
             , "fee" .= walletUnsignedTxFee tx
             , "feebyte" .= show (walletUnsignedTxFeeByte tx)
@@ -282,6 +285,7 @@ walletUnsignedTxParseJSON net =
             <*> (f =<< o .: "myoutputs")
             <*> (f =<< o .: "otheroutputs")
             <*> (f =<< o .: "myinputs")
+            <*> (f =<< o .: "otherInputs")
             <*> o .: "size"
             <*> o .: "fee"
             <*> (read <$> o .: "feebyte")
@@ -289,7 +293,10 @@ walletUnsignedTxParseJSON net =
         f = either fail return . mapTextAddr net
 
 parseTxSignData ::
-       Network -> XPubKey -> TxSignData -> Either String WalletUnsignedTx
+       Network
+    -> XPubKey
+    -> TxSignData
+    -> Either String WalletUnsignedTx
 parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
     coins <- txSignDataCoins tsd
         -- Fees
@@ -317,9 +324,6 @@ parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
         Left "There are non-standard outputs in the transaction"
     unless (null nonStdIn) $
         Left "There are non-standard inputs in the transaction"
-    unless (Map.null othInputsMap) $
-        Left
-            "There are inputs in the transaction that don't belong to the wallet"
     unless (length coins == length (txIn tx)) $
         Left "Referenced input transactions are missing"
     unless (length inPaths == Map.size myInputsMap) $
@@ -333,6 +337,7 @@ parseTxSignData net pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
             , walletUnsignedTxMyOutputs = myOutputsMap
             , walletUnsignedTxOtherOutputs = othOutputsMap
             , walletUnsignedTxMyInputs = myInputsMap
+            , walletUnsignedTxOtherInputs = othInputsMap
             , walletUnsignedTxSize = fromIntegral size -- estimate
             , walletUnsignedTxFee = fee
             , walletUnsignedTxFeeByte = feeByte --estimate

@@ -14,6 +14,7 @@ import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
 import           Haskoin.Constants
 import           Haskoin.Util
+import           Haskoin.Address
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Util
@@ -72,6 +73,12 @@ data Command
     | CommandSendTx
           { commandFilePath :: !FilePath
           }
+    | CommandPrepareSweep
+          { commandSweepAddrs :: ![Text]
+          , commandMaybeAcc   :: !(Maybe Text)
+          , commandFeeByte    :: !Natural
+          , commandDust       :: !Natural
+          }
     deriving (Eq, Show)
 
 programParser :: ParserInfo Command
@@ -109,6 +116,11 @@ commandParser =
             , command "review" reviewParser
             , command "signtx" signTxParser
             , command "sendtx" sendTxParser
+            ]
+        , hsubparser $
+            mconcat
+            [ commandGroup "Utilities"
+            , command "preparesweep" prepareSweepParser
             ]
         ]
 
@@ -208,6 +220,19 @@ sendTxParser :: ParserInfo Command
 sendTxParser =
     info (CommandSendTx <$> filepathArgument) $
     mconcat [progDesc "Broadcast a signed transaction to the network"]
+
+prepareSweepParser :: ParserInfo Command
+prepareSweepParser =
+    info
+        (CommandPrepareSweep
+            <$> some (addressArg "List of addresses to sweep")
+            <*> accountOption
+            <*> feeOption
+            <*> dustOption) $
+    mconcat
+        [ progDesc "Sweep funds into this wallet"
+        , footer "Next command: signsweep"
+        ]
 
 {- Option Parsers -}
 
@@ -313,7 +338,7 @@ accountCompleter pref = do
 
 recipientArg :: Parser (Text, Text)
 recipientArg =
-    (,) <$> addressArg <*> amountArg
+    (,) <$> addressArg "Recipient address" <*> amountArg
 
 amountArg :: Parser Text
 amountArg =
@@ -323,11 +348,11 @@ amountArg =
         , metavar "AMOUNT"
         ]
     
-addressArg :: Parser Text
-addressArg =
+addressArg :: String -> Parser Text
+addressArg desc =
     strArgument $
     mconcat
-        [ help "Recipient address"
+        [ help desc
         , metavar "ADDRESS"
         ]
 
