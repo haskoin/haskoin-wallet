@@ -59,9 +59,10 @@ buildTxSignData store rcpts feeByte dust rcptPay
                 20
                 def {configNetwork = net}
                 (GetAddrsUnspent (Map.keys walletAddrMap) def)
+        gen <- liftIO newStdGen
         (tx, pickedCoins) <-
             liftEither $
-            buildWalletTx net rcpts change allCoins feeByte dust rcptPay
+            buildWalletTx net gen rcpts change allCoins feeByte dust rcptPay
         (inDerivs, outDerivs') <-
             liftEither $ getDerivs pickedCoins rcpts walletAddrMap
         let noChange = length (txOut tx) == length rcpts
@@ -86,6 +87,7 @@ buildTxSignData store rcpts feeByte dust rcptPay
 
 buildWalletTx ::
        Network
+    -> StdGen
     -> [(Address, Natural)] -- recipients
     -> Address -- change
     -> [Store.Unspent] -- Coins to choose from
@@ -93,7 +95,7 @@ buildWalletTx ::
     -> Natural -- Dust
     -> Bool -- Recipients Pay for Fee
     -> Either String (Tx, [Store.Unspent])
-buildWalletTx net rcptsN change coins feeByteN dustN rcptPay = do
+buildWalletTx net gen rcptsN change coins feeByteN dustN rcptPay = do
     (pickedCoins, changeAmnt) <-
         chooseCoins tot feeCoinSel (length rcptsN + 1) True (sortDesc coins)
     let nOuts =
@@ -108,11 +110,12 @@ buildWalletTx net rcptsN change coins feeByteN dustN rcptPay = do
     let rcpts = second fromIntegral <$> rcptsPayN
         allRcpts
             | changeAmnt <= dust = rcpts
-            | otherwise = (change, changeAmnt) : rcpts -- TODO: Randomize this
+            | otherwise = (change, changeAmnt) : rcpts
         ops = Store.unspentPoint <$> pickedCoins
     when (any ((<= dust) . snd) allRcpts) $
         Left "Recipient output is smaller than the dust value"
-    tx <- buildAddrTx net ops =<< mapM (addrToText2 net) allRcpts
+    let rdmRcpts = evalState (randomShuffle allRcpts) gen
+    tx <- buildAddrTx net ops =<< mapM (addrToText2 net) rdmRcpts
     return (tx, pickedCoins)
   where
     feeCoinSel =
