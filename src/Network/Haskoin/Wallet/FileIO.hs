@@ -146,28 +146,7 @@ txsChecksum txs =
   where
     bss = BSS.fromShort . getHash256 . getTxHash . nosigTxHash <$> txs
 
--- This was designed to parse the output of bitcoin core dumpwallet command
-parseSecKeysFile :: Network -> FilePath -> IO [(SecKey, Address)]
-parseSecKeysFile net fp = do
-    ls <- readLineFile fp
-    let toParse = catMaybes $ skip <$> (Text.words <$> ls)
-    return $ catMaybes $ go <$> toParse
-  where
-    skip [] = Nothing
-    skip ws@(w:_)
-        | "#" `Text.isPrefixOf` w = Nothing
-        | otherwise = Just ws
-    parseKey w = secKeyData <$> (fromWif net w <|> fromMiniKey (cs w))
-    parseAddr w = eitherToMaybe $ textToAddrE net $ strip "addr=" w
-    strip p w = fromMaybe w $ Text.stripPrefix p w
-    parseFirst [] _ = Nothing
-    parseFirst (w:ws) parser = parser w <|> parseFirst ws parser
-    go ws = do
-        skey <- parseFirst ws parseKey
-        addr <- parseFirst ws parseAddr
-        return (skey, addr)
-
-{- JSON IO Helpers-}
+-- JSON IO Helpers--
 
 writeJsonFile :: Json.ToJSON a => String -> a -> IO ()
 writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
@@ -179,8 +158,36 @@ readJsonFile ::
 readJsonFile filePath =
     liftEither =<< liftIO (Json.eitherDecodeFileStrict' filePath)
 
-readLineFile :: FilePath -> IO [Text]
-readLineFile fp = do
+-- Parse wallet dump files for sweeping --
+
+readFileWords :: FilePath -> IO [[Text]]
+readFileWords fp = do
     strContents <- liftIO $ IO.readFile fp
-    return $ Text.lines $ cs strContents
+    return $ removeComments $ Text.words <$> Text.lines (cs strContents)
+
+parseAddrsFile :: Network -> [[Text]] -> [Address]
+parseAddrsFile net =
+    withParser $ \w -> eitherToMaybe $ textToAddrE net $ strip "addr=" w
+  where
+    strip p w = fromMaybe w $ Text.stripPrefix p w
+
+parseSecKeysFile :: Network -> [[Text]] -> [SecKey]
+parseSecKeysFile net =
+    withParser $ \w -> secKeyData <$> (fromWif net w <|> fromMiniKey (cs w))
+
+withParser :: (Text -> Maybe a) -> [[Text]] -> [a]
+withParser parser =
+    mapMaybe go
+  where
+    go [] = Nothing
+    go (w:ws) = parser w <|> go ws
+
+removeComments :: [[Text]] -> [[Text]]
+removeComments =
+    mapMaybe go
+  where
+    go [] = Nothing
+    go ws@(w:_)
+        | "#" `Text.isPrefixOf` w = Nothing
+        | otherwise = Just ws
 

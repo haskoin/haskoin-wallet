@@ -644,11 +644,10 @@ signSweep sweepDir keyFile accM =
         when (null tsds) $ throwError "No sweep transactions to sign"
         unless (all (valid acc net) tsds) $
             throwError "Transactions do not match account information"
-        secKeys <- liftIO $ parseSecKeysFile net keyFile
+        secKeys <- parseSecKeysFile net <$> liftIO (readFileWords keyFile)
         when (null secKeys) $ throwError "No private keys to sign"
         !signRes <-
-            forM tsds $ \tsd ->
-                liftEither $ signTxWithKeys tsd pubKey (fst <$> secKeys)
+            forM tsds $ \tsd -> liftEither $ signTxWithKeys tsd pubKey secKeys
         let initChksum = cs $ txsChecksum $ txSignDataTx <$> tsds
             chksum = cs $ txsChecksum $ txSignDataTx . fst <$> signRes
         when (initChksum /= chksum) $
