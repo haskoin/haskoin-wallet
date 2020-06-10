@@ -639,14 +639,16 @@ signSweep sweepDir keyFile accM =
         let pubKey = accountStoreXPubKey store
             net = accountStoreNetwork store
         acc <- liftEither $ accountStoreAccount store
-        tsds <- mapM readJsonFile =<< liftIO (D.listDirectory sweepDir)
+        sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
+        tsds <- mapM readJsonFile sweepFiles
         when (null tsds) $ throwError "No sweep transactions to sign"
         unless (all (valid acc net) tsds) $
             throwError "Transactions do not match account information"
         secKeys <- liftIO $ parseSecKeysFile net keyFile
         when (null secKeys) $ throwError "No private keys to sign"
         !signRes <-
-            forM tsds $ \tsd -> liftEither $ signTxWithKeys tsd pubKey secKeys
+            forM tsds $ \tsd ->
+                liftEither $ signTxWithKeys tsd pubKey (fst <$> secKeys)
         let initChksum = cs $ txsChecksum $ txSignDataTx <$> tsds
             chksum = cs $ txsChecksum $ txSignDataTx . fst <$> signRes
         when (initChksum /= chksum) $

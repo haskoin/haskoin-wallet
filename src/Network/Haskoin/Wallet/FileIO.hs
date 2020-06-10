@@ -146,13 +146,26 @@ txsChecksum txs =
   where
     bss = BSS.fromShort . getHash256 . getTxHash . nosigTxHash <$> txs
 
-parseSecKeysFile :: Network -> FilePath -> IO [SecKey]
+-- This was designed to parse the output of bitcoin core dumpwallet command
+parseSecKeysFile :: Network -> FilePath -> IO [(SecKey, Address)]
 parseSecKeysFile net fp = do
     ls <- readLineFile fp
-    return $ catMaybes $ go <$> ls
+    let toParse = catMaybes $ skip <$> (Text.words <$> ls)
+    return $ catMaybes $ go <$> toParse
   where
-    go l = secKeyData <$> (fromWif net l <|> fromMiniKey (cs l))
-
+    skip [] = Nothing
+    skip ws@(w:_)
+        | "#" `Text.isPrefixOf` w = Nothing
+        | otherwise = Just ws
+    parseKey w = secKeyData <$> (fromWif net w <|> fromMiniKey (cs w))
+    parseAddr w = eitherToMaybe $ textToAddrE net $ strip "addr=" w
+    strip p w = fromMaybe w $ Text.stripPrefix p w
+    parseFirst [] _ = Nothing
+    parseFirst (w:ws) parser = parser w <|> parseFirst ws parser
+    go ws = do
+        skey <- parseFirst ws parseKey
+        addr <- parseFirst ws parseAddr
+        return (skey, addr)
 
 {- JSON IO Helpers-}
 
