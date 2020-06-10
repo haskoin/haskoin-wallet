@@ -430,7 +430,8 @@ commandResponse =
         CommandReview file -> cmdReview file
         CommandSignTx file -> cmdSignTx file
         CommandSendTx file -> cmdSendTx file
-        CommandPrepareSweep as accM fee dust -> prepareSweep as accM fee dust
+        CommandPrepareSweep as fileM accM fee dust ->
+            prepareSweep as fileM accM fee dust
         CommandSignSweep dir keyFile accM -> signSweep dir keyFile accM
 
 mnemonic :: Bool -> Natural -> IO Response
@@ -615,22 +616,34 @@ cmdSendTx fp =
                 liftExcept $ apiCall def {configNetwork = net} (PostTx signedTx)
             return $ ResponseSendTx storeName store txInfo netTxId
 
-prepareSweep :: [Text] -> Maybe Text -> Natural -> Natural -> IO Response
-prepareSweep addrsTxt accM feeByte dust =
+prepareSweep ::
+       [Text]
+    -> Maybe FilePath
+    -> Maybe Text
+    -> Natural
+    -> Natural
+    -> IO Response
+prepareSweep addrsTxt fileM accM feeByte dust =
     catchResponseError $ do
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
-        addrs <- liftEither $ mapM (textToAddrE net) addrsTxt
+        addrsArg <- liftEither $ mapM (textToAddrE net) addrsTxt
+        addrsFile <-
+            case fileM of
+                Just file -> parseAddrsFile net <$> liftIO (readFileWords file)
+                _ -> return []
+        let addrs = addrsArg <> addrsFile
         withNetwork net $ do
             (signDats, commitStore) <-
                 buildSweepSignData store addrs feeByte dust
             let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
-            paths <- liftIO $ mapM (writeDoc (SweepFolder chksum)) signDats
-            wTxs <-
+            !txInfosU <-
                 liftEither $
                 mapM (parseTxSignData net (accountStoreXPubKey store)) signDats
+            paths <- liftIO $ mapM (writeDoc (SweepFolder chksum)) signDats
             newStore <- commit storeName commitStore
-            return $ ResponsePrepareSweep storeName newStore (cs <$> paths) wTxs
+            return $
+                ResponsePrepareSweep storeName newStore (cs <$> paths) txInfosU
 
 signSweep :: FilePath -> FilePath -> Maybe Text -> IO Response
 signSweep sweepDir keyFile accM =

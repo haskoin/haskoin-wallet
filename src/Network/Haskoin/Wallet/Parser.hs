@@ -74,10 +74,11 @@ data Command
           { commandFilePath :: !FilePath
           }
     | CommandPrepareSweep
-          { commandSweepAddrs :: ![Text]
-          , commandMaybeAcc   :: !(Maybe Text)
-          , commandFeeByte    :: !Natural
-          , commandDust       :: !Natural
+          { commandSweepAddrs    :: ![Text]
+          , commandMaybeFilePath :: !(Maybe FilePath)
+          , commandMaybeAcc      :: !(Maybe Text)
+          , commandFeeByte       :: !Natural
+          , commandDust          :: !Natural
           }
     | CommandSignSweep
           { commandSweepPath  :: !FilePath
@@ -231,7 +232,8 @@ prepareSweepParser :: ParserInfo Command
 prepareSweepParser =
     info
         (CommandPrepareSweep
-            <$> some (addressArg "List of addresses to sweep")
+            <$> many (addressArg "List of addresses to sweep")
+            <*> maybeFileOption "File containing addresses to sweep"
             <*> accountOption
             <*> feeOption
             <*> dustOption) $
@@ -272,6 +274,17 @@ dirArgument desc =
     mconcat
         [ help desc
         , metavar "DIRNAME"
+        , action "file"
+        ]
+
+maybeFileOption :: String -> Parser (Maybe FilePath)
+maybeFileOption desc =
+    optional $
+    strOption $
+    mconcat
+        [ long "file"
+        , help desc
+        , metavar "FILENAME"
         , action "file"
         ]
 
@@ -462,30 +475,3 @@ bitOption =
         , help "Use bits for parsing amounts (default: bitcoin)"
         ]
 
-{--
-
-verboseOpt :: Option Bool
-verboseOpt =
-    option
-        'v'
-        "verbose"
-        ["true"]
-        False
-        Argument.boolean
-        "Produce a more detailed output for this command."
-
-parseUnit :: String -> AmountUnit
-parseUnit unit =
-    case unit of
-        "bitcoin" -> UnitBitcoin
-        "bit" -> UnitBit
-        "satoshi" -> UnitSatoshi
-        _ ->
-            exitCustomError $
-            vcat
-                [ formatError "Invalid unit value. Choose one of:"
-                , indent 4 $
-                  vcat $ fmap formatStatic ["bitcoin", "bit", "satoshi"]
-                ]
-
---}

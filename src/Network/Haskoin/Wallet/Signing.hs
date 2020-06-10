@@ -209,7 +209,7 @@ buildSweepSignData store addrs feeByte dust
         coins <-
             liftExcept $
             apiBatch
-                10
+                20
                 def {configNetwork = net}
                 (GetAddrsUnspent addrs def {paramLimit = Just 0})
         when (null coins) $
