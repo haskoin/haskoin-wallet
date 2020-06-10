@@ -12,9 +12,9 @@ import qualified Data.Map.Strict                     as Map
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
+import           Haskoin.Address
 import           Haskoin.Constants
 import           Haskoin.Util
-import           Haskoin.Address
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Util
@@ -79,6 +79,11 @@ data Command
           , commandFeeByte    :: !Natural
           , commandDust       :: !Natural
           }
+    | CommandSignSweep
+          { commandSweepPath  :: !FilePath
+          , commandSecKeyPath :: !FilePath
+          , commandMaybeAcc   :: !(Maybe Text)
+          }
     deriving (Eq, Show)
 
 programParser :: ParserInfo Command
@@ -121,6 +126,7 @@ commandParser =
             mconcat
             [ commandGroup "Utilities"
             , command "preparesweep" prepareSweepParser
+            , command "signsweep" signSweepParser
             ]
         ]
 
@@ -143,7 +149,7 @@ createAccParser =
 importAccParser :: ParserInfo Command
 importAccParser =
     info
-        (CommandImportAcc <$> filepathArgument
+        (CommandImportAcc <$> fileArgument "Path of the account file"
                           <*> textArg "Name of the new account") $
     mconcat
         [ progDesc "Import an account file into the wallet"
@@ -202,7 +208,7 @@ prepareTxParser =
 
 reviewParser :: ParserInfo Command
 reviewParser =
-    info (CommandReview <$> filepathArgument) $
+    info (CommandReview <$> fileArgument "Path of the transaction file") $
     mconcat
         [ progDesc "Review the contents of a transaction file"
         , footer "Next command: signtx, sendtx"
@@ -210,7 +216,7 @@ reviewParser =
 
 signTxParser :: ParserInfo Command
 signTxParser =
-    info (CommandSignTx <$> filepathArgument) $
+    info (CommandSignTx <$> fileArgument "Path of the transaction file") $
     mconcat
         [ progDesc "Sign a transaction that was created with preparetx"
         , footer "Next command: sendtx"
@@ -218,7 +224,7 @@ signTxParser =
 
 sendTxParser :: ParserInfo Command
 sendTxParser =
-    info (CommandSendTx <$> filepathArgument) $
+    info (CommandSendTx <$> fileArgument "Path of the transaction file") $
     mconcat [progDesc "Broadcast a signed transaction to the network"]
 
 prepareSweepParser :: ParserInfo Command
@@ -234,17 +240,38 @@ prepareSweepParser =
         , footer "Next command: signsweep"
         ]
 
+signSweepParser :: ParserInfo Command
+signSweepParser =
+    info
+        (CommandSignSweep
+            <$> dirArgument "Folder containing the sweep transactions"
+            <*> fileArgument "Path to the file containing the private keys"
+            <*> accountOption) $
+    mconcat
+        [ progDesc "Sign all the transactions contained in a sweep folder"
+        , footer "Next command: sendtx"
+        ]
+
 {- Option Parsers -}
 
 textArg :: String -> Parser Text
 textArg desc = argument str $ mconcat [help desc, metavar "TEXT"]
 
-filepathArgument :: Parser FilePath
-filepathArgument =
+fileArgument :: String -> Parser FilePath
+fileArgument desc =
     strArgument $
     mconcat
-        [ help "Specify a filename"
+        [ help desc
         , metavar "FILENAME"
+        , action "file"
+        ]
+
+dirArgument :: String -> Parser FilePath
+dirArgument desc =
+    strArgument $
+    mconcat
+        [ help desc
+        , metavar "DIRNAME"
         , action "file"
         ]
 
@@ -347,7 +374,7 @@ amountArg =
         [ help "Recipient amount"
         , metavar "AMOUNT"
         ]
-    
+
 addressArg :: String -> Parser Text
 addressArg desc =
     strArgument $

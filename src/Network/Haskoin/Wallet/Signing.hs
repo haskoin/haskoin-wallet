@@ -34,7 +34,7 @@ import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.FileIO
 import           Network.Haskoin.Wallet.Util
-import           Network.Haskoin.Wallet.WalletTx
+import           Network.Haskoin.Wallet.TxInfo
 import           Numeric.Natural
 import           System.Random
 
@@ -161,14 +161,25 @@ signingKey net pass mnem acc = do
 signWalletTx ::
        TxSignData
     -> XPrvKey
-    -> Either String (TxSignData, WalletTx)
-signWalletTx tsd@(TxSignData tx _ inPaths _ _ signed net) signKey = do
+    -> Either String (TxSignData, TxInfo)
+signWalletTx tsd@TxSignData{ txSignDataInputPaths = inPaths } signKey =
+    signTxWithKeys tsd pubKey prvKeys
+  where
+    pubKey = deriveXPubKey signKey
+    prvKeys = xPrvKey . (`derivePath` signKey) <$> inPaths
+
+signTxWithKeys ::
+       TxSignData -> XPubKey -> [SecKey] -> Either String (TxSignData, TxInfo)
+signTxWithKeys tsd@(TxSignData tx _ _ _ _ signed net) pubKey secKeys = do
     when signed $ Left "The transaction is already signed"
-    wTx <- parseTxSignData net pubKey tsd
+    txInfoU <- parseTxSignData net pubKey tsd
         -- signing
-    let myInputs = walletUnsignedTxMyInputs wTx
-        sigInputs = mconcat $ lst3 <$> Map.elems myInputs
-    signedTx <- signTx net tx sigInputs prvKeys
+    let myInputs = unsignedTxInfoMyInputs txInfoU
+        othInputs = unsignedTxInfoOtherInputs txInfoU
+        mySigInputs = mconcat $ lst3 <$> Map.elems myInputs
+        othSigInputs = mconcat $ snd <$> Map.elems othInputs
+        sigInputs = mySigInputs <> othSigInputs
+    signedTx <- signTx net tx sigInputs secKeys
         -- validation
     let f i = (sigInputScript i, sigInputValue i, sigInputOP i)
         vDat = f <$> sigInputs
@@ -176,10 +187,7 @@ signWalletTx tsd@(TxSignData tx _ inPaths _ _ signed net) signKey = do
     unless isSigned $ Left "The transaction could not be signed"
     return
         ( tsd {txSignDataTx = signedTx, txSignDataSigned = True}
-        , unsignedToWalletTx signedTx wTx)
-  where
-    pubKey = deriveXPubKey signKey
-    prvKeys = xPrvKey . (`derivePath` signKey) <$> inPaths
+        , unsignedToTxInfo signedTx txInfoU)
 
 noEmptyInputs :: Tx -> Bool
 noEmptyInputs = (not . any BS.null) . fmap scriptInput . txIn
@@ -237,7 +245,7 @@ buildSweepTxs net gen store allCoins feeByte dust =
   where
     go [] acc = return acc
     go coins acc = do
-        nIns <- lift . lift $ randomRange 2 5
+        nIns <- lift . lift $ randomRange 1 5
         let (pickedCoins, restCoins) = splitAt nIns coins
             coinsTot = sum $ Store.unspentAmount <$> pickedCoins
             fee = guessTxFee (fromIntegral feeByte) 2 (length pickedCoins)
@@ -278,98 +286,7 @@ retryEither ::
     => Natural
     -> m (Either err a)
     -> m (Either err a)
+retryEither 0 _ = error "Must retryEither at least 1 time"
 retryEither 1 m = m
 retryEither i m = either (const $ retryEither (i-1) m) (return . Right) =<< m
 
-{-
-
-buildSwipeTx ::
-       Network
-    -> AccountStore
-    -> [Address]
-    -> Natural -- Fee per byte
-    -> IO (Either String (TxSignData, Commit AccountStore))
-buildSwipeTx net store addrs feeByte = do
-    coins <- fmap toWalletCoin <$> httpUnspent net addrs
-    let tot = sum $ walletCoinValue <$> coins
-        fee = guessTxFee (fromIntegral feeByte) 1 (length coins)
-        ops = walletCoinOutPoint <$> coins
-        depTxHash = nub $ outPointHash <$> ops
-    if null coins
-        then return $ Left "No coins were found in the given addresses"
-        else do
-            depTxs <- httpRawTxs net depTxHash
-            return $ do
-                amnt <-
-                    maybeToEither "The inputs do not cover the required fee" $
-                    tot `safeSubtract` fromIntegral fee
-                tx <-
-                    buildAddrTx
-                        net
-                        ops
-                        [(addrStr net (fst3 rcpt), fromIntegral amnt)]
-                return
-                    ( TxSignData
-                          { txSignDataTx = tx
-                          , txSignDataInputs = depTxs
-                          , txSignDataInputPaths = []
-                          , txSignDataOutputPaths = [snd3 rcpt]
-                          }
-                    , commitStore)
-  where
-    (rcpt, commitStore) = genExtAddress store
-
-{- Signing Transactions -}
-
-signingKey ::
-       Network -> BS.ByteString -> Text -> Natural -> Either String XPrvKey
-signingKey net pass mnem acc = do
-    seed <- mnemonicToSeed pass mnem
-    return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
-
-pubDetailedTx :: TxSignData -> XPubKey -> Either String DetailedTx
-pubDetailedTx (TxSignData tx inTxs inPaths outPaths) pubKey
-    | length coins /= length (txIn tx) =
-        Left "Referenced input transactions are missing"
-    | length inPaths /= Map.size (detailedTxMyInputs info) =
-        Left "Tx is missing inputs from private keys"
-    | length outPaths /= Map.size (detailedTxInbound info) =
-        Left "Tx is missing change outputs"
-    | otherwise = return info
-  where
-    info =
-        detailedTxFillUnsignedTx tx $
-        detailedTxFillInbound outAddrMap (txOut tx) $
-        detailedTxFillInputs inAddrMap (snd <$> coins) emptyDetailedTx
-    outAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) outPaths
-    inAddrMap = Map.fromList $ fmap (pathToAddr pubKey &&& id) inPaths
-    coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
-
-signSwipeTx ::
-       Network
-    -> TxSignData
-    -> [SecKey]
-    -> Either String (DetailedTx, Tx, Bool)
-signSwipeTx net (TxSignData tx inTxs _ _) prvKeys = do
-    sigDat <- mapM g coins
-    signedTx <- signTx net tx (fmap f sigDat) prvKeys
-    let isSigned = noEmptyInputs signedTx && verifyStdTx net signedTx sigDat
-    return
-        ( if isSigned
-              then detailedTxFillTx signedTx info
-              else info
-        , signedTx
-        , isSigned)
-  where
-    info = detailedTxFillInputs Map.empty (snd <$> coins) emptyDetailedTx
-    coins = mapMaybe (findCoin inTxs . prevOutput) $ txIn tx
-    f (so, val, op) = SigInput so val op (maybeSetForkId net sigHashAll) Nothing
-    g (op, to) = (, outValue to, op) <$> decodeTxOutSO to
-
-findCoin :: [Tx] -> OutPoint -> Maybe (OutPoint, TxOut)
-findCoin txs op@(OutPoint h i) = do
-    matchTx <- find ((== h) . txHash) txs
-    to <- txOut matchTx !!? fromIntegral i
-    return (op, to)
-
- -}

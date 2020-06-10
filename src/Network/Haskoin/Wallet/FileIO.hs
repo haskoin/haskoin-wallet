@@ -4,6 +4,7 @@
 {-# LANGUAGE TemplateHaskell   #-}
 module Network.Haskoin.Wallet.FileIO where
 
+import           Control.Applicative             ((<|>))
 import           Control.Arrow                   (first)
 import           Control.Monad
 import           Control.Monad.Except
@@ -22,7 +23,7 @@ import qualified Data.HashMap.Strict             as HMap
 import           Data.List                       (nub)
 import           Data.Map.Strict                 (Map)
 import qualified Data.Map.Strict                 as Map
-import           Data.Maybe                      (fromMaybe, maybe)
+import           Data.Maybe
 import qualified Data.Serialize                  as S
 import           Data.String.Conversions         (cs)
 import           Data.Text                       (Text)
@@ -37,7 +38,7 @@ import           Network.Haskoin.Wallet.Util
 import           Numeric.Natural
 import           Options.Applicative.Help.Pretty hiding ((</>))
 import qualified System.Directory                as D
-import           System.IO                       (IOMode (..), withFile)
+import qualified System.IO                       as IO
 
 class HasFilePath a where
     getFilePath :: a -> String
@@ -145,6 +146,14 @@ txsChecksum txs =
   where
     bss = BSS.fromShort . getHash256 . getTxHash . nosigTxHash <$> txs
 
+parseSecKeysFile :: Network -> FilePath -> IO [SecKey]
+parseSecKeysFile net fp = do
+    ls <- readLineFile fp
+    return $ catMaybes $ go <$> ls
+  where
+    go l = secKeyData <$> (fromWif net l <|> fromMiniKey (cs l))
+
+
 {- JSON IO Helpers-}
 
 writeJsonFile :: Json.ToJSON a => String -> a -> IO ()
@@ -152,7 +161,13 @@ writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
 
 readJsonFile ::
        (MonadError String m, MonadIO m, Json.FromJSON a)
-    => String
+    => FilePath
     -> m a
 readJsonFile filePath =
     liftEither =<< liftIO (Json.eitherDecodeFileStrict' filePath)
+
+readLineFile :: FilePath -> IO [Text]
+readLineFile fp = do
+    strContents <- liftIO $ IO.readFile fp
+    return $ Text.lines $ cs strContents
+

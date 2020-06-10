@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 86b953242582599c8bf8086a4dfc40306dbbe44da8d2eee3c3635ca8b6a6f08c
+-- hash: 88a46209a5e8b3f0c5b1e62fbe5c1bd83141e73bac05a89321ac75514d25afb6
 
 name:           haskoin-wallet
 version:        0.6.0
@@ -64,14 +64,14 @@ library
     , wreq
   exposed-modules:
       Network.Haskoin.Wallet
-      Network.Haskoin.Wallet.Commands
-      Network.Haskoin.Wallet.Parser
-      Network.Haskoin.Wallet.Entropy
       Network.Haskoin.Wallet.AccountStore
-      Network.Haskoin.Wallet.FileIO
-      Network.Haskoin.Wallet.Signing
       Network.Haskoin.Wallet.Amounts
-      Network.Haskoin.Wallet.WalletTx
+      Network.Haskoin.Wallet.Commands
+      Network.Haskoin.Wallet.Entropy
+      Network.Haskoin.Wallet.FileIO
+      Network.Haskoin.Wallet.Parser
+      Network.Haskoin.Wallet.Signing
+      Network.Haskoin.Wallet.TxInfo
       Network.Haskoin.Wallet.Util
   other-modules:
       Paths_haskoin_wallet
