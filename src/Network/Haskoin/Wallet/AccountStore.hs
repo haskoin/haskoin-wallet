@@ -48,11 +48,12 @@ instance FromJSON AccountStore where
     parseJSON =
         withObject "accountstore" $ \o -> do
             net <- maybe mzero return . netByName =<< o .: "network"
-            AccountStore <$> (xPubFromJSON net =<< o .: "xpubkey") <*>
-                o .: "external" <*>
-                o .: "internal" <*>
-                o .: "deriv" <*>
-                return net
+            AccountStore
+                <$> (xPubFromJSON net =<< o .: "xpubkey")
+                <*> o .: "external"
+                <*> o .: "internal"
+                <*> o .: "deriv"
+                <*> return net
 
 instance ToJSON AccountStore where
     toJSON (AccountStore k e i d net) =
@@ -192,12 +193,14 @@ renameAccountStore oldName newName
             _ -> throwError "Account does not exist"
 
 data Commit a
-    = NoCommit
-          { commitValue :: !a
-          }
-    | Commit
-          { commitValue :: !a
-          }
+    = NoCommit { commitValue :: !a }
+    | Commit { commitValue :: !a }
+
+toCommit :: Eq a => a -> a -> Commit a
+toCommit old new =
+    if old == new
+       then NoCommit new
+       else Commit new
 
 commit ::
        (MonadIO m, MonadError String m)
@@ -211,23 +214,33 @@ commit key (Commit val) = do
 
 runAccountStoreT ::
        Monad m
-    => AccountStore
-    -> StateT AccountStore m a
+    => StateT AccountStore m a
+    -> AccountStore
     -> m (a, Commit AccountStore)
-runAccountStoreT origStore m = do
+runAccountStoreT m origStore = do
     (a, newStore) <- runStateT m origStore
-    return $
-        if newStore == origStore
-            then (a, NoCommit newStore)
-            else (a, Commit newStore)
+    return (a, toCommit origStore newStore)
+
+execAccountStoreT ::
+       Monad m
+    => StateT AccountStore m a
+    -> AccountStore
+    -> m (Commit AccountStore)
+execAccountStoreT m origStore = do
+    newStore <- execStateT m origStore
+    return $ toCommit origStore newStore
 
 runAccountStore ::
-       AccountStore -> State AccountStore a -> (a, Commit AccountStore)
-runAccountStore origStore m =
+       State AccountStore a -> AccountStore -> (a, Commit AccountStore)
+runAccountStore m origStore =
     let (a, newStore) = runState m origStore
-     in if newStore == origStore
-            then (a, NoCommit newStore)
-            else (a, Commit newStore)
+     in (a, toCommit origStore newStore)
+
+execAccountStore ::
+       State AccountStore a -> AccountStore -> Commit AccountStore
+execAccountStore m origStore =
+    let newStore = execState m origStore
+     in toCommit origStore newStore
 
 genExtAddress :: MonadState AccountStore m => m (Address, SoftPath)
 genExtAddress =
@@ -254,8 +267,10 @@ genAddress_ getIdx deriv updAcc = do
     put newStore
     return (fst addr, deriv :/ fromIntegral idx)
 
-extAddresses, intAddresses :: AccountStore -> [(Address, SoftPath)]
+extAddresses :: AccountStore -> [(Address, SoftPath)]
 extAddresses = addresses_ accountStoreExternal extDeriv
+
+intAddresses :: AccountStore -> [(Address, SoftPath)]
 intAddresses = addresses_ accountStoreInternal intDeriv
 
 addresses_ ::
@@ -272,3 +287,10 @@ addresses_ getIdx deriv store =
 
 storeAddressMap :: AccountStore -> Map Address SoftPath
 storeAddressMap store = Map.fromList $ extAddresses store <> intAddresses store
+
+addrsDerivPage_ :: SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
+addrsDerivPage_ deriv (Page lim off) xpub =
+    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
+  where
+    addrs =
+        take (fromIntegral lim) $ derivePathAddrs xpub deriv (fromIntegral off)

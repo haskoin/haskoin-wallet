@@ -1,13 +1,16 @@
 {-# LANGUAGE BangPatterns      #-}
+{-# LANGUAGE FlexibleContexts  #-}
 {-# LANGUAGE LambdaCase        #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TemplateHaskell   #-}
 {-# LANGUAGE TupleSections     #-}
 module Network.Haskoin.Wallet.Commands where
 
-import           Control.Arrow                       (first)
+import           Control.Arrow                       (first, second)
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
+import           Control.Monad.Reader
+import           Control.Monad.State
 import           Data.Aeson                          (object, (.:), (.:?), (.=))
 import qualified Data.Aeson                          as Json
 import           Data.Aeson.TH
@@ -16,7 +19,8 @@ import qualified Data.ByteString.Char8               as C8
 import           Data.Default                        (def)
 import           Data.Either                         (fromRight)
 import           Data.Foldable                       (asum)
-import           Data.List                           (isPrefixOf, nub, sort)
+import           Data.List                           (isPrefixOf, nub, sort,
+                                                      sortOn)
 import           Data.Map.Strict                     (Map)
 import qualified Data.Map.Strict                     as Map
 import           Data.Maybe                          (fromMaybe)
@@ -77,6 +81,10 @@ data Response
           { responseAccountName :: !Text
           , responseAccount     :: !AccountStore
           , responseBalance     :: !AccountBalance
+          }
+    | ResponseResetAcc
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
           }
     | ResponseAddresses
           { responseAccountName :: !Text
@@ -171,6 +179,12 @@ instance Json.ToJSON Response where
                     , "accountname" .= n
                     , "account" .= a
                     , "balance" .= b
+                    ]
+            ResponseResetAcc n a ->
+                object
+                    [ "type" .= Json.String "resetacc"
+                    , "accountname" .= n
+                    , "account" .= a
                     ]
             ResponseAddresses n a addrs ->
                 case mapM (addrToText2 (accountStoreNetwork a)) addrs of
@@ -306,6 +320,10 @@ instance Json.FromJSON Response where
                     a <- o .: "account"
                     b <- o .: "balance"
                     return $ ResponseBalance n a b
+                "resetacc" -> do
+                    n <- o .: "accountname"
+                    a <- o .: "account"
+                    return $ ResponseResetAcc n a
                 "addresses" -> do
                     n <- o .: "accountname"
                     a <- o .: "account"
@@ -396,7 +414,6 @@ instance Json.FromJSON AccountBalance where
                 <*> o .: "unconfirmed"
                 <*> o .: "utxo"
 
---TODO: This is wrong. Fix it!
 addrsToAccBalance :: [Store.Balance] -> AccountBalance
 addrsToAccBalance xs =
     AccountBalance
@@ -422,6 +439,7 @@ commandResponse =
         CommandRenameAcc old new -> renameAcc old new
         CommandAccounts -> accounts
         CommandBalance accM -> balance accM
+        CommandResetAcc accM -> resetAccount accM
         CommandAddresses accM p -> addresses accM p
         CommandReceive accM -> receive accM
         CommandTransactions accM p -> transactions accM p
@@ -490,11 +508,9 @@ balance accM =
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
             allAddrs = extAddresses store <> intAddresses store
-        bals <-
-            liftExcept $
-            apiCall
-                def {configNetwork = net}
-                (GetAddrsBalance (fst <$> allAddrs))
+        checkHealth net
+        let req =GetAddrsBalance (fst <$> allAddrs)
+        bals <- liftExcept $ apiCall def {configNetwork = net} req
         return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
@@ -508,7 +524,7 @@ receive :: Maybe Text -> IO Response
 receive accM =
     catchResponseError $ do
         (storeName, store) <- getAccountStore accM
-        let (addr, store') = runAccountStore store genExtAddress
+        let (addr, store') = runAccountStore genExtAddress store
         newStore <- commit storeName store'
         return $ ResponseReceive storeName newStore addr
 
@@ -519,6 +535,7 @@ transactions accM page =
         let net = accountStoreNetwork store
             allAddrs = extAddresses store <> intAddresses store
             addrMap = Map.fromList allAddrs
+        checkHealth net
         best <-
             Store.blockDataHeight <$>
             liftExcept (apiCall def {configNetwork = net} (GetBlockBest def))
@@ -552,6 +569,7 @@ prepareTx rcpTxt accM unit feeByte dust rcptPay =
         (storeName, store) <- getAccountStore accM
         let net = accountStoreNetwork store
         rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
+        checkHealth net
         withNetwork net $ do
             (signDat, commitStore) <-
                 buildTxSignData store rcpts feeByte dust rcptPay
@@ -607,6 +625,7 @@ cmdSendTx fp =
     catchResponseError $ do
         tsd@(TxSignData signedTx _ _ _ acc signed net) <- readJsonFile fp
         unless signed $ throwError "The transaction is not signed"
+        checkHealth net
         withNetwork net $ do
             (storeName, store) <- getAccountStoreByDeriv acc
             let pub = accountStoreXPubKey store
@@ -633,6 +652,7 @@ prepareSweep addrsTxt fileM accM feeByte dust =
                 Just file -> parseAddrsFile net <$> liftIO (readFileWords file)
                 _ -> return []
         let addrs = addrsArg <> addrsFile
+        checkHealth net
         withNetwork net $ do
             (signDats, commitStore) <-
                 buildSweepSignData store addrs feeByte dust
@@ -674,7 +694,54 @@ signSweep sweepDir keyFile accM =
     valid acc net tsd =
         txSignDataAccount tsd == acc && txSignDataNetwork tsd == net
 
-{- Haskeline Helpers -}
+resetAccount :: Maybe Text -> IO Response
+resetAccount accM =
+    catchResponseError $ do
+    (storeName, store) <- getAccountStore accM
+    newStore <- commit storeName =<< resetAccount_ store
+    return $ ResponseResetAcc storeName newStore
+
+resetAccount_ ::
+       (MonadError String m, MonadIO m)
+    => AccountStore
+    -> m (Commit AccountStore)
+resetAccount_ =
+    execAccountStoreT $ do
+        net <- gets accountStoreNetwork
+        pub <- gets accountStoreXPubKey
+        checkHealth net
+        e <- go net pub extDeriv 0 (Page 20 0)
+        i <- go net pub intDeriv 0 (Page 20 0)
+        modify $ \s -> s {accountStoreExternal = e, accountStoreInternal = i}
+        return ()
+  where
+    go net pub deriv d page@(Page lim off) = do
+        let addrs = addrsDerivPage_ deriv page pub
+            req = GetAddrsBalance $ fst <$> addrs
+        bals <- liftExcept $ apiCall def{configNetwork = net} req
+        let vBals = filter ((/= 0) . Store.balanceTxCount) bals
+        if null vBals
+            then return d
+            else do
+                let d' = findMax addrs $ Store.balanceAddress <$> vBals
+                go net pub deriv (d'+1) (Page lim (off + lim))
+    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
+    findMax addrs balAddrs =
+        let fAddrs = filter ((`elem` balAddrs) . fst) addrs
+         in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
+
+-- Utilities --
+
+checkHealth :: (MonadIO m, MonadError String m) => Network -> m () 
+checkHealth net = do
+    health <- liftExcept $ apiCall def{configNetwork = net} GetHealth
+    unless (Store.healthOK health) $
+        throwError "The indexer health check has failed"
+    unless (Store.healthSynced health) $
+        throwError "The indexer is not synced on this network"
+    
+
+-- Haskeline Helpers --
 
 askInputLineHidden :: String -> IO String
 askInputLineHidden msg = do

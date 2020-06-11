@@ -53,13 +53,13 @@ encodeJsonPrettyLn =
 {- Haskoin helper functions -}
 
 data Page = Page
-    { pageOffset :: !Natural
-    , pageLimit  :: !Natural
+    { pageLimit  :: !Natural
+    , pageOffset :: !Natural
     }
     deriving (Eq, Show)
 
 toPage :: Page -> [a] -> [a]
-toPage (Page offset limit) xs =
+toPage (Page limit offset) xs =
     take (fromIntegral limit) $ drop (fromIntegral offset) xs
 
 liftExcept :: MonadError String m => ExceptT Store.Except m a -> m a

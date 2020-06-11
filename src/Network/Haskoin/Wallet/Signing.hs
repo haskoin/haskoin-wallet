@@ -50,40 +50,37 @@ buildTxSignData ::
     -> m (TxSignData, Commit AccountStore)
 buildTxSignData store rcpts feeByte dust rcptPay
     | null rcpts = throwError "No recipients provided"
-    | otherwise = do
-        net <- network
-        acc <- liftEither $ accountStoreAccount store
-        allCoins <-
-            liftExcept $
-            apiBatch
-                20
-                def {configNetwork = net}
-                (GetAddrsUnspent (Map.keys walletAddrMap) def)
-        gen <- liftIO newStdGen
-        (tx, pickedCoins) <-
-            liftEither $
-            buildWalletTx net gen rcpts change allCoins feeByte dust rcptPay
-        (inDerivs, outDerivs') <-
-            liftEither $ getDerivs pickedCoins rcpts walletAddrMap
-        let noChange = length (txOut tx) == length rcpts
-            outDerivs =
-                if noChange
-                    then outDerivs'
-                    else changeDeriv : outDerivs'
-        -- Get dependant transactions
-        let depTxHash = outPointHash . prevOutput <$> txIn tx
-        depTxsRaw <-
-            liftExcept $
-            apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
-        let depTxs = Store.getRawResultList depTxsRaw
-        return
-            ( TxSignData tx depTxs inDerivs outDerivs acc False net
-            , if noChange
-                  then NoCommit store -- No change address was used
-                  else newStore)
-  where
-    walletAddrMap = storeAddressMap store
-    ((change, changeDeriv), newStore) = runAccountStore store genIntAddress
+    | otherwise =
+        flip runAccountStoreT store $ do
+            net <- network
+            acc <- liftEither . accountStoreAccount =<< get
+            walletAddrMap <- gets storeAddressMap
+            allCoins <-
+                liftExcept $
+                apiBatch
+                    20
+                    def {configNetwork = net}
+                    (GetAddrsUnspent (Map.keys walletAddrMap) def)
+            (change, changeDeriv) <- genIntAddress
+            gen <- liftIO newStdGen
+            (tx, pickedCoins) <-
+                liftEither $
+                buildWalletTx net gen rcpts change allCoins feeByte dust rcptPay
+            (inDerivs, outDerivs') <-
+                liftEither $ getDerivs pickedCoins rcpts walletAddrMap
+            let noChange = length (txOut tx) == length rcpts
+                outDerivs =
+                    if noChange
+                        then outDerivs'
+                        else changeDeriv : outDerivs'
+            -- Get dependant transactions
+            let depTxHash = outPointHash . prevOutput <$> txIn tx
+            depTxsRaw <-
+                liftExcept $
+                apiBatch 20 def {configNetwork = net} (GetTxsRaw depTxHash)
+            let depTxs = Store.getRawResultList depTxsRaw
+            when noChange $ put store -- Rollback store changes
+            return $ TxSignData tx depTxs inDerivs outDerivs acc False net
 
 buildWalletTx ::
        Network
@@ -241,7 +238,7 @@ buildSweepTxs net gen store allCoins feeByte dust =
     flip evalState gen $
     retryEither 10 $ do
         shuffledCoins <- randomShuffle allCoins
-        runExceptT $ runAccountStoreT store $ go shuffledCoins []
+        runExceptT $ runAccountStoreT (go shuffledCoins []) store
   where
     go [] acc = return acc
     go coins acc = do

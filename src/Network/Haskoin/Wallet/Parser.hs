@@ -42,6 +42,9 @@ data Command
           , commandNewName :: !Text
           }
     | CommandAccounts
+    | CommandResetAcc
+          { commandMaybeAcc :: !(Maybe Text)
+          }
     | CommandBalance
           { commandMaybeAcc :: !(Maybe Text)
           }
@@ -128,6 +131,7 @@ commandParser =
             [ commandGroup "Utilities"
             , command "preparesweep" prepareSweepParser
             , command "signsweep" signSweepParser
+            , command "resetacc" resetAccParser
             ]
         ]
 
@@ -173,11 +177,16 @@ balanceParser =
     info (CommandBalance <$> accountOption) $
     mconcat [progDesc "Get the account balance"]
 
+resetAccParser :: ParserInfo Command
+resetAccParser =
+    info (CommandResetAcc <$> accountOption) $
+    mconcat [progDesc "Reset the external and internal derivation indices"]
+
 addressesParser :: ParserInfo Command
 addressesParser =
     info
         (CommandAddresses <$> accountOption
-                          <*> (Page <$> offsetOption <*> limitOption)) $
+                          <*> (Page <$> limitOption <*> offsetOption)) $
     mconcat [progDesc "List the latest receiving addresses in the account"]
 
 receiveParser :: ParserInfo Command
@@ -189,7 +198,7 @@ transactionsParser :: ParserInfo Command
 transactionsParser =
     info
         (CommandTransactions <$> accountOption
-                             <*> (Page <$> offsetOption <*> limitOption)) $
+                             <*> (Page <$> limitOption <*> offsetOption)) $
     mconcat [progDesc "Display the transactions in an account"]
 
 prepareTxParser :: ParserInfo Command
