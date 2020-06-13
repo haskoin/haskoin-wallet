@@ -5,19 +5,12 @@
 
 packages:
 - completed:
-    hackage: haskoin-core-0.13.6@sha256:a16dc3cb38fd8cad6aab309cefd34686880f255a6f006f3fa4a3f25379d4b765,5797
+    hackage: murmur3-1.0.4@sha256:a0038867cb80b5bb3e400b57da7af501c3e2b5583792eb7ed6d69862817d118c,2002
     pantry-tree:
-      size: 4720
-      sha256: b6fe74664d4766366832c4f00e47cbdfae5801a9cd6798203813c71c801409f1
+      size: 336
+      sha256: e9bf315f04a73c1565b578280070b7027b715eb6240469acee2a4ea7851fb797
   original:
-    hackage: haskoin-core-0.13.6
-- completed:
-    hackage: murmur3-1.0.3@sha256:e6c97f0b43a7882c4509d1993c347f0dc540e03b90014da63623f1054bb4d2c8,1873
-    pantry-tree:
-      size: 338
-      sha256: ff5d2f29b96d321c3aa32f7f88bf57e96e869e340a20f326d9876d483ed4371f
-  original:
-    hackage: murmur3-1.0.3
+    hackage: murmur3-1.0.4
 - completed:
     hackage: ansi-terminal-0.10.3@sha256:e2fbcef5f980dc234c7ad8e2fa433b0e8109132c9e643bc40ea5608cd5697797,3226
     pantry-tree:
@@ -33,15 +26,15 @@ packages:
   original:
     hackage: parsec-extra-0.2.0.0
 - completed:
-    hackage: secp256k1-haskell-0.2.1@sha256:f923d9b68c822f4bd21c559e024607672e43d37f466f881f11c192c51ac94ba2,2342
+    hackage: secp256k1-haskell-0.2.4@sha256:bf265758aee92ff813fd8cdf1dd8a7865deea8f452f666868694127da4f67bb7,2640
     pantry-tree:
-      size: 603
-      sha256: f0b9d9a08430dcff34bd3b543e68ecc52297bb13ea652511d454f1d25a104b46
+      size: 601
+      sha256: 0b42588cda4130d4216fd10b72a06f42c0d8c77d9d9c36b6029d303c2f0ea238
   original:
-    hackage: secp256k1-haskell-0.2.1
+    hackage: secp256k1-haskell-0.2.4
 snapshots:
 - completed:
-    size: 494638
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/15/11.yaml
-    sha256: 5747328cdcbb8fe9c96fc048b5566167c80dd176a41b52d3b363058e3cc1dc5d
-  original: lts-15.11
+    size: 531237
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/16/0.yaml
+    sha256: 210e15b7043e2783115afe16b0d54914b1611cdaa73f3ca3ca7f8e0847ff54e5
+  original: lts-16.0

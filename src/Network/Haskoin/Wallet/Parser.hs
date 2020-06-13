@@ -382,8 +382,10 @@ accountArg desc =
 
 accountCompleter :: String -> IO [String]
 accountCompleter pref = do
-    keys <- either (const []) id <$> runExceptT accountMapKeys
+    keys <- either (const []) id <$> run
     return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
+  where
+    run = runExceptT $ withAccountMap accountMapKeys
 
 recipientArg :: Parser (Text, Text)
 recipientArg =

@@ -131,9 +131,10 @@ data Response
           , responseUnsignedTxs :: ![UnsignedTxInfo]
           }
     | ResponseSignSweep
-          { responseTxFiles      :: ![Text]
+          { responseAccountName  :: !Text
+          , responseAccount      :: !AccountStore
+          , responseTxFiles      :: ![Text]
           , responseTransactions :: ![TxInfo]
-          , responseNetwork      :: !Network
           }
     deriving (Eq, Show)
 
@@ -276,14 +277,15 @@ instance Json.ToJSON Response where
                             , "unsignedtxs" .= tsJ
                             ]
                     Left err -> jsonError err
-            ResponseSignSweep fs ts net ->
-                case mapM (txInfoToJSON net) ts of
+            ResponseSignSweep n a fs ts ->
+                case mapM (txInfoToJSON (accountStoreNetwork a)) ts of
                     Right tsJ ->
                         object
                             [ "type" .= Json.String "signsweep"
+                            , "accountname" .= n
+                            , "account" .= a
                             , "txfiles" .= fs
                             , "transactions" .= tsJ
-                            , "network" .= getNetworkName net
                             ]
                     Left err -> jsonError err
 
@@ -381,10 +383,12 @@ instance Json.FromJSON Response where
                     ts <- mapM g =<< o .: "unsignedtxs"
                     return $ ResponsePrepareSweep n a fs ts
                 "signsweep" -> do
-                    net <- maybe mzero return . netByName =<< o .: "network"
+                    n <- o .: "accountname"
+                    a <- o .: "account"
                     fs <- o .: "txfiles"
-                    ts <- mapM (txInfoParseJSON net) =<< o .: "transactions"
-                    return $ ResponseSignSweep fs ts net
+                    let f = txInfoParseJSON (accountStoreNetwork a)
+                    ts <- mapM f =<< o .: "transactions"
+                    return $ ResponseSignSweep n a fs ts
                 _ -> fail "Invalid JSON response type"
 
 data AccountBalance =
@@ -489,13 +493,15 @@ importAcc :: FilePath -> Text -> IO Response
 importAcc fp name =
     catchResponseError $ do
         PubKeyDoc xpub net <- readJsonFile fp
-        let store = newAccountStore net xpub
-        insertAccountStore name store
-        return $ ResponseImportAcc name store
+        let store = emptyAccountStore net xpub
+        withAccountMap $ do
+            insertAccountStore name store
+            return $ ResponseImportAcc name store
 
 renameAcc :: Text -> Text -> IO Response
 renameAcc oldName newName =
-    catchResponseError $ do
+    catchResponseError $
+    withAccountMap $ do
         store <- renameAccountStore oldName newName
         return $ ResponseRenameAcc oldName newName store
 
@@ -504,37 +510,39 @@ accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
 
 balance :: Maybe Text -> IO Response
 balance accM =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
-        let net = accountStoreNetwork store
-            allAddrs = extAddresses store <> intAddresses store
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        net <- gets accountStoreNetwork
+        addrMap <- gets storeAddressMap
         checkHealth net
-        let req =GetAddrsBalance (fst <$> allAddrs)
+        let req =GetAddrsBalance (Map.keys addrMap)
         bals <- liftExcept $ apiCall def {configNetwork = net} req
+        store <- get
         return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
 addresses :: Maybe Text -> Page -> IO Response
 addresses accM page =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        store <- get
         let addrs = toPage page $ reverse $ extAddresses store
         return $ ResponseAddresses storeName store addrs
 
 receive :: Maybe Text -> IO Response
 receive accM =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
-        let (addr, store') = runAccountStore genExtAddress store
-        newStore <- commit storeName store'
-        return $ ResponseReceive storeName newStore addr
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        addr <- genExtAddress
+        store <- get
+        return $ ResponseReceive storeName store addr
 
 transactions :: Maybe Text -> Page -> IO Response
 transactions accM page =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
-        let net = accountStoreNetwork store
-            allAddrs = extAddresses store <> intAddresses store
-            addrMap = Map.fromList allAddrs
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        net <- gets accountStoreNetwork
+        addrMap <- gets storeAddressMap
+        let allAddrs = Map.keys addrMap
         checkHealth net
         best <-
             Store.blockDataHeight <$>
@@ -545,7 +553,7 @@ transactions accM page =
             apiBatch
                 20
                 def {configNetwork = net}
-                (GetAddrsTxs (fst <$> allAddrs) def {paramLimit = Just 100})
+                (GetAddrsTxs allAddrs def {paramLimit = Just 100})
         let sortedRefs = Store.txRefHash <$> sortDesc txRefs
         txs <-
             liftExcept $
@@ -554,6 +562,7 @@ transactions accM page =
                 def {configNetwork = net}
                 (GetTxs (toPage page sortedRefs))
         let txInfos = toTxInfo addrMap (fromIntegral best) <$> txs
+        store <- get
         return $ ResponseTransactions storeName store txInfos
 
 prepareTx ::
@@ -565,20 +574,17 @@ prepareTx ::
     -> Bool
     -> IO Response
 prepareTx rcpTxt accM unit feeByte dust rcptPay =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
-        let net = accountStoreNetwork store
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        net <- gets accountStoreNetwork
+        pub <- gets accountStoreXPubKey
         rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
         checkHealth net
-        withNetwork net $ do
-            (signDat, commitStore) <-
-                buildTxSignData store rcpts feeByte dust rcptPay
-            path <- liftIO $ writeDoc TxFolder signDat
-            txInfoU <-
-                liftEither $
-                parseTxSignData net (accountStoreXPubKey store) signDat
-            newStore <- commit storeName commitStore
-            return $ ResponsePrepareTx storeName newStore (cs path) txInfoU
+        signDat <- buildTxSignData net rcpts feeByte dust rcptPay
+        path <- liftIO $ writeDoc TxFolder signDat
+        txInfoU <- liftEither $ parseTxSignData net pub signDat
+        store <- get
+        return $ ResponsePrepareTx storeName store (cs path) txInfoU
 
 toRecipient ::
        Network
@@ -610,8 +616,8 @@ cmdReview :: FilePath -> IO Response
 cmdReview fp =
     catchResponseError $ do
         tsd@(TxSignData tx _ _ _ acc signed net) <- readJsonFile fp
-        withNetwork net $ do
-            (storeName, store) <- getAccountStoreByDeriv acc
+        withAccountMap $ do
+            (storeName, store) <- getAccountStoreByDeriv net acc
             let pub = accountStoreXPubKey store
             txInfoU <- liftEither $ parseTxSignData net pub tsd
             let txInfo = unsignedToTxInfo tx txInfoU
@@ -626,8 +632,8 @@ cmdSendTx fp =
         tsd@(TxSignData signedTx _ _ _ acc signed net) <- readJsonFile fp
         unless signed $ throwError "The transaction is not signed"
         checkHealth net
-        withNetwork net $ do
-            (storeName, store) <- getAccountStoreByDeriv acc
+        withAccountMap $ do
+            (storeName, store) <- getAccountStoreByDeriv net acc
             let pub = accountStoreXPubKey store
             txInfoU <- liftEither $ parseTxSignData net pub tsd
             let txInfo = unsignedToTxInfo signedTx txInfoU
@@ -643,9 +649,10 @@ prepareSweep ::
     -> Natural
     -> IO Response
 prepareSweep addrsTxt fileM accM feeByte dust =
-    catchResponseError $ do
-        (storeName, store) <- getAccountStore accM
-        let net = accountStoreNetwork store
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        net <- gets accountStoreNetwork
+        pub <- gets accountStoreXPubKey
         addrsArg <- liftEither $ mapM (textToAddrE net) addrsTxt
         addrsFile <-
             case fileM of
@@ -653,25 +660,20 @@ prepareSweep addrsTxt fileM accM feeByte dust =
                 _ -> return []
         let addrs = addrsArg <> addrsFile
         checkHealth net
-        withNetwork net $ do
-            (signDats, commitStore) <-
-                buildSweepSignData store addrs feeByte dust
-            let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
-            !txInfosU <-
-                liftEither $
-                mapM (parseTxSignData net (accountStoreXPubKey store)) signDats
-            paths <- liftIO $ mapM (writeDoc (SweepFolder chksum)) signDats
-            newStore <- commit storeName commitStore
-            return $
-                ResponsePrepareSweep storeName newStore (cs <$> paths) txInfosU
+        signDats <- buildSweepSignData net addrs feeByte dust
+        let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
+        !txInfosU <- liftEither $ mapM (parseTxSignData net pub) signDats
+        paths <- liftIO $ mapM (writeDoc (SweepFolder chksum)) signDats
+        store <- get
+        return $ ResponsePrepareSweep storeName store (cs <$> paths) txInfosU
 
 signSweep :: FilePath -> FilePath -> Maybe Text -> IO Response
 signSweep sweepDir keyFile accM =
-    catchResponseError $ do
-        (_, store) <- getAccountStore accM
-        let pubKey = accountStoreXPubKey store
-            net = accountStoreNetwork store
-        acc <- liftEither $ accountStoreAccount store
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        pubKey <- gets accountStoreXPubKey
+        net <- gets accountStoreNetwork
+        acc <- liftEither =<< gets accountStoreAccount
         sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
         tsds <- mapM readJsonFile sweepFiles
         when (null tsds) $ throwError "No sweep transactions to sign"
@@ -689,42 +691,41 @@ signSweep sweepDir keyFile accM =
             forM signRes $ \(newTsd, txInfo) -> do
                 path <- liftIO $ writeDoc (SweepFolder chksum) newTsd
                 return (path, txInfo)
-        return $ ResponseSignSweep (cs . fst <$> res) (snd <$> res) net
+        store <- get
+        return $
+            ResponseSignSweep storeName store (cs . fst <$> res) (snd <$> res)
   where
     valid acc net tsd =
         txSignDataAccount tsd == acc && txSignDataNetwork tsd == net
 
 resetAccount :: Maybe Text -> IO Response
 resetAccount accM =
-    catchResponseError $ do
-    (storeName, store) <- getAccountStore accM
-    newStore <- commit storeName =<< resetAccount_ store
-    return $ ResponseResetAcc storeName newStore
+    catchResponseError $
+    withAccountStore accM $ \storeName -> do
+        updateAccountIndices
+        store <- get
+        return $ ResponseResetAcc storeName store
 
-resetAccount_ ::
-       (MonadError String m, MonadIO m)
-    => AccountStore
-    -> m (Commit AccountStore)
-resetAccount_ =
-    execAccountStoreT $ do
-        net <- gets accountStoreNetwork
-        pub <- gets accountStoreXPubKey
-        checkHealth net
-        e <- go net pub extDeriv 0 (Page 20 0)
-        i <- go net pub intDeriv 0 (Page 20 0)
-        modify $ \s -> s {accountStoreExternal = e, accountStoreInternal = i}
-        return ()
+updateAccountIndices ::
+       (MonadError String m, MonadIO m, MonadState AccountStore m) => m ()
+updateAccountIndices = do
+    net <- gets accountStoreNetwork
+    pub <- gets accountStoreXPubKey
+    checkHealth net
+    e <- go net pub extDeriv 0 (Page 20 0)
+    i <- go net pub intDeriv 0 (Page 20 0)
+    modify $ \s -> s {accountStoreExternal = e, accountStoreInternal = i}
   where
     go net pub deriv d page@(Page lim off) = do
-        let addrs = addrsDerivPage_ deriv page pub
+        let addrs = addrsDerivPage deriv page pub
             req = GetAddrsBalance $ fst <$> addrs
-        bals <- liftExcept $ apiCall def{configNetwork = net} req
+        bals <- liftExcept $ apiCall def {configNetwork = net} req
         let vBals = filter ((/= 0) . Store.balanceTxCount) bals
         if null vBals
             then return d
             else do
                 let d' = findMax addrs $ Store.balanceAddress <$> vBals
-                go net pub deriv (d'+1) (Page lim (off + lim))
+                go net pub deriv (d' + 1) (Page lim (off + lim))
     findMax :: [(Address, SoftPath)] -> [Address] -> Natural
     findMax addrs balAddrs =
         let fAddrs = filter ((`elem` balAddrs) . fst) addrs

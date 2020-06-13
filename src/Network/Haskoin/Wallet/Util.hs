@@ -26,14 +26,6 @@ import qualified Haskoin.Store.Data       as Store
 import           Haskoin.Util
 import           Numeric.Natural
 
-type NetworkT = ReaderT Network
-
-network :: MonadReader Network m => m Network
-network = ask
-
-withNetwork :: Monad m => Network -> NetworkT m a -> m a
-withNetwork net m = runReaderT m net
-
 {- Data.Aeson Compatibility -}
 
 encodeJsonPretty :: JSON.ToJSON a => a -> BS.ByteString

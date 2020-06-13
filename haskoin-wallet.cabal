@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 88a46209a5e8b3f0c5b1e62fbe5c1bd83141e73bac05a89321ac75514d25afb6
+-- hash: 7ab396a15c203f86bc494bf8a702a2c8a20e9c1f9e8fa0176bcd1dcaa41d5cdf
 
 name:           haskoin-wallet
 version:        0.6.0
@@ -33,35 +33,35 @@ library
       src
   ghc-options: -Wall
   build-depends:
-      Decimal
-    , aeson
-    , aeson-pretty
-    , ansi-terminal
-    , base >=4.7 && <5
-    , base16-bytestring
-    , base64-bytestring
-    , bytestring
-    , cereal
-    , containers
-    , data-default
-    , directory
-    , entropy
-    , haskeline
-    , haskoin-core
-    , haskoin-store-data
-    , http-types
-    , lens
-    , lens-aeson
-    , mtl
-    , optparse-applicative
-    , pretty
-    , random
-    , string-conversions
-    , text
-    , tostring
-    , transformers
-    , unordered-containers
-    , wreq
+      Decimal >=0.5.1
+    , aeson >=1.4.6.0
+    , aeson-pretty >=0.8.8
+    , ansi-terminal >=0.10.3
+    , base >=4.9 && <5
+    , base16-bytestring >=0.1.1.6
+    , base64-bytestring >=1.0.0.3
+    , bytestring >=0.10.10.0
+    , cereal >=0.5.8.1
+    , containers >=0.6.2.1
+    , data-default >=0.7.1.1
+    , directory >=1.3.6.0
+    , entropy >=0.4.1.6
+    , haskeline >=0.7.5.0
+    , haskoin-core >=0.13.7
+    , haskoin-store-data >=0.30.2
+    , http-types >=0.12.3
+    , lens >=4.18.1
+    , lens-aeson >=1.1
+    , mtl >=2.2.2
+    , optparse-applicative >=0.15.1.0
+    , pretty >=1.1.3.6
+    , random >=1.1
+    , string-conversions >=0.4.0.1
+    , text >=1.2.4.0
+    , tostring >=0.2.1.1
+    , transformers >=0.5.6.2
+    , unordered-containers >=0.2.10.0
+    , wreq >=0.5.3.2
   exposed-modules:
       Network.Haskoin.Wallet
       Network.Haskoin.Wallet.AccountStore
@@ -81,29 +81,86 @@ executable hw
   main-is: Main.hs
   hs-source-dirs:
       app
-  ghc-options: -Wall -rtsopts -threaded
+  ghc-options: -Wall
   build-depends:
-      base >=4.7 && <5
-    , haskoin-wallet
+      Decimal >=0.5.1
+    , aeson >=1.4.6.0
+    , aeson-pretty >=0.8.8
+    , ansi-terminal >=0.10.3
+    , base >=4.9 && <5
+    , base16-bytestring >=0.1.1.6
+    , base64-bytestring >=1.0.0.3
+    , bytestring >=0.10.10.0
+    , cereal >=0.5.8.1
+    , containers >=0.6.2.1
+    , data-default >=0.7.1.1
+    , directory >=1.3.6.0
+    , entropy >=0.4.1.6
+    , haskeline >=0.7.5.0
+    , haskoin-core >=0.13.7
+    , haskoin-store-data >=0.30.2
+    , haskoin-wallet ==0.6.0
+    , http-types >=0.12.3
+    , lens >=4.18.1
+    , lens-aeson >=1.1
+    , mtl >=2.2.2
+    , optparse-applicative >=0.15.1.0
+    , pretty >=1.1.3.6
+    , random >=1.1
+    , string-conversions >=0.4.0.1
+    , text >=1.2.4.0
+    , tostring >=0.2.1.1
+    , transformers >=0.5.6.2
+    , unordered-containers >=0.2.10.0
+    , wreq >=0.5.3.2
   other-modules:
       Paths_haskoin_wallet
   default-language: Haskell2010
 
-test-suite test-haskoin-wallet
+test-suite spec
   type: exitcode-stdio-1.0
   main-is: Spec.hs
+  other-modules:
+      Network.Haskoin.Wallet.AccountStoreSpec
+      Network.Haskoin.Wallet.AmountsSpec
+      Network.Haskoin.Wallet.TestUtils
+      Paths_haskoin_wallet
   hs-source-dirs:
       test
   ghc-options: -Wall
   build-depends:
-      HUnit >=1.6.0.0
+      Decimal >=0.5.1
+    , HUnit >=1.6.0.0
     , QuickCheck >=2.13.2
-    , base >=4.7 && <5
+    , aeson >=1.4.6.0
+    , aeson-pretty >=0.8.8
+    , ansi-terminal >=0.10.3
+    , base >=4.9 && <5
+    , base16-bytestring >=0.1.1.6
+    , base64-bytestring >=1.0.0.3
+    , bytestring >=0.10.10.0
+    , cereal >=0.5.8.1
+    , containers >=0.6.2.1
+    , data-default >=0.7.1.1
+    , directory >=1.3.6.0
+    , entropy >=0.4.1.6
+    , haskeline >=0.7.5.0
+    , haskoin-core >=0.13.7
+    , haskoin-store-data >=0.30.2
     , haskoin-wallet ==0.6.0
     , hspec >=2.7.1
-  other-modules:
-      Network.Haskoin.Wallet.Arbitrary
-      Network.Haskoin.Wallet.Spec
-      Paths_haskoin_wallet
+    , http-types >=0.12.3
+    , lens >=4.18.1
+    , lens-aeson >=1.1
+    , mtl >=2.2.2
+    , optparse-applicative >=0.15.1.0
+    , pretty >=1.1.3.6
+    , random >=1.1
+    , string-conversions >=0.4.0.1
+    , text >=1.2.4.0
+    , tostring >=0.2.1.1
+    , transformers >=0.5.6.2
+    , unordered-containers >=0.2.10.0
+    , wreq >=0.5.3.2
   default-language: Haskell2010
   build-tool-depends: hspec-discover:hspec-discover
