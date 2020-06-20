@@ -30,12 +30,12 @@ data Command
           , commandEntropy :: !Natural
           }
     | CommandCreateAcc
-          { commandNetwork    :: !Network
-          , commandDerivation :: !Natural
+          { commandName       :: !Text
+          , commandNetwork    :: !Network
+          , commandDerivation :: !(Maybe Natural)
           }
     | CommandImportAcc
           { commandFilePath :: !FilePath
-          , commandAccount  :: !Text
           }
     | CommandRenameAcc
           { commandOldName :: !Text
@@ -145,7 +145,10 @@ mnemonicParser =
 
 createAccParser :: ParserInfo Command
 createAccParser =
-    info (CommandCreateAcc <$> networkOption <*> derivationOption) $
+    info (CommandCreateAcc
+              <$> textArg "Name of the new account"
+              <*> networkOption
+              <*> derivationOption) $
     mconcat
         [ progDesc "Create a new account from a mnemonic"
         , footer "Next command: importacc"
@@ -154,8 +157,7 @@ createAccParser =
 importAccParser :: ParserInfo Command
 importAccParser =
     info
-        (CommandImportAcc <$> fileArgument "Path of the account file"
-                          <*> textArg "Name of the new account") $
+        (CommandImportAcc <$> fileArgument "Path of the account file") $
     mconcat
         [ progDesc "Import an account file into the wallet"
         , footer "Next command: receive"
@@ -326,16 +328,14 @@ entropyOption =
         | s `elem` valid = fromIntegral <$> readNatural (cs s)
         | otherwise = Nothing
 
-derivationOption :: Parser Natural
+derivationOption :: Parser (Maybe Natural)
 derivationOption =
-    option (maybeReader $ readNatural . cs) $
+    optional $ option (maybeReader $ readNatural . cs) $
     mconcat
         [ short 'd'
         , long "derivation"
         , help "Specify a different bip44 account derivation"
         , metavar "NATURAL"
-        , value 0
-        , showDefault
         ]
 
 networkOption :: Parser Network

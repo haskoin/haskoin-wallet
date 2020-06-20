@@ -5,6 +5,30 @@
 
 packages:
 - completed:
+    size: 288620
+    url: https://github.com/haskoin/haskoin-core/archive/6c3fdcf771fc92e7e5c2c7da62d6988447d0c4f6.tar.gz
+    name: haskoin-core
+    version: 0.14.1
+    sha256: 787a8afc0f6fe773e2f7a4fa75904785ac6a6692a4b89224cc73306f3beb0023
+    pantry-tree:
+      size: 5370
+      sha256: c8a377f7050cd636fa211a813999a885249c17d64b25230099bf8a9d0c0cbc00
+  original:
+    url: https://github.com/haskoin/haskoin-core/archive/6c3fdcf771fc92e7e5c2c7da62d6988447d0c4f6.tar.gz
+- completed:
+    size: 94640
+    subdir: data
+    url: https://github.com/haskoin/haskoin-store/archive/77fdf2170b17674221d3f782def14217ca0f4a5a.tar.gz
+    name: haskoin-store-data
+    version: 0.32.2
+    sha256: e1faaf6b4d75f39a9879379fe87a8472138b0f864c76c3fb13d05975e79b97d3
+    pantry-tree:
+      size: 623
+      sha256: 4259a7bc5832570aeb78b2cca7674d9bcd33d6d0bb67d2134f5495a723ae6637
+  original:
+    subdir: data
+    url: https://github.com/haskoin/haskoin-store/archive/77fdf2170b17674221d3f782def14217ca0f4a5a.tar.gz
+- completed:
     hackage: murmur3-1.0.4@sha256:a0038867cb80b5bb3e400b57da7af501c3e2b5583792eb7ed6d69862817d118c,2002
     pantry-tree:
       size: 336
@@ -26,12 +50,12 @@ packages:
   original:
     hackage: parsec-extra-0.2.0.0
 - completed:
-    hackage: secp256k1-haskell-0.2.4@sha256:bf265758aee92ff813fd8cdf1dd8a7865deea8f452f666868694127da4f67bb7,2640
+    hackage: secp256k1-haskell-0.3.0@sha256:0dc91562e4fa5b6090ad6025a73920058190776fb714980f44a9c7c4513f60f1,1900
     pantry-tree:
-      size: 601
-      sha256: 0b42588cda4130d4216fd10b72a06f42c0d8c77d9d9c36b6029d303c2f0ea238
+      size: 600
+      sha256: 11f66cd618c45519b1bd88470df0482ec10d8732d4abc6b159ea1cc5c67cc22f
   original:
-    hackage: secp256k1-haskell-0.2.4
+    hackage: secp256k1-haskell-0.3.0
 snapshots:
 - completed:
     size: 531237

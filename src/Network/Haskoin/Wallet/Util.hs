@@ -63,11 +63,11 @@ liftExcept action = do
 
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
-    maybeToEither "Invalid Address in addrToStringE" (addrToString net a)
+    maybeToEither "Invalid Address in addrToStringE" (addrToText net a)
 
 textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
-    maybeToEither "Invalid Address in stringToAddrE" (stringToAddr net a)
+    maybeToEither "Invalid Address in stringToAddrE" (textToAddr net a)
 
 addrToText2 :: Network -> (Address, v) -> Either String (Text, v)
 addrToText2 net (a, v) = (,v) <$> addrToTextE net a

@@ -60,10 +60,9 @@ data Response
           , responseMnemonic      :: ![Text]
           }
     | ResponseCreateAcc
-          { responsePubKey     :: !XPubKey
-          , responseDerivation :: !HardPath
+          { responseAccountName :: !Text
+          , responseAccount     :: !AccountStore
           , responsePubKeyFile :: !Text
-          , responseNetwork    :: !Network
           }
     | ResponseImportAcc
           { responseAccountName :: !Text
@@ -151,13 +150,12 @@ instance Json.ToJSON Response where
                     , "entropysource" .= e
                     , "mnemonic" .= w
                     ]
-            ResponseCreateAcc p d f net ->
+            ResponseCreateAcc n a f ->
                 object
                     [ "type" .= Json.String "createacc"
-                    , "pubkey" .= xPubToJSON net p
-                    , "derivation" .= d
+                    , "accountname" .= n
+                    , "account" .= a
                     , "pubkeyfile" .= f
-                    , "network" .= getNetworkName net
                     ]
             ResponseImportAcc n a ->
                 object
@@ -300,11 +298,10 @@ instance Json.FromJSON Response where
                     m <- o .: "mnemonic"
                     return $ ResponseMnemonic e m
                 "createacc" -> do
-                    net <- maybe mzero return . netByName =<< o .: "network"
-                    p <- xPubFromJSON net =<< o .: "pubkey"
-                    d <- o .: "derivation"
+                    n <- o .: "accountname"
+                    a <- o .: "account"
                     f <- o .: "pubkeyfile"
-                    return $ ResponseCreateAcc p d f net
+                    return $ ResponseCreateAcc n a f
                 "importacc" -> do
                     n <- o .: "accountname"
                     a <- o .: "account"
@@ -438,8 +435,8 @@ commandResponse :: Command -> IO Response
 commandResponse =
     \case
         CommandMnemonic d e -> mnemonic d e
-        CommandCreateAcc n d -> createAcc n d
-        CommandImportAcc f k -> importAcc f k
+        CommandCreateAcc t n dM -> createAcc t n dM
+        CommandImportAcc f -> importAcc f
         CommandRenameAcc old new -> renameAcc old new
         CommandAccounts -> accounts
         CommandBalance accM -> balance accM
@@ -475,24 +472,27 @@ askDiceRolls ent = do
         throwError "Dice rolls do not match"
     return roll1
 
-createAcc :: Network -> Natural -> IO Response
-createAcc net deriv =
-    catchResponseError $ do
-        prvKey <- askSigningKey net deriv
+createAcc :: Text -> Network -> Maybe Natural -> IO Response
+createAcc name net derivM =
+    catchResponseError $
+    withAccountMap $ do
+        d <- maybe nextAccountDeriv return derivM
+        prvKey <- lift $ askSigningKey net d
         let xpub = deriveXPubKey prvKey
-        path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net
+            store = emptyAccountStore net xpub
+        path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net name
+        insertAccountStore name store
         return $
             ResponseCreateAcc
-                { responsePubKey = xpub
-                , responseDerivation = bip44Deriv net deriv
+                { responseAccountName = name
+                , responseAccount = store
                 , responsePubKeyFile = cs path
-                , responseNetwork = net
                 }
 
-importAcc :: FilePath -> Text -> IO Response
-importAcc fp name =
+importAcc :: FilePath -> IO Response
+importAcc fp =
     catchResponseError $ do
-        PubKeyDoc xpub net <- readJsonFile fp
+        PubKeyDoc xpub net name <- liftEither =<< liftIO (readJsonFile fp)
         let store = emptyAccountStore net xpub
         withAccountMap $ do
             insertAccountStore name store
@@ -506,7 +506,10 @@ renameAcc oldName newName =
         return $ ResponseRenameAcc oldName newName store
 
 accounts :: IO Response
-accounts = catchResponseError $ ResponseAccounts <$> readAccountMap
+accounts =
+    catchResponseError $ do
+        accMap <- liftEither =<< liftIO readAccountMap
+        return $ ResponseAccounts accMap
 
 balance :: Maybe Text -> IO Response
 balance accM =
@@ -604,7 +607,7 @@ cmdSignTx ::
     -> IO Response
 cmdSignTx fp =
     catchResponseError $ do
-        txSignData <- readJsonFile fp
+        txSignData <- liftEither =<< liftIO (readJsonFile fp)
         let net = txSignDataNetwork txSignData
             acc = txSignDataAccount txSignData
         prvKey <- askSigningKey net acc
@@ -615,7 +618,8 @@ cmdSignTx fp =
 cmdReview :: FilePath -> IO Response
 cmdReview fp =
     catchResponseError $ do
-        tsd@(TxSignData tx _ _ _ acc signed net) <- readJsonFile fp
+        tsd@(TxSignData tx _ _ _ acc signed net) <-
+            liftEither =<< liftIO (readJsonFile fp)
         withAccountMap $ do
             (storeName, store) <- getAccountStoreByDeriv net acc
             let pub = accountStoreXPubKey store
@@ -629,7 +633,8 @@ cmdReview fp =
 cmdSendTx :: FilePath -> IO Response
 cmdSendTx fp =
     catchResponseError $ do
-        tsd@(TxSignData signedTx _ _ _ acc signed net) <- readJsonFile fp
+        tsd@(TxSignData signedTx _ _ _ acc signed net) <-
+            liftEither =<< liftIO (readJsonFile fp)
         unless signed $ throwError "The transaction is not signed"
         checkHealth net
         withAccountMap $ do
@@ -675,7 +680,7 @@ signSweep sweepDir keyFile accM =
         net <- gets accountStoreNetwork
         acc <- liftEither =<< gets accountStoreAccount
         sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
-        tsds <- mapM readJsonFile sweepFiles
+        tsds <- mapM (liftEither <=< liftIO . readJsonFile) sweepFiles
         when (null tsds) $ throwError "No sweep transactions to sign"
         unless (all (valid acc net) tsds) $
             throwError "Transactions do not match account information"

@@ -80,8 +80,7 @@ toCommit old new =
 
 -- AccountMap State --
 
-commitAccountMap ::
-       (MonadIO m, MonadError String m) => Commit AccountMap -> m AccountMap
+commitAccountMap :: Commit AccountMap -> IO AccountMap
 commitAccountMap (NoCommit val) = return val
 commitAccountMap (Commit val) = do
     writeAccountMap val
@@ -105,9 +104,9 @@ execAccountMapT m origMap = do
 withAccountMap ::
        (MonadError String m, MonadIO m) => StateT AccountMap m a -> m a
 withAccountMap m = do
-    accMap <- readAccountMap
+    accMap <- liftEither =<< liftIO readAccountMap
     (res, c) <- runAccountMapT m accMap
-    _ <- commitAccountMap c
+    _ <- liftIO $ commitAccountMap c
     return res
 
 -- AccountMap IO --
@@ -117,27 +116,17 @@ accountMapFilePath = do
     dir <- hwDataDirectory Nothing
     return $ dir </> "bip44accounts.json"
 
-readAccountMap :: (MonadIO m, MonadError String m) => m AccountMap
+readAccountMap :: IO (Either String AccountMap)
 readAccountMap = do
-    fp <- liftIO accountMapFilePath
-    exists <- liftIO $ D.doesFileExist fp
+    fp <- accountMapFilePath
+    exists <- D.doesFileExist fp
     unless exists $ writeAccountMap Map.empty
     readJsonFile fp
 
-writeAccountMap :: (MonadIO m, MonadError String m) => AccountMap -> m ()
+writeAccountMap :: AccountMap -> IO ()
 writeAccountMap accMap = do
-    liftEither $ validAccountMap accMap
-    liftIO $ do
-        file <- accountMapFilePath
-        writeJsonFile file accMap
-
-validAccountMap :: AccountMap -> Either String ()
-validAccountMap accMap
-    | length (nub pubKeys) /= length pubKeys =
-      Left "Duplicate account public keys"
-    | otherwise = return ()
-  where
-    pubKeys = accountStoreXPubKey <$> Map.elems accMap
+    file <- accountMapFilePath
+    writeJsonFile file accMap
 
 -- AccountMap --
 
@@ -174,16 +163,31 @@ getAccountStoreByDeriv net acc = do
   where
     path = bip44Deriv net acc
 
+nextAccountDeriv :: (MonadState AccountMap m, MonadError String m) => m Natural
+nextAccountDeriv = do
+    accMap <- get
+    ds <- mapM (liftEither . accountStoreAccount) $ Map.elems accMap
+    return $ if null ds then 0 else maximum ds + 1
+
 alterAccountStore ::
-      (MonadState AccountMap m, MonadError String m)
+       (MonadState AccountMap m, MonadError String m)
     => Text
     -> (Maybe AccountStore -> Either String (Maybe AccountStore))
     -> m (Maybe AccountStore)
 alterAccountStore key f = do
     accMap <- get
     accM <- liftEither $ f (key `Map.lookup` accMap)
-    put $ Map.alter (const accM) key accMap
+    let newMap = Map.alter (const accM) key accMap
+    unless (validAccountMap newMap) $ 
+        throwError "Duplicate account public keys"
+    put newMap
     return accM
+
+validAccountMap :: AccountMap -> Bool
+validAccountMap accMap =
+    length (nub pubKeys) == length pubKeys
+  where
+    pubKeys = accountStoreXPubKey <$> Map.elems accMap
 
 insertAccountStore ::
        (MonadState AccountMap m, MonadError String m)

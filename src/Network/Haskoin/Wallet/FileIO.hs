@@ -46,6 +46,7 @@ class HasFilePath a where
 data PubKeyDoc = PubKeyDoc
     { documentPubKey  :: !XPubKey
     , documentNetwork :: !Network
+    , documentName    :: !Text
     }
     deriving (Eq, Show)
 
@@ -53,17 +54,21 @@ instance FromJSON PubKeyDoc where
     parseJSON =
         withObject "pubkeydocument" $ \o -> do
             net <- maybe mzero return . netByName =<< o .: "network"
-            PubKeyDoc <$> (xPubFromJSON net =<< o .: "xpubkey") <*> return net
+            PubKeyDoc
+                <$> (xPubFromJSON net =<< o .: "xpubkey")
+                <*> return net
+                <*> (o .: "name")
 
 instance ToJSON PubKeyDoc where
-    toJSON (PubKeyDoc k net) =
+    toJSON (PubKeyDoc k net name) =
         object
             [ "xpubkey" .= xPubToJSON net k
             , "network" .= getNetworkName net
+            , "name" .= name
             ]
 
 instance HasFilePath PubKeyDoc where
-    getFilePath (PubKeyDoc xpub net) =
+    getFilePath (PubKeyDoc xpub net _) =
         getNetworkName net <> "-account-" <> cs (xPubChecksum xpub) <> ".json"
 
 data TxSignData = TxSignData
@@ -151,12 +156,8 @@ txsChecksum txs =
 writeJsonFile :: Json.ToJSON a => String -> a -> IO ()
 writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
 
-readJsonFile ::
-       (MonadError String m, MonadIO m, Json.FromJSON a)
-    => FilePath
-    -> m a
-readJsonFile filePath =
-    liftEither =<< liftIO (Json.eitherDecodeFileStrict' filePath)
+readJsonFile :: Json.FromJSON a => FilePath -> IO (Either String a)
+readJsonFile filePath = Json.eitherDecodeFileStrict' filePath
 
 -- Parse wallet dump files for sweeping --
 
@@ -179,7 +180,7 @@ withParser :: (Text -> Maybe a) -> [[Text]] -> [a]
 withParser parser =
     mapMaybe go
   where
-    go [] = Nothing
+    go []     = Nothing
     go (w:ws) = parser w <|> go ws
 
 removeComments :: [[Text]] -> [[Text]]
