@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Network.Haskoin.Wallet.AmountsSpec where
 
-import           Control.Lens
 import           Data.Aeson.Types
 import           Data.Either
 import           Data.List
@@ -12,173 +12,22 @@ import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Entropy
 import           Network.Haskoin.Wallet.Signing
+import           Network.Haskoin.Wallet.TestUtils
 import           Numeric.Natural
 import           Test.Hspec
+import           Test.Hspec.QuickCheck
+import           Test.HUnit
 import           Test.QuickCheck
 
-
 spec :: Spec
-spec = return ()
-
-{-
-
-walletSpec :: Spec
-walletSpec = do
-    diceSpec
-    mnemonicSpec
-    jsonSpec
-    amountSpec
-    buildSpec
-    signingSpec
-    httpSpec
-
-diceSpec :: Spec
-diceSpec =
-    describe "Dice base 6 API" $ do
-        it "can decode the base 6 test vectors" $ do
-            decodeBase6 mempty `shouldBe` Just mempty
-            decodeBase6 "6" `shouldBe` decodeHexStr "00"
-            decodeBase6 "666" `shouldBe` decodeHexStr "00"
-            decodeBase6 "661" `shouldBe` decodeHexStr "01"
-            decodeBase6 "6615" `shouldBe` decodeHexStr "0B"
-            decodeBase6 "6645" `shouldBe` decodeHexStr "1D"
-            decodeBase6 "66456666" `shouldBe` decodeHexStr "92D0"
-            decodeBase6 "111111111111111111111111111111111" `shouldBe`
-                decodeHexStr "07E65FDC244B0133333333"
-            decodeBase6 "55555555555555555555555555555555" `shouldBe`
-                decodeHexStr "06954FE21E3E80FFFFFFFF"
-            decodeBase6
-                "161254362643213454433626115643626632163246612666332415423213664" `shouldBe`
-                decodeHexStr "0140F8D002341BDF377F1723C9EB6C7ACFF134581C"
-        it "can decode the base 6 property" $
-            property $ \i ->
-                i >=
-                0 ==>
-                let e = error "Invalid base 6"
-                    s =
-                        showIntAtBase
-                            6
-                            (fromMaybe e . b6 . fromIntegral)
-                            (i :: Integer)
-                            ""
-                in Just (asBytes integerToBS i) == decodeBase6 (fromLString s)
-        it "can calculate the required dice rolls for a given entropy" $ do
-            requiredRolls 16 `shouldBe` 49
-            requiredRolls 20 `shouldBe` 61
-            requiredRolls 24 `shouldBe` 74
-            requiredRolls 28 `shouldBe` 86
-            requiredRolls 32 `shouldBe` 99
-        it "can convert dice rolls to entropy" $ do
-            diceToEntropy 16 "" `shouldSatisfy` isLeft
-            diceToEntropy 16 (replicate 48 '6') `shouldSatisfy` isLeft
-            diceToEntropy 16 (replicate 50 '6') `shouldSatisfy` isLeft
-            diceToEntropy 16 (replicate 48 '6' <> "7") `shouldSatisfy` isLeft
-            diceToEntropy 16 (replicate 48 '6' <> "0") `shouldSatisfy` isLeft
-            diceToEntropy 16 (replicate 49 '6') `shouldBe`
-                (Right $ replicate 16 0x00)
-            diceToEntropy 20 (replicate 61 '6') `shouldBe`
-                (Right $ replicate 20 0x00)
-            diceToEntropy 24 (replicate 74 '6') `shouldBe`
-                (Right $ replicate 24 0x00)
-            diceToEntropy 28 (replicate 86 '6') `shouldBe`
-                (Right $ replicate 28 0x00)
-            diceToEntropy 32 (replicate 99 '6') `shouldBe`
-                (Right $ replicate 32 0x00)
-            diceToEntropy 32 (replicate 99 '1') `shouldBe`
-                Right
-                    (just $
-                     decodeHexStr
-                         "302582058C61D13F1F9AA61CB6B5982DC3D9A42B333333333333333333333333")
-            diceToEntropy
-                32
-                "666655555555555555555544444444444444444444444333333333333333333322222222222222222111111111111111111" `shouldBe`
-                Right
-                    (just $
-                     decodeHexStr
-                         "002F8D57547E01B124FE849EE71CB96CA91478A542F7D4AA833EFAF5255F3333")
-            diceToEntropy
-                32
-                "615243524162543244414631524314243526152432442413461523424314523615243251625434236413615423162365223" `shouldBe`
-                Right
-                    (just $
-                     decodeHexStr
-                         "0CC66852D7580358E47819E37CDAF115E00364724346D83D49E59F094DB4972F")
-        it "can mix entropy" $ do
-            mixEntropy (fromList [0x00]) (fromList [0x00]) `shouldBe`
-                (Right $ fromList [0x00])
-            mixEntropy (fromList [0x00]) (fromList [0xff]) `shouldBe`
-                (Right $ fromList [0xff])
-            mixEntropy (fromList [0xff]) (fromList [0x00]) `shouldBe`
-                (Right $ fromList [0xff])
-            mixEntropy (fromList [0xff]) (fromList [0xff]) `shouldBe`
-                (Right $ fromList [0x00])
-            mixEntropy (fromList [0xaa]) (fromList [0x55]) `shouldBe`
-                (Right $ fromList [0xff])
-            mixEntropy (fromList [0x55, 0xaa]) (fromList [0xaa, 0x55]) `shouldBe`
-                (Right $ fromList [0xff, 0xff])
-            mixEntropy (fromList [0x7a, 0x54]) (fromList [0xd3, 0x8e]) `shouldBe`
-                (Right $ fromList [0xa9, 0xda])
-
-mnemonicSpec :: Spec
-mnemonicSpec =
-    describe "Mnemonic API" $
-    -- https://github.com/iancoleman/bip39/issues/58
-     do
-        it "can derive iancoleman issue 58" $ do
-            let m =
-                    "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
-                p = "banana"
-                xpub = deriveXPubKey $ right $ signingKey btc p m 0
-                (addr0, _) = derivePathAddr xpub extDeriv 0
-                resAddr =
-                    fromMaybe (error "Bad address") $
-                    stringToAddr btc "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
-            addr0 `shouldBe` resAddr
-        it "can derive a prvkey from a mnemonic" $ do
-            let xprv = right $ signingKey btc pwd mnem 0
-            xprv `shouldBe` fst keys
-        it "can derive a pubkey from a mnemonic" $ do
-            let xpub = deriveXPubKey $ right $ signingKey btc pwd mnem 0
-            xpub `shouldBe` snd keys
-        it "can derive addresses from a mnemonic" $ do
-            let addrs = take 5 $ derivePathAddrs (snd keys) extDeriv 0
-            fmap fst addrs `shouldBe` take 5 (toList extAddrs)
-
-jsonSpec :: Spec
-jsonSpec =
-    describe "Json encoding and decoding" $ do
-        it "can encode TxSignData type" $
-            property $
-            forAll (arbitraryTxSignData btc) $ \t ->
-                Just t `shouldBe` decodeJson (encodeJson t)
-        it "can encode AccountStore type" $
-            property $
-            forAll (arbitraryAccountStore btc) $ \t ->
-                Just t `shouldBe`
-                  (parseMaybe (accountStoreFromJSON btc)
-                    =<< decodeJson (encodeJson t))
-
-amountSpec :: Spec
-amountSpec =
+spec =
     describe "Amount parser" $ do
-        it "can read and show a satoshi amounts" $
-            property $ \w -> do
-                let unit = UnitSatoshi
-                    n = toNatural (w :: Word64)
+        prop "readAmount . showAmount identity" $
+            forAll genNatural $ \n unit ->
                 readAmount unit (showAmount unit n) `shouldBe` Just n
-        it "can read and show a bit amounts" $
-            property $ \w -> do
-                let unit = UnitBit
-                    n = toNatural (w :: Word64)
-                readAmount unit (showAmount unit n) `shouldBe` Just n
-        it "can read and show a bitcoin amounts" $
-            property $ \w -> do
-                let unit = UnitBitcoin
-                    n = toNatural (w :: Word64)
-                readAmount unit (showAmount unit n) `shouldBe` Just n
-        it "can parse example balances" $
-        -- Satoshi Balances
-         do
+        prop "readIntegerAmount . showIntegerAmount identity" $ \i unit ->
+            readIntegerAmount unit (showIntegerAmount unit i) `shouldBe` Just i
+        it "Satoshi amounts vectors" $ do
             readAmount UnitSatoshi "0" `shouldBe` Just 0
             readAmount UnitSatoshi "0000" `shouldBe` Just 0
             readAmount UnitSatoshi "0.0" `shouldBe` Nothing
@@ -188,7 +37,7 @@ amountSpec =
             readAmount UnitSatoshi "1'234'567'890" `shouldBe` Just 1234567890
             readAmount UnitSatoshi "1 234 567 890" `shouldBe` Just 1234567890
             readAmount UnitSatoshi "1_234_567_890" `shouldBe` Just 1234567890
-        -- Bits Balances
+        it "Bit amounts vectors" $ do
             readAmount UnitBit "0" `shouldBe` Just 0
             readAmount UnitBit "0000" `shouldBe` Just 0
             readAmount UnitBit "0.0" `shouldBe` Just 0
@@ -205,7 +54,7 @@ amountSpec =
             readAmount UnitBit "1'234'567'890.90" `shouldBe` Just 123456789090
             readAmount UnitBit "1 234 567 890.90" `shouldBe` Just 123456789090
             readAmount UnitBit "1_234_567_890.90" `shouldBe` Just 123456789090
-        -- BitcoinBalances
+        it "Bitcoin amounts vectors" $ do
             readAmount UnitBitcoin "0" `shouldBe` Just 0
             readAmount UnitBitcoin "0000" `shouldBe` Just 0
             readAmount UnitBitcoin "0.0" `shouldBe` Just 0
@@ -225,6 +74,35 @@ amountSpec =
                 Just 123456789090090000
             readAmount UnitBitcoin "1_234_567_890.9009" `shouldBe`
                 Just 123456789090090000
+
+instance Arbitrary AmountUnit where
+    arbitrary = elements [UnitBitcoin, UnitBit, UnitSatoshi]
+
+{-
+
+walletSpec :: Spec
+walletSpec = do
+    diceSpec
+    mnemonicSpec
+    jsonSpec
+    amountSpec
+    buildSpec
+    signingSpec
+    httpSpec
+
+jsonSpec :: Spec
+jsonSpec =
+    describe "Json encoding and decoding" $ do
+        it "can encode TxSignData type" $
+            property $
+            forAll (arbitraryTxSignData btc) $ \t ->
+                Just t `shouldBe` decodeJson (encodeJson t)
+        it "can encode AccountStore type" $
+            property $
+            forAll (arbitraryAccountStore btc) $ \t ->
+                Just t `shouldBe`
+                  (parseMaybe (accountStoreFromJSON btc)
+                    =<< decodeJson (encodeJson t))
 
 buildSpec :: Spec
 buildSpec =
@@ -547,6 +425,18 @@ signingSpec =
             signWalletTx btc dat xPrv `shouldBe`
                 Left "Referenced input transactions are missing"
 
+
+mnemonic:
+        -- it "can derive a prvkey from a mnemonic" $ do
+        --     let Right xprv = signingKey btc (cs pwd) (cs mnem) 0
+        --     xprv `shouldBe` fst keys
+        -- it "can derive a pubkey from a mnemonic" $ do
+        --     let Right xpub = deriveXPubKey <$> signingKey btc pwd mnem 0
+        --     xpub `shouldBe` snd keys
+        -- it "can derive addresses from a mnemonic" $ do
+        --     let addrs = take 5 $ derivePathAddrs (snd keys) extDeriv 0
+        --     fmap fst addrs `shouldBe` take 5 extAddrs
+
 httpSpec :: Spec
 httpSpec =
     describe "HTTP service (online test)" $ do
@@ -579,7 +469,42 @@ httpSpec =
             res <- httpBestHeight btc
             res `shouldSatisfy` (> 500000)
 
-{- Test Constants -}
+{- Test Helpers -}
+
+testTx :: [(TxHash, Word32)] -> [(Address, Word64)] -> Tx
+testTx xs ys = Tx 1 txi txo [] 0
+  where
+    txi =
+        fmap
+            (\(h, p) ->
+                 TxIn (OutPoint h p) (toByteString $ fromList [1]) maxBound)
+            xs
+    f = encodeOutputBS . PayPKHash
+    txo = fmap (\(a, v) -> TxOut v $ f (getAddrHash160 a)) ys
+
+testTx' :: [(Address, Word64)] -> Tx
+testTx' = testTx [ (dummyTid1, 0) ]
+
+dummyTid1 :: TxHash
+dummyTid1 = dummyTxHash 1
+
+dummyTxHash :: Word8 -> TxHash
+dummyTxHash w =
+    fromMaybe (error "Could not decode tx hash") $
+    decodeBytes $ w `cons` replicate 31 0x00
+
+dummyBlockHash :: Word8 -> BlockHash
+dummyBlockHash w =
+    fromMaybe (error "Could not decode block hash") $
+    decodeBytes $ w `cons` replicate 31 0x00
+
+just :: Maybe a -> a
+just = fromMaybe (error "Got Nothing instead of Just")
+
+right :: Either String a -> a
+right = either (error "Got Left instead of Right") id
+
+-- Test Constants
 
 pwd :: String
 pwd = "correct horse battery staple"
@@ -589,10 +514,10 @@ mnem = "snow senior nerve virus fabric now fringe clip marble interest analyst c
 
 keys :: (XPrvKey, XPubKey)
 keys =
-    ( fromMaybe (error "bad XPrvKey") $
+    ( fromJust $
       xPrvImport btc
       "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh"
-    , fromMaybe (error "bad XPubKey") $
+    , fromJust $
       xPubImport btc
       "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah")
 
@@ -647,40 +572,4 @@ othAddrs =
     , "1N2JAKWVFAoKFEUci3tY3kvrGFY6poRgvm"
     , "15EANoYyJoo1J51ERdQzNwZCyhEtPfcP8g"
     ]
-
-{- Test Helpers -}
-
-testTx :: [(TxHash, Word32)] -> [(Address, Word64)] -> Tx
-testTx xs ys = Tx 1 txi txo [] 0
-  where
-    txi =
-        fmap
-            (\(h, p) ->
-                 TxIn (OutPoint h p) (toByteString $ fromList [1]) maxBound)
-            xs
-    f = encodeOutputBS . PayPKHash
-    txo = fmap (\(a, v) -> TxOut v $ f (getAddrHash160 a)) ys
-
-testTx' :: [(Address, Word64)] -> Tx
-testTx' = testTx [ (dummyTid1, 0) ]
-
-dummyTid1 :: TxHash
-dummyTid1 = dummyTxHash 1
-
-dummyTxHash :: Word8 -> TxHash
-dummyTxHash w =
-    fromMaybe (error "Could not decode tx hash") $
-    decodeBytes $ w `cons` replicate 31 0x00
-
-dummyBlockHash :: Word8 -> BlockHash
-dummyBlockHash w =
-    fromMaybe (error "Could not decode block hash") $
-    decodeBytes $ w `cons` replicate 31 0x00
-
-just :: Maybe a -> a
-just = fromMaybe (error "Got Nothing instead of Just")
-
-right :: Either String a -> a
-right = either (error "Got Left instead of Right") id
-
 -}

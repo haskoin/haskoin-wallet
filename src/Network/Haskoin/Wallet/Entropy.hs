@@ -13,13 +13,13 @@ import           Data.Text                   (Text)
 import           Haskoin.Keys                (Mnemonic, toMnemonic)
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
-import           Numeric                     (readInt)
+import           Numeric                     (readInt, showIntAtBase)
 import           Numeric.Natural
 import qualified System.Directory            as D
 import           System.Entropy              (getEntropy)
 import           System.IO
 
-{- Base 6 decoding for dice entropy -}
+-- Base 6 decoding for dice entropy --
 
 b6Data :: String
 b6Data = "612345"
@@ -30,13 +30,14 @@ b6 = (b6Data !!)
 b6' :: Char -> Maybe Int
 b6' = (`findIndex` b6Data) . (==)
 
+-- Does not preserve leading 0s
 decodeBase6 :: String -> Maybe BS.ByteString
 decodeBase6 str
     | null str = Just mempty
     | otherwise =
-        case readInt 6 (isJust . b6') (fromInteger . toInteger . f) str of
-            ((i, []):_) -> Just $ integerToBS i
-            _           -> Nothing
+        case listToMaybe $ readInt 6 (isJust . b6') f str of
+            Just (i, []) -> Just $ integerToBS i
+            _            -> Nothing
   where
     f = fromMaybe (error "Could not decode base6") . b6'
 
@@ -51,7 +52,7 @@ mixEntropy ent1 ent2
 
 diceToEntropy :: Natural -> String -> Either String BS.ByteString
 diceToEntropy ent rolls
-    | (fromIntegral $ length rolls) /= requiredRolls ent =
+    | fromIntegral (length rolls) /= requiredRolls ent =
         Left $ show (requiredRolls ent) <> " dice rolls are required"
     | otherwise = do
         bytes <- maybeToEither "Could not decode base6" $ decodeBase6 rolls
@@ -84,7 +85,7 @@ genMnemonicGen reqEnt rollsM
                     diceEnt <- diceToEntropy reqEnt rolls
                     mixEntropy sysEnt diceEnt
                 _ -> return sysEnt
-        when (BS.length ent /= (fromIntegral reqEnt)) $
+        when (BS.length ent /= fromIntegral reqEnt) $
             throwError "Something went wrong with the entropy size"
         mnem <- liftEither $ toMnemonic ent
         return (origEnt, mnem)

@@ -19,7 +19,7 @@ data AmountUnit
     | UnitSatoshi
     deriving (Eq, Show)
 
-{- Amount Parsing -}
+-- Amount Parsing --
 
 showUnit :: AmountUnit -> Integer -> Text
 showUnit unit amnt
