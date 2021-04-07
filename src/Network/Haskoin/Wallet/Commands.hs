@@ -62,7 +62,7 @@ data Response
     | ResponseCreateAcc
           { responseAccountName :: !Text
           , responseAccount     :: !AccountStore
-          , responsePubKeyFile :: !Text
+          , responsePubKeyFile  :: !Text
           }
     | ResponseImportAcc
           { responseAccountName :: !Text
@@ -518,8 +518,9 @@ balance accM =
         net <- gets accountStoreNetwork
         addrMap <- gets storeAddressMap
         checkHealth net
-        let req =GetAddrsBalance (Map.keys addrMap)
-        bals <- liftExcept $ apiCall def {configNetwork = net} req
+        let req = GetAddrsBalance (Map.keys addrMap)
+        Store.SerialList bals <-
+            liftExcept $ apiCall def {configNetwork = net} req
         store <- get
         return $ ResponseBalance storeName store $ addrsToAccBalance bals
 
@@ -551,14 +552,14 @@ transactions accM page =
             Store.blockDataHeight <$>
             liftExcept (apiCall def {configNetwork = net} (GetBlockBest def))
         -- TODO: This only works for small wallets.
-        txRefs <-
+        Store.SerialList txRefs <-
             liftExcept $
             apiBatch
                 20
                 def {configNetwork = net}
                 (GetAddrsTxs allAddrs def {paramLimit = Just 100})
         let sortedRefs = Store.txRefHash <$> sortDesc txRefs
-        txs <-
+        Store.SerialList txs <-
             liftExcept $
             apiBatch
                 20
@@ -724,7 +725,8 @@ updateAccountIndices = do
     go net pub deriv d page@(Page lim off) = do
         let addrs = addrsDerivPage deriv page pub
             req = GetAddrsBalance $ fst <$> addrs
-        bals <- liftExcept $ apiCall def {configNetwork = net} req
+        Store.SerialList bals <-
+            liftExcept $ apiCall def {configNetwork = net} req
         let vBals = filter ((/= 0) . Store.balanceTxCount) bals
         if null vBals
             then return d
@@ -738,14 +740,11 @@ updateAccountIndices = do
 
 -- Utilities --
 
-checkHealth :: (MonadIO m, MonadError String m) => Network -> m () 
+checkHealth :: (MonadIO m, MonadError String m) => Network -> m ()
 checkHealth net = do
     health <- liftExcept $ apiCall def{configNetwork = net} GetHealth
-    unless (Store.healthOK health) $
+    unless (Store.isOK health) $
         throwError "The indexer health check has failed"
-    unless (Store.healthSynced health) $
-        throwError "The indexer is not synced on this network"
-    
 
 -- Haskeline Helpers --
 

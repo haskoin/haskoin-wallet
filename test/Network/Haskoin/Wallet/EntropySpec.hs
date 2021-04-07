@@ -110,7 +110,7 @@ diceSpec =
                     (fromJust $
                      decodeHex
                          "0CC66852D7580358E47819E37CDAF115E00364724346D83D49E59F094DB4972F")
-        it "Entropy is always to correct size (0 padded)" $
+        it "Entropy is always the correct size (0 padded)" $
             forAll (elements [(49, 16), (61, 20), (74, 24), (86, 28), (99, 32)]) $ \(r, e) ->
                 forAll (vectorOf r (elements ['6', '1', '2', '3', '4', '5'])) $ \s ->
                     let bs = diceToEntropy (fromIntegral e) s
@@ -150,7 +150,7 @@ mnemonicSpec =
         it "Passes the bip44 test vectors" $
             mapM_ testBip44Vector bip44Vectors
 
-testBip44Vector :: (Text, BS.ByteString, Text, Text) -> Assertion
+testBip44Vector :: (Text, Text, Text, Text) -> Assertion
 testBip44Vector (mnem, pass, addr0, addr1) = do
     assertEqual "Addr External" (Just addr0) (addrToText btc $ fst $ r genExtAddress)
     assertEqual "Addr Internal" (Just addr1) (addrToText btc $ fst $ r genIntAddress)
@@ -161,7 +161,7 @@ testBip44Vector (mnem, pass, addr0, addr1) = do
     r a = fst $ runIdentity $ runAccountStoreT a s
 
 -- (Mnemonic, BIP38 password, external 0/0, internal 1/0)
-bip44Vectors :: [(Text, BS.ByteString, Text, Text)]
+bip44Vectors :: [(Text, Text, Text, Text)]
 bip44Vectors =
     [ ( "modify truck lens identify brief coffee \
         \gather volcano fatal together muscle elephant"

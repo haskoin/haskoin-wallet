@@ -13,7 +13,7 @@ import qualified Data.ByteString                     as BS
 import           Data.Default                        (def)
 import           Data.Either                         (rights)
 import           Data.List                           (find, nub, partition,
-                                                      sortOn, sum)
+                                                      sortOn, sum, sort)
 import           Data.Map.Strict                     (Map)
 import qualified Data.Map.Strict                     as Map
 import           Data.Maybe
@@ -54,7 +54,8 @@ buildTxSignData net rcpts feeByte dust rcptPay
         acc <- liftEither =<< gets accountStoreAccount
         walletAddrMap <- gets storeAddressMap
         let req = GetAddrsUnspent (Map.keys walletAddrMap) def
-        allCoins <- liftExcept $ apiBatch 20 def {configNetwork = net} req 
+        Store.SerialList allCoins <-
+            liftExcept $ apiBatch 20 def {configNetwork = net} req
         (change, changeDeriv) <- genIntAddress
         gen <- liftIO newStdGen
         (tx, pickedCoins) <-
@@ -86,28 +87,31 @@ buildWalletTx ::
     -> Natural -- Dust
     -> Bool -- Recipients Pay for Fee
     -> Either String (Tx, [Store.Unspent])
-buildWalletTx net gen rcptsN change coins feeByteN dustN rcptPay = do
-    (pickedCoins, changeAmnt) <-
-        chooseCoins tot feeCoinSel (length rcptsN + 1) True (sortDesc coins)
-    let nOuts =
-            if changeAmnt <= dust
-                then length rcptsN
-                else length rcptsN + 1
-        totFee = guessTxFee (fromIntegral feeByteN) nOuts (length pickedCoins)
-    rcptsPayN <-
-        if rcptPay
-            then makeRcptsPay (fromIntegral totFee) rcptsN
-            else return rcptsN
-    let rcpts = second fromIntegral <$> rcptsPayN
-        allRcpts
-            | changeAmnt <= dust = rcpts
-            | otherwise = (change, changeAmnt) : rcpts
-        ops = Store.unspentPoint <$> pickedCoins
-    when (any ((<= dust) . snd) allRcpts) $
-        Left "Recipient output is smaller than the dust value"
-    let rdmRcpts = evalState (randomShuffle allRcpts) gen
-    tx <- buildAddrTx net ops =<< mapM (addrToText2 net) rdmRcpts
-    return (tx, pickedCoins)
+buildWalletTx net gen rcptsN change coins feeByteN dustN rcptPay =
+    flip evalStateT gen $ do
+        rdmCoins <- randomShuffle coins
+        (pickedCoins, changeAmnt) <-
+            lift $ chooseCoins tot feeCoinSel (length rcptsN + 1) False rdmCoins
+        let nOuts =
+                if changeAmnt <= dust
+                    then length rcptsN
+                    else length rcptsN + 1
+            totFee =
+                guessTxFee (fromIntegral feeByteN) nOuts (length pickedCoins)
+        rcptsPayN <-
+            if rcptPay
+                then lift $ makeRcptsPay (fromIntegral totFee) rcptsN
+                else return rcptsN
+        let rcpts = second fromIntegral <$> rcptsPayN
+            allRcpts
+                | changeAmnt <= dust = rcpts
+                | otherwise = (change, changeAmnt) : rcpts
+            ops = Store.unspentPoint <$> pickedCoins
+        when (any ((<= dust) . snd) allRcpts) $
+            lift $ Left "Recipient output is smaller than the dust value"
+        rdmRcpts <- randomShuffle allRcpts
+        tx <- lift $ buildAddrTx net ops =<< mapM (addrToText2 net) rdmRcpts
+        return (tx, pickedCoins)
   where
     feeCoinSel =
         if rcptPay
@@ -143,8 +147,7 @@ getDerivs pickedCoins rcpts walletAddrMap = do
 
 -- Signing Transactions --
 
-signingKey ::
-       Network -> BS.ByteString -> Text -> Natural -> Either String XPrvKey
+signingKey :: Network -> Text -> Text -> Natural -> Either String XPrvKey
 signingKey net pass mnem acc = do
     seed <- mnemonicToSeed pass mnem
     return $ derivePath (bip44Deriv net acc) (makeXPrvKey seed)
@@ -198,7 +201,8 @@ buildSweepSignData net addrs feeByte dust
         acc <- liftEither =<< gets accountStoreAccount
         walletAddrMap <- gets storeAddressMap
         let req = GetAddrsUnspent addrs def {paramLimit = Just 0}
-        coins <- liftExcept $ apiBatch 20 def {configNetwork = net} req
+        Store.SerialList coins <-
+            liftExcept $ apiBatch 20 def {configNetwork = net} req
         when (null coins) $
             throwError "There are no coins to sweep in those addresses"
         gen <- liftIO newStdGen
