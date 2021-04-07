@@ -29,33 +29,12 @@ packages:
     subdir: data
     url: https://github.com/haskoin/haskoin-store/archive/d7ce11d1f2d222b172b6c902e816590fb8ed1f50.tar.gz
 - completed:
-    hackage: murmur3-1.0.4@sha256:a0038867cb80b5bb3e400b57da7af501c3e2b5583792eb7ed6d69862817d118c,2002
-    pantry-tree:
-      size: 336
-      sha256: e9bf315f04a73c1565b578280070b7027b715eb6240469acee2a4ea7851fb797
-  original:
-    hackage: murmur3-1.0.4
-- completed:
-    hackage: ansi-terminal-0.10.3@sha256:e2fbcef5f980dc234c7ad8e2fa433b0e8109132c9e643bc40ea5608cd5697797,3226
-    pantry-tree:
-      size: 1461
-      sha256: 02f05d52be3ffcf36c78876629cbab80b63420672685371aea4fd10e1c4aabb6
-  original:
-    hackage: ansi-terminal-0.10.3
-- completed:
     hackage: parsec-extra-0.2.0.0@sha256:47f16e5d00cb62db52d126903787dcccc94d500cfbcb54316f5db00f31da4fa2,735
     pantry-tree:
       size: 225
       sha256: 8d8d15ac5aca977855d1fe89f3f23ecbbddc604e3cb887af5c27b540dba49ffc
   original:
     hackage: parsec-extra-0.2.0.0
-- completed:
-    hackage: secp256k1-haskell-0.5.0@sha256:26d8897b0b81a1ca46134e3b1cc7784c975880e2334936d92681b07ae9703c26,2158
-    pantry-tree:
-      size: 599
-      sha256: e1e0b1d98213c7874a4260b946d1024571ac659e81822d51ea1df7d00f4c14b0
-  original:
-    hackage: secp256k1-haskell-0.5.0
 snapshots:
 - completed:
     size: 565715
