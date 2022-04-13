@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 112efaf33a0d75c225cd0982fc2fb553b33440badc026342783c097897f224fb
+-- hash: f856e8dfc5f2d125152bd713fd26c40d4d59d52825ef4d2630d93cd8bb4e197c
 
 name:           haskoin-wallet
 version:        0.6.0
@@ -48,7 +48,7 @@ library
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
     , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.30.2
+    , haskoin-store-data >=0.65.0
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -98,7 +98,7 @@ executable hw
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
     , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.30.2
+    , haskoin-store-data >=0.65.0
     , haskoin-wallet ==0.6.0
     , http-types >=0.12.3
     , lens >=4.18.1
@@ -148,7 +148,7 @@ test-suite spec
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
     , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.30.2
+    , haskoin-store-data >=0.65.0
     , haskoin-wallet ==0.6.0
     , hspec >=2.7.1
     , http-types >=0.12.3

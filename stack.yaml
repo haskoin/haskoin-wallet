@@ -1,14 +1,10 @@
-resolver: lts-17.7
+resolver: lts-19.3
 nix:
   packages:
     - zlib
     - secp256k1
     - pkg-config
 extra-deps:
-  - github: haskoin/haskoin-core
-    commit: 1196c5a3efffc887670c62c6ead2ec45d9d3a5db
-  - github: haskoin/haskoin-store
-    commit: d7ce11d1f2d222b172b6c902e816590fb8ed1f50
-    subdirs:
-      - data
+  - haskoin-core-0.21.1
+  - haskoin-store-data-0.65.0
   - parsec-extra-0.2.0.0

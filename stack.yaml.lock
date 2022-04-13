@@ -5,29 +5,19 @@
 
 packages:
 - completed:
-    size: 445088
-    url: https://github.com/haskoin/haskoin-core/archive/1196c5a3efffc887670c62c6ead2ec45d9d3a5db.tar.gz
-    name: haskoin-core
-    version: 0.20.0
-    sha256: d711eb32e44d6ac70a0f65ceb0a33df1f65c460d6ca282176fec2f24a0347c0f
+    hackage: haskoin-core-0.21.1@sha256:91bc95c4aad397f24bda2fc3a58d057705c6c599e0ea71995d5ff3a56eedcc78,4931
     pantry-tree:
-      size: 6319
-      sha256: a865c7e7aeefc728ccd5d53cba7e850ffda1aad11fdd9fad8831dd3858997710
+      size: 5525
+      sha256: fbcb9818de0fbe306db40d12b8c337328f5d9486bdc0c5065fc4ed25595e4c1e
   original:
-    url: https://github.com/haskoin/haskoin-core/archive/1196c5a3efffc887670c62c6ead2ec45d9d3a5db.tar.gz
+    hackage: haskoin-core-0.21.1
 - completed:
-    size: 127191
-    subdir: data
-    url: https://github.com/haskoin/haskoin-store/archive/d7ce11d1f2d222b172b6c902e816590fb8ed1f50.tar.gz
-    name: haskoin-store-data
-    version: 0.52.0
-    sha256: 86e72b791d62a3d1cb40417914769260a2932220ded1416f51a46c2b088527ab
+    hackage: haskoin-store-data-0.65.0@sha256:092c8e28f26249bc84f677f7f542cedf9c1af8130f076699c7801e0b4d2e84e2,2623
     pantry-tree:
-      size: 728
-      sha256: 7d9e324e17359901ab9e02f6db7a9da94aeeb7c6e71b212456a8ebcf03480270
+      size: 675
+      sha256: 7e8fa26cf4d33deea8e609ba7dfbdadd194f44342567e9c8dfc79c742b93b68c
   original:
-    subdir: data
-    url: https://github.com/haskoin/haskoin-store/archive/d7ce11d1f2d222b172b6c902e816590fb8ed1f50.tar.gz
+    hackage: haskoin-store-data-0.65.0
 - completed:
     hackage: parsec-extra-0.2.0.0@sha256:47f16e5d00cb62db52d126903787dcccc94d500cfbcb54316f5db00f31da4fa2,735
     pantry-tree:
@@ -37,7 +27,7 @@ packages:
     hackage: parsec-extra-0.2.0.0
 snapshots:
 - completed:
-    size: 565715
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/17/7.yaml
-    sha256: 1b5e4124989399e60e7a7901f0cefd910beea546131fb07a13a7208c4cc8b7ee
-  original: lts-17.7
+    size: 617368
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/19/3.yaml
+    sha256: a209d3455279ee76eb45f01f73bbb960ceaaa8dfad8891435384689df4dcb653
+  original: lts-19.3
