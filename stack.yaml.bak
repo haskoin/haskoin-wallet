@@ -1,0 +1,16 @@
+resolver: lts-17.4
+nix:
+  packages:
+    - zlib
+    - secp256k1
+    - pkg-config
+extra-deps:
+  - github: haskoin/haskoin-core
+    commit: 1196c5a3efffc887670c62c6ead2ec45d9d3a5db
+  - github: haskoin/haskoin-store
+    commit: 522def37d7effb22fc6fdc7f5b62b81c3589a4a4
+    subdir: data
+  - murmur3-1.0.4
+  - ansi-terminal-0.10.3
+  - parsec-extra-0.2.0.0
+  - secp256k1-haskell-0.5.0
