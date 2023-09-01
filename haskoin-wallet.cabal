@@ -1,13 +1,13 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.34.4.
+-- This file has been generated from package.yaml by hpack version 0.35.2.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f856e8dfc5f2d125152bd713fd26c40d4d59d52825ef4d2630d93cd8bb4e197c
+-- hash: f54a33dfc091c5f913bcd72c955c98a414721267d0cba55ddb5dacf77616cc8d
 
 name:           haskoin-wallet
-version:        0.6.0
+version:        0.6.1
 synopsis:       Lightweight command-line wallet for Bitcoin and Bitcoin Cash
 description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
                 BIP44 account structure. It requires a full blockchain index such as
@@ -38,7 +38,7 @@ library
     , aeson-pretty >=0.8.8
     , ansi-terminal >=0.10.3
     , base >=4.9 && <5
-    , base16-bytestring >=0.1.1.6
+    , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
     , bytestring >=0.10.10.0
     , cereal >=0.5.8.1
@@ -47,8 +47,8 @@ library
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
-    , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.65.0
+    , haskoin-core >=1.0.0
+    , haskoin-store-data >=1.0.0
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -56,6 +56,7 @@ library
     , optparse-applicative >=0.15.1.0
     , pretty >=1.1.3.6
     , random >=1.1
+    , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , tostring >=0.2.1.1
@@ -88,7 +89,7 @@ executable hw
     , aeson-pretty >=0.8.8
     , ansi-terminal >=0.10.3
     , base >=4.9 && <5
-    , base16-bytestring >=0.1.1.6
+    , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
     , bytestring >=0.10.10.0
     , cereal >=0.5.8.1
@@ -97,9 +98,9 @@ executable hw
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
-    , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.65.0
-    , haskoin-wallet ==0.6.0
+    , haskoin-core >=1.0.0
+    , haskoin-store-data >=1.0.0
+    , haskoin-wallet ==0.6.1
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -107,6 +108,7 @@ executable hw
     , optparse-applicative >=0.15.1.0
     , pretty >=1.1.3.6
     , random >=1.1
+    , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , tostring >=0.2.1.1
@@ -138,7 +140,7 @@ test-suite spec
     , aeson-pretty >=0.8.8
     , ansi-terminal >=0.10.3
     , base >=4.9 && <5
-    , base16-bytestring >=0.1.1.6
+    , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
     , bytestring >=0.10.10.0
     , cereal >=0.5.8.1
@@ -147,9 +149,9 @@ test-suite spec
     , directory >=1.3.6.0
     , entropy >=0.4.1.6
     , haskeline >=0.7.5.0
-    , haskoin-core >=0.13.7
-    , haskoin-store-data >=0.65.0
-    , haskoin-wallet ==0.6.0
+    , haskoin-core >=1.0.0
+    , haskoin-store-data >=1.0.0
+    , haskoin-wallet ==0.6.1
     , hspec >=2.7.1
     , http-types >=0.12.3
     , lens >=4.18.1
@@ -158,6 +160,7 @@ test-suite spec
     , optparse-applicative >=0.15.1.0
     , pretty >=1.1.3.6
     , random >=1.1
+    , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , tostring >=0.2.1.1

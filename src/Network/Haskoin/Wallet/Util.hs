@@ -7,6 +7,7 @@ import           Control.Arrow            (second)
 import           Control.Monad            (guard)
 import           Control.Monad.Except
 import           Control.Monad.Reader
+import           Crypto.Secp256k1         (Ctx)
 import qualified Data.Aeson               as JSON
 import qualified Data.Aeson.Encode.Pretty as Pretty
 import qualified Data.ByteString          as BS
@@ -20,8 +21,8 @@ import           Data.String.Conversions  (cs)
 import           Data.Text                (Text)
 import qualified Data.Text                as Text
 import           Haskoin.Address
-import           Haskoin.Constants
-import           Haskoin.Keys
+import           Haskoin.Crypto.Keys
+import           Haskoin.Network
 import qualified Haskoin.Store.Data       as Store
 import           Haskoin.Util
 import           Numeric.Natural
@@ -58,16 +59,16 @@ liftExcept :: MonadError String m => ExceptT Store.Except m a -> m a
 liftExcept action = do
     e <- runExceptT action
     case e of
-        Right a -> return a
+        Right a  -> return a
         Left err -> throwError $ show (err :: Store.Except)
 
 addrToTextE :: Network -> Address -> Either String Text
 addrToTextE net a =
-    maybeToEither "Invalid Address in addrToStringE" (addrToText net a)
+    maybeToEither "Invalid Address in addrToTextE" (addrToText net a)
 
 textToAddrE :: Network -> Text -> Either String Address
 textToAddrE net a =
-    maybeToEither "Invalid Address in stringToAddrE" (textToAddr net a)
+    maybeToEither "Invalid Address in textToAddrE" (textToAddr net a)
 
 addrToText2 :: Network -> (Address, v) -> Either String (Text, v)
 addrToText2 net (a, v) = (,v) <$> addrToTextE net a
@@ -78,8 +79,8 @@ textToAddr2 net (a, v) = (,v) <$> textToAddrE net a
 lastList :: Natural -> [a] -> [a]
 lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs
 
-xPubChecksum :: XPubKey -> Text
-xPubChecksum = encodeHex . S.encode . xPubFP
+xPubChecksum :: Ctx -> XPubKey -> Text
+xPubChecksum ctx = encodeHex . S.encode . xPubFP ctx
 
 (</>) :: String -> String -> String
 a </> b = a <> "/" <> b

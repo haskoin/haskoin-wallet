@@ -1,10 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE OverloadedRecordDot   #-}
 module Network.Haskoin.Wallet.Parser where
 
 import           Control.Monad                       (forM, join, unless, when)
 import           Control.Monad.Except
 import           Data.Aeson.TH
-import           Data.Either                         (either, rights)
+import           Data.Either                         (either, rights, fromRight)
 import           Data.Foldable                       (asum)
 import           Data.List                           (isPrefixOf, nub, sort)
 import           Data.Map.Strict                     (Map)
@@ -13,7 +14,8 @@ import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
 import           Haskoin.Address
-import           Haskoin.Constants
+import           Haskoin.Network
+import           Haskoin.Crypto
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
@@ -90,16 +92,16 @@ data Command
           }
     deriving (Eq, Show)
 
-programParser :: ParserInfo Command
-programParser =
-    info (commandParser <**> helper) $
+programParser :: Ctx -> ParserInfo Command
+programParser ctx =
+    info (commandParser ctx <**> helper) $
     mconcat
         [ fullDesc
         , progDesc "Lightweight Bitcoin and Bitcoin Cash Wallet"
         ]
 
-commandParser :: Parser Command
-commandParser =
+commandParser :: Ctx -> Parser Command
+commandParser ctx =
     asum
         [ hsubparser $
             mconcat
@@ -107,21 +109,21 @@ commandParser =
             , command "mnemonic" mnemonicParser
             , command "createacc" createAccParser
             , command "importacc" importAccParser
-            , command "renameacc" renameAccParser
+            , command "renameacc" (renameAccParser ctx)
             , command "accounts" accountsParser
-            , command "balance" balanceParser
+            , command "balance" (balanceParser ctx)
             ]
         , hsubparser $
             mconcat
             [ commandGroup "Address management"
-            , command "addresses" addressesParser
-            , command "receive" receiveParser
+            , command "addresses" (addressesParser ctx)
+            , command "receive" (receiveParser ctx)
             ]
         , hsubparser $
             mconcat
             [ commandGroup "Transaction management"
-            , command "transactions" transactionsParser
-            , command "preparetx" prepareTxParser
+            , command "transactions" (transactionsParser ctx)
+            , command "preparetx" (prepareTxParser ctx)
             , command "review" reviewParser
             , command "signtx" signTxParser
             , command "sendtx" sendTxParser
@@ -129,9 +131,9 @@ commandParser =
         , hsubparser $
             mconcat
             [ commandGroup "Utilities"
-            , command "preparesweep" prepareSweepParser
-            , command "signsweep" signSweepParser
-            , command "resetacc" resetAccParser
+            , command "preparesweep" (prepareSweepParser ctx)
+            , command "signsweep" (signSweepParser ctx)
+            , command "resetacc" (resetAccParser ctx)
             ]
         ]
 
@@ -163,10 +165,10 @@ importAccParser =
         , footer "Next command: receive"
         ]
 
-renameAccParser :: ParserInfo Command
-renameAccParser =
+renameAccParser :: Ctx -> ParserInfo Command
+renameAccParser ctx =
     info
-        (CommandRenameAcc <$> accountArg "Old account name"
+        (CommandRenameAcc <$> accountArg ctx "Old account name"
                           <*> textArg "New account name") $
     mconcat [progDesc "Rename an account"]
 
@@ -174,41 +176,41 @@ accountsParser :: ParserInfo Command
 accountsParser =
     info (pure CommandAccounts) $ mconcat [progDesc "Return all accounts"]
 
-balanceParser :: ParserInfo Command
-balanceParser =
-    info (CommandBalance <$> accountOption) $
+balanceParser :: Ctx -> ParserInfo Command
+balanceParser ctx =
+    info (CommandBalance <$> accountOption ctx) $
     mconcat [progDesc "Get the account balance"]
 
-resetAccParser :: ParserInfo Command
-resetAccParser =
-    info (CommandResetAcc <$> accountOption) $
+resetAccParser :: Ctx -> ParserInfo Command
+resetAccParser ctx =
+    info (CommandResetAcc <$> accountOption ctx) $
     mconcat [progDesc "Reset the external and internal derivation indices"]
 
-addressesParser :: ParserInfo Command
-addressesParser =
+addressesParser :: Ctx -> ParserInfo Command
+addressesParser ctx =
     info
-        (CommandAddresses <$> accountOption
+        (CommandAddresses <$> accountOption ctx
                           <*> (Page <$> limitOption <*> offsetOption)) $
     mconcat [progDesc "List the latest receiving addresses in the account"]
 
-receiveParser :: ParserInfo Command
-receiveParser =
-    info (CommandReceive <$> accountOption) $
+receiveParser :: Ctx -> ParserInfo Command
+receiveParser ctx =
+    info (CommandReceive <$> accountOption ctx) $
     mconcat [progDesc "Get a new address for receiving a payment"]
 
-transactionsParser :: ParserInfo Command
-transactionsParser =
+transactionsParser :: Ctx -> ParserInfo Command
+transactionsParser ctx =
     info
-        (CommandTransactions <$> accountOption
+        (CommandTransactions <$> accountOption ctx
                              <*> (Page <$> limitOption <*> offsetOption)) $
     mconcat [progDesc "Display the transactions in an account"]
 
-prepareTxParser :: ParserInfo Command
-prepareTxParser =
+prepareTxParser :: Ctx -> ParserInfo Command
+prepareTxParser ctx =
     info
         (CommandPrepareTx
             <$> some recipientArg
-            <*> accountOption
+            <*> accountOption ctx
             <*> unitOption
             <*> feeOption
             <*> dustOption
@@ -239,13 +241,13 @@ sendTxParser =
     info (CommandSendTx <$> fileArgument "Path of the transaction file") $
     mconcat [progDesc "Broadcast a signed transaction to the network"]
 
-prepareSweepParser :: ParserInfo Command
-prepareSweepParser =
+prepareSweepParser :: Ctx -> ParserInfo Command
+prepareSweepParser ctx =
     info
         (CommandPrepareSweep
             <$> many (addressArg "List of addresses to sweep")
             <*> maybeFileOption "File containing addresses to sweep"
-            <*> accountOption
+            <*> accountOption ctx
             <*> feeOption
             <*> dustOption) $
     mconcat
@@ -253,13 +255,13 @@ prepareSweepParser =
         , footer "Next command: signsweep"
         ]
 
-signSweepParser :: ParserInfo Command
-signSweepParser =
+signSweepParser :: Ctx -> ParserInfo Command
+signSweepParser ctx =
     info
         (CommandSignSweep
             <$> dirArgument "Folder containing the sweep transactions"
             <*> fileArgument "Path to the file containing the private keys"
-            <*> accountOption) $
+            <*> accountOption ctx) $
     mconcat
         [ progDesc "Sign all the transactions contained in a sweep folder"
         , footer "Next command: sendtx"
@@ -348,7 +350,7 @@ networkOption =
         , metavar "TEXT"
         , value btc
         , showDefault
-        , completeWith (getNetworkName <$> allNets)
+        , completeWith ((.name) <$> allNets)
         ]
   where
     f :: Maybe Network -> Either String Network
@@ -356,11 +358,11 @@ networkOption =
         Left $
         unwords $
         "Invalid network name. Select one of the following:" :
-        (getNetworkName <$> allNets)
+        ((.name) <$> allNets)
     f (Just res) = Right res
 
-accountOption :: Parser (Maybe Text)
-accountOption =
+accountOption :: Ctx -> Parser (Maybe Text)
+accountOption ctx =
     optional $
     strOption $
     mconcat
@@ -368,24 +370,24 @@ accountOption =
         , long "account"
         , help "Specify the account to use for this command"
         , metavar "TEXT"
-        , completer (mkCompleter accountCompleter)
+        , completer (mkCompleter $ accountCompleter ctx)
         ]
 
-accountArg :: String -> Parser Text
-accountArg desc =
+accountArg :: Ctx -> String -> Parser Text
+accountArg ctx desc =
     argument str $
     mconcat
         [ help desc
         , metavar "TEXT"
-        , completer (mkCompleter accountCompleter)
+        , completer (mkCompleter $ accountCompleter ctx)
         ]
 
-accountCompleter :: String -> IO [String]
-accountCompleter pref = do
-    keys <- either (const []) id <$> run
+accountCompleter :: Ctx -> String -> IO [String]
+accountCompleter ctx pref = do
+    keys <- fromRight [] <$> run
     return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
   where
-    run = runExceptT $ withAccountMap accountMapKeys
+    run = runExceptT $ withAccountMap ctx accountMapKeys
 
 recipientArg :: Parser (Text, Text)
 recipientArg =

@@ -4,13 +4,14 @@ module Network.Haskoin.Wallet.Entropy where
 
 import           Control.Monad               (when, (>=>))
 import           Control.Monad.Except
+import           Control.Monad.IO.Class      (liftIO)
 import           Data.Bits
 import qualified Data.ByteString             as BS
 import           Data.Either                 (either)
 import           Data.List
 import           Data.Maybe
 import           Data.Text                   (Text)
-import           Haskoin.Keys                (Mnemonic, toMnemonic)
+import           Haskoin.Crypto              (Mnemonic, toMnemonic)
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
 import           Numeric                     (readInt, showIntAtBase)

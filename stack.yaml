@@ -1,13 +1,15 @@
-resolver: lts-19.3
+resolver: nightly-2023-08-02
 nix:
   packages:
   - zlib
   - secp256k1
   - pkg-config
 extra-deps:
-- git: https://github.com/haskoin/haskoin-core.git
-  commit: 2a13ee8be20d7cd3646bb73dc5da4beeaf409ee2
-- git: https://github.com/haskoin/haskoin-store.git
-  commit: bb48270cb297e882de2fd01ddfe750b0311c6212
-  subdirs:
-  - data
+- /home/philippe/src/haskoin-core
+- /home/philippe/src/haskoin-store/data
+# - git: https://github.com/haskoin/haskoin-core.git
+#  commit: 296a8dcc305bd5ae2997eccf5b7156b06918abdf
+# - git: https://github.com/haskoin/haskoin-store.git
+#   commit: 8675393863ec99673f02fadb8ec4bb3c321bcf35
+#   subdirs:
+#   - data

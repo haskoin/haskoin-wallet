@@ -18,9 +18,9 @@ import           Data.Maybe                          (fromMaybe)
 import           Data.String                         (unwords)
 import           Data.String.Conversions             (cs)
 import           Data.Text                           (Text)
-import           Haskoin.Constants
-import           Haskoin.Keys
-import           Haskoin.Util                        (dropFieldLabel)
+import           Haskoin.Crypto
+import           Haskoin.Network
+import           Haskoin.Util
 import           Network.Haskoin.Wallet.AccountStore
 import           Network.Haskoin.Wallet.Amounts
 import           Network.Haskoin.Wallet.Commands
@@ -36,13 +36,14 @@ import qualified System.Directory                    as D
 import           System.IO                           (IOMode (..), withFile)
 
 clientMain :: IO ()
-clientMain = do
-    cmd <- customExecParser (prefs showHelpOnEmpty) programParser
-    res <- commandResponse cmd
-    jsonPrinter res
+clientMain =
+    withContext $ \ctx -> do
+        cmd <- customExecParser (prefs showHelpOnEmpty) (programParser ctx)
+        res <- commandResponse ctx cmd
+        jsonPrinter ctx res
 
-jsonPrinter :: Response -> IO ()
-jsonPrinter = C8.putStrLn . encodeJsonPretty
+jsonPrinter :: Ctx -> Response -> IO ()
+jsonPrinter ctx = C8.putStrLn . encodeJsonPretty . marshalValue ctx
 
 {--
 

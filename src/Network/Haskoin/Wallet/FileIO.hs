@@ -1,13 +1,16 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TemplateHaskell   #-}
+{-# LANGUAGE FlexibleContexts      #-}
+{-# LANGUAGE LambdaCase            #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedStrings     #-}
+{-# LANGUAGE TemplateHaskell       #-}
+{-# LANGUAGE OverloadedRecordDot   #-}
 module Network.Haskoin.Wallet.FileIO where
 
 import           Control.Applicative             ((<|>))
 import           Control.Arrow                   (first)
 import           Control.Monad
 import           Control.Monad.Except
+import           Crypto.Secp256k1                (withContext)
 import           Data.Aeson                      (FromJSON, ToJSON, object,
                                                   parseJSON, toJSON, withObject,
                                                   (.:), (.=))
@@ -29,9 +32,8 @@ import           Data.String.Conversions         (cs)
 import           Data.Text                       (Text)
 import qualified Data.Text                       as Text
 import           Haskoin.Address
-import           Haskoin.Constants
 import           Haskoin.Crypto
-import           Haskoin.Keys
+import           Haskoin.Network
 import           Haskoin.Transaction
 import           Haskoin.Util
 import           Network.Haskoin.Wallet.Util
@@ -41,7 +43,7 @@ import qualified System.Directory                as D
 import qualified System.IO                       as IO
 
 class HasFilePath a where
-    getFilePath :: a -> String
+    getFilePath :: Ctx -> a -> String
 
 data PubKeyDoc = PubKeyDoc
     { documentPubKey  :: !XPubKey
@@ -50,26 +52,25 @@ data PubKeyDoc = PubKeyDoc
     }
     deriving (Eq, Show)
 
-instance FromJSON PubKeyDoc where
-    parseJSON =
+instance MarshalJSON Ctx PubKeyDoc where
+    unmarshalValue ctx =
         withObject "pubkeydocument" $ \o -> do
             net <- maybe mzero return . netByName =<< o .: "network"
             PubKeyDoc
-                <$> (xPubFromJSON net =<< o .: "xpubkey")
+                <$> (unmarshalValue (net, ctx) =<< o .: "xpubkey")
                 <*> return net
                 <*> (o .: "name")
 
-instance ToJSON PubKeyDoc where
-    toJSON (PubKeyDoc k net name) =
+    marshalValue ctx (PubKeyDoc k net name) =
         object
-            [ "xpubkey" .= xPubToJSON net k
-            , "network" .= getNetworkName net
+            [ "xpubkey" .= marshalValue (net, ctx) k
+            , "network" .= net.name
             , "name" .= name
             ]
 
 instance HasFilePath PubKeyDoc where
-    getFilePath (PubKeyDoc xpub net _) =
-        getNetworkName net <> "-account-" <> cs (xPubChecksum xpub) <> ".json"
+    getFilePath ctx (PubKeyDoc xpub net _) =
+        net.name <> "-account-" <> cs (xPubChecksum ctx xpub) <> ".json"
 
 data TxSignData = TxSignData
     { txSignDataTx          :: !Tx
@@ -82,8 +83,8 @@ data TxSignData = TxSignData
     }
     deriving (Eq, Show)
 
-instance FromJSON TxSignData where
-    parseJSON =
+instance MarshalJSON Ctx TxSignData where
+    unmarshalValue _ =
         withObject "txsigndata" $ \o -> do
             net <- maybe mzero return . netByName =<< o .: "network"
             let f = eitherToMaybe . S.decode <=< decodeHex
@@ -97,8 +98,7 @@ instance FromJSON TxSignData where
                        <*> o .: "signed"
                        <*> pure net
 
-instance ToJSON TxSignData where
-    toJSON (TxSignData t i oi op a s net) =
+    marshalValue _ (TxSignData t i oi op a s net) =
         object
             [ "tx" .= encodeHex (S.encode t)
             , "txinputs" .= (encodeHex . S.encode <$> i)
@@ -106,12 +106,12 @@ instance ToJSON TxSignData where
             , "outputpaths" .= op
             , "account" .= a
             , "signed" .= s
-            , "network" .= getNetworkName net
+            , "network" .= net.name
             ]
 
 instance HasFilePath TxSignData where
-    getFilePath (TxSignData tx _ _ _ _ s net) =
-        getNetworkName net <> heading <> cs (txChecksum tx) <> ".json"
+    getFilePath _ (TxSignData tx _ _ _ _ s net) =
+        net.name <> heading <> cs (txChecksum tx) <> ".json"
       where
         heading = if s then "-signedtx-" else "-unsignedtx-"
 
@@ -131,16 +131,17 @@ data HWFolder
 toFolder :: HWFolder -> String
 toFolder =
     \case
-        TxFolder -> "transactions"
-        PubKeyFolder -> "pubkeys"
+        TxFolder           -> "transactions"
+        PubKeyFolder       -> "pubkeys"
         SweepFolder chksum -> "sweep-" <> chksum
 
-writeDoc :: (Json.ToJSON a, HasFilePath a) => HWFolder -> a -> IO FilePath
-writeDoc folder doc = do
-    dir <- hwDataDirectory $ Just $ toFolder folder
-    let path = dir </> getFilePath doc
-    writeJsonFile path doc
-    return path
+writeDoc :: (MarshalJSON Ctx a, HasFilePath a) => HWFolder -> a -> IO FilePath
+writeDoc folder doc =
+    withContext $ \ctx -> do
+        dir <- hwDataDirectory $ Just $ toFolder folder
+        let path = dir </> getFilePath ctx doc
+        writeJsonFile path $ marshalValue ctx doc
+        return path
 
 txChecksum :: Tx -> Text
 txChecksum = Text.take 8 . txHashToHex . nosigTxHash
@@ -149,21 +150,29 @@ txsChecksum :: [Tx] -> Text
 txsChecksum txs =
     Text.take 8 $ txHashToHex $ TxHash $ sha256 $ mconcat bss
   where
-    bss = BSS.fromShort . getHash256 . getTxHash . nosigTxHash <$> txs
+    bss = BSS.fromShort . (.get) . (.get) . nosigTxHash <$> txs
 
 -- JSON IO Helpers--
 
-writeJsonFile :: Json.ToJSON a => String -> a -> IO ()
+writeJsonFile :: String -> Json.Value -> IO ()
 writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
 
 readJsonFile :: Json.FromJSON a => FilePath -> IO (Either String a)
-readJsonFile filePath = Json.eitherDecodeFileStrict' filePath
+readJsonFile = Json.eitherDecodeFileStrict'
+
+writeMarshalFile :: MarshalJSON s a => s -> String -> a -> IO ()
+writeMarshalFile s filePath a = writeJsonFile filePath $ marshalValue s a
+
+readMarshalFile :: MarshalJSON s a => s -> FilePath -> IO (Either String a)
+readMarshalFile s filePath = do
+    vE <- readJsonFile filePath
+    return $ Json.parseEither (unmarshalValue s) =<< vE
 
 -- Parse wallet dump files for sweeping --
 
 readFileWords :: FilePath -> IO [[Text]]
 readFileWords fp = do
-    strContents <- liftIO $ IO.readFile fp
+    strContents <- IO.readFile fp
     return $ removeComments $ Text.words <$> Text.lines (cs strContents)
 
 parseAddrsFile :: Network -> [[Text]] -> [Address]
@@ -174,7 +183,7 @@ parseAddrsFile net =
 
 parseSecKeysFile :: Network -> [[Text]] -> [SecKey]
 parseSecKeysFile net =
-    withParser $ \w -> secKeyData <$> (fromWif net w <|> fromMiniKey (cs w))
+    withParser $ \w -> (.key) <$> (fromWif net w <|> fromMiniKey (cs w))
 
 withParser :: (Text -> Maybe a) -> [[Text]] -> [a]
 withParser parser =
