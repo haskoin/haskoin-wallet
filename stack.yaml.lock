@@ -3,7 +3,31 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/lock_files
 
-packages: []
+packages:
+- completed:
+    commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
+    git: https://github.com/haskoin/haskoin-core.git
+    name: haskoin-core
+    pantry-tree:
+      sha256: 5b6b7ddc6eae4d0c56f8af5f2485476a47ea82ecfcc97a70f1ff3524f3f269d9
+      size: 7357
+    version: 1.0.3
+  original:
+    commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
+    git: https://github.com/haskoin/haskoin-core.git
+- completed:
+    commit: 5b87029c8cce9670fad421cfd271df75ca93739c
+    git: https://github.com/haskoin/haskoin-store.git
+    name: haskoin-store-data
+    pantry-tree:
+      sha256: 445721ee7d608221afb516782e28025f108720076e67a5b8921b00073b77dc8b
+      size: 624
+    subdir: data
+    version: 1.0.2
+  original:
+    commit: 5b87029c8cce9670fad421cfd271df75ca93739c
+    git: https://github.com/haskoin/haskoin-store.git
+    subdir: data
 snapshots:
 - completed:
     sha256: d4a54df12888fc5d1ef2d4ff987225fa7bedb2cff74385b33fbec4a384ebd619

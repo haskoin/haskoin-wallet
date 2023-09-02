@@ -9,7 +9,9 @@ module Network.Haskoin.Wallet.SigningSpec where
 import Control.Arrow (second)
 import qualified Data.ByteString as BS
 import Data.Either
+import qualified Data.Map as Map
 import Data.Maybe
+import Data.Serialize (encode)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -17,7 +19,9 @@ import Data.Word
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Network.Haskoin.Wallet.AccountStore
+import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.Signing
+import Network.Haskoin.Wallet.TxInfo
 import Numeric.Natural
 import System.Random
 import Test.HUnit
@@ -29,16 +33,17 @@ spec :: Spec
 spec =
   prepareContext $ \ctx -> do
     buildSpec ctx
+    signingSpec ctx
 
 buildSpec :: Ctx -> Spec
 buildSpec ctx =
   describe "Transaction builder" $ do
     it "can build a transaction" $ do
       let coins =
-            [ coin' ctx (1, 0) (addr' 0) 100000000,
-              coin' ctx (1, 1) (addr' 1) 200000000,
-              coin' ctx (1, 2) (addr' 1) 300000000,
-              coin' ctx (1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 200000000), (oAddr' 1, 200000000)]
@@ -49,7 +54,7 @@ buildSpec ctx =
         ( Right $
             tx'
               ctx
-              [(1, 2), (1, 1), (1, 0)] -- Greedy algorithm
+              [(txid' 1, 2), (txid' 1, 1), (txid' 1, 0)] -- Greedy algorithm
               ((rcps !! 1) : (change, 199825416) : [rcps !! 0])
         )
         (fst <$> resE)
@@ -57,10 +62,10 @@ buildSpec ctx =
 
     it "can fail to build a transaction if funds are insufficient" $ do
       let coins =
-            [ coin' ctx (1, 0) (addr' 0) 100000000,
-              coin' ctx (1, 1) (addr' 1) 200000000,
-              coin' ctx (1, 2) (addr' 1) 300000000,
-              coin' ctx (1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 500000000)]
@@ -70,10 +75,10 @@ buildSpec ctx =
 
     it "will drop the change output if it is dust" $ do
       let coins =
-            [ coin' ctx (1, 0) (addr' 0) 100000000,
-              coin' ctx (1, 1) (addr' 1) 200000000,
-              coin' ctx (1, 2) (addr' 1) 300000000,
-              coin' ctx (1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 499990000)]
@@ -86,7 +91,7 @@ buildSpec ctx =
         ( Right $
             tx'
               ctx
-              [(1, 3), (1, 2), (1, 1), (1, 0)]
+              [(txid' 1, 3), (txid' 1, 2), (txid' 1, 1), (txid' 1, 0)]
               ((rcps !! 1) : (change, 10000) : [rcps !! 0])
         )
         (fst <$> resE1)
@@ -95,7 +100,7 @@ buildSpec ctx =
         ( Right $
             tx'
               ctx
-              [(1, 3), (1, 2), (1, 1), (1, 0)]
+              [(txid' 1, 3), (txid' 1, 2), (txid' 1, 1), (txid' 1, 0)]
               ((rcps !! 1) : [rcps !! 0])
         )
         (fst <$> resE2)
@@ -104,23 +109,130 @@ buildSpec ctx =
         ( Right $
             tx'
               ctx
-              [(1, 3), (1, 2), (1, 1), (1, 0)]
+              [(txid' 1, 3), (txid' 1, 2), (txid' 1, 1), (txid' 1, 0)]
               ((rcps !! 1) : [rcps !! 0])
         )
         (fst <$> resE3)
 
     it "will fail if sending dust" $ do
       let coins =
-            [ coin' ctx (1, 0) (addr' 0) 100000000,
-              coin' ctx (1, 1) (addr' 1) 200000000,
-              coin' ctx (1, 2) (addr' 1) 300000000,
-              coin' ctx (1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 10000)]
           gen = mkStdGen 0
           resE = buildWalletTx btc ctx gen rcps change coins 1 10000 False
       assertEqual "Tx" (Left "Recipient output is smaller than the dust value") resE
+
+    it "can make the recipient pay for the fees" $ do
+      let coins =
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            ]
+          change = iAddr' 0
+          rcps = [(oAddr' 0, 200000000), (oAddr' 1, 200000000)]
+          gen = mkStdGen 0
+          resE = buildWalletTx btc ctx gen rcps change coins 314 10000 True
+      assertEqual
+        "Tx"
+        ( Right $
+            tx'
+              ctx
+              [(txid' 1, 2), (txid' 1, 1), (txid' 1, 0)]
+              ((oAddr' 1, 199912708) : (change, 200000000) : [(oAddr' 0, 199912708)])
+        )
+        (fst <$> resE)
+
+    it "fails when recipients cannot pay" $ do
+      let coins =
+            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            ]
+          change = iAddr' 0
+          rcps1 = [(oAddr' 0, 400000000), (oAddr' 1, 87291)] -- fee is 2*87292
+          rcps2 = [(oAddr' 0, 400000000), (oAddr' 1, 87292)]
+          rcps3 = [(oAddr' 0, 400000000), (oAddr' 1, 97293)]
+          gen = mkStdGen 0
+          resE1 = buildWalletTx btc ctx gen rcps1 change coins 314 10000 True
+          resE2 = buildWalletTx btc ctx gen rcps2 change coins 314 10000 True
+          resE3 = buildWalletTx btc ctx gen rcps3 change coins 314 10000 True
+      assertEqual "Tx" (Left "Recipients can't pay for the fee") resE1
+      assertEqual "Tx" (Left "Recipient output is smaller than the dust value") resE2
+      assertEqual
+        "Tx"
+        ( Right $
+            tx'
+              ctx
+              [(txid' 1, 2), (txid' 1, 1), (txid' 1, 0)]
+              ((oAddr' 1, 10001) : (change, 199902707) : [(oAddr' 0, 399912708)])
+        )
+        (fst <$> resE3)
+
+signingSpec :: Ctx -> Spec
+signingSpec ctx =
+  describe "Transaction builder" $ do
+    it "can sign a simple transaction" $ do
+      let fundTx =
+            tx'
+              ctx
+              [(txid' 1, 0)]
+              [(addr' 0, 100000000)]
+          newTx =
+            tx'
+              ctx
+              [(txHash fundTx, 0)]
+              [(oAddr' 0, 50000000), (iAddr' 0, 40000000)]
+          dat = TxSignData newTx [fundTx] [extDeriv :/ 0] [intDeriv :/ 0] 0 False btc
+          xPrvE = signingKey btc ctx pwd mnem 0
+          xPrv = fromRight (error "fromRight") xPrvE
+      assertEqual "XPrvKey" (Right $ fst $ keys ctx) xPrvE
+      let resE = signWalletTx ctx dat xPrv
+          (resDat, resTxInfo) = fromRight (error "fromRight") resE
+          signedTx = txSignDataTx resDat
+      assertEqual
+        "TxInfo"
+        ( TxInfo
+            { txInfoId = txHash signedTx,
+              txInfoType = TxDebit,
+              txInfoAmount = -60000000,
+              txInfoMyOutputs =
+                Map.fromList
+                  [(iAddr' 0, MyOutputs 40000000 (intDeriv :/ 0))],
+              txInfoOtherOutputs = Map.fromList [(oAddr' 0, 50000000)],
+              txInfoNonStdOutputs = [],
+              txInfoMyInputs =
+                Map.fromList
+                  [ ( addr' 0,
+                      MyInputs
+                        100000000
+                        (extDeriv :/ 0)
+                        [ SigInput
+                            (PayPKHash $ (addr' 0).hash160)
+                            100000000
+                            (OutPoint (txHash fundTx) 0)
+                            sigHashAll
+                            Nothing
+                        ]
+                    )
+                  ],
+              txInfoOtherInputs = Map.empty,
+              txInfoNonStdInputs = [],
+              txInfoSize = fromIntegral $ BS.length $ encode signedTx,
+              txInfoFee = 10000000,
+              txInfoFeeByte = 44247.79,
+              txInfoBlockRef = Store.MemRef 0,
+              txInfoConfirmations = 0
+            }
+        )
+        resTxInfo
+      assertBool "The transaction was not signed" (txSignDataSigned resDat)
 
 {-
 
@@ -411,12 +523,12 @@ signingSpec =
 
 -- Test Helpers --
 
-tx' :: Ctx -> [(Word8, Word32)] -> [(Address, Natural)] -> Tx
+tx' :: Ctx -> [(TxHash, Word32)] -> [(Address, Natural)] -> Tx
 tx' ctx xs ys = Tx 1 txi txo [] 0
   where
     txi =
       fmap
-        (\(h, p) -> TxIn (OutPoint (txid' h) p) BS.empty maxBound)
+        (\(h, p) -> TxIn (OutPoint h p) BS.empty maxBound)
         xs
     f = marshal ctx . PayPKHash . (.hash160)
     txo = fmap (\(a, v) -> TxOut v $ f a) (second fromIntegral <$> ys)
@@ -432,11 +544,11 @@ bid' w =
       cs $
         w `BS.cons` BS.replicate 31 0x00
 
-coin' :: Ctx -> (Word8, Word32) -> Address -> Natural -> Store.Unspent
+coin' :: Ctx -> (TxHash, Word32) -> Address -> Natural -> Store.Unspent
 coin' ctx (h, p) a v =
   Store.Unspent
     { Store.block = Store.MemRef 0,
-      Store.outpoint = OutPoint (txid' h) p,
+      Store.outpoint = OutPoint h p,
       Store.value = fromIntegral v,
       Store.script = marshal ctx $ PayPKHash $ (.hash160) a,
       Store.address = Just a
@@ -453,10 +565,10 @@ oAddr' i = othAddrs !! i
 
 -- Test Constants
 
-pwd :: String
+pwd :: Text
 pwd = "correct horse battery staple"
 
-mnem :: String
+mnem :: Text
 mnem = "snow senior nerve virus fabric now fringe clip marble interest analyst can"
 
 keys :: Ctx -> (XPrvKey, XPubKey)

@@ -72,26 +72,26 @@ data TxInfo = TxInfo
     } deriving (Eq, Show)
 
 data MyOutputs = MyOutputs
-    { myOutputsId :: !Natural
+    { myOutputsValue :: !Natural
     , myOutputsPath :: !SoftPath
     } deriving (Eq, Show)
 
 instance Json.ToJSON MyOutputs where
     toJSON (MyOutputs i p) = 
         object
-            [ "id" .= i
+            [ "value" .= i
             , "path" .= p
             ]
 
 instance Json.FromJSON MyOutputs where
     parseJSON =
         withObject "MyOutputs" $ \o -> do
-            i <- o .: "id"
+            i <- o .: "value"
             p <- o .: "path"
             return $ MyOutputs i p
 
 data MyInputs = MyInputs
-    { myInputsId :: !Natural
+    { myInputsValue :: !Natural
     , myInputsPath :: !SoftPath
     , myInputsSigInput :: [SigInput]
     } deriving (Eq, Show)
@@ -99,33 +99,33 @@ data MyInputs = MyInputs
 instance MarshalJSON Ctx MyInputs where
     marshalValue ctx (MyInputs i p s) =
         object $
-            [ "id" .= i
+            [ "value" .= i
             , "path" .= p
             ] ++
             [ "siginput" .= (marshalValue ctx <$> s) | not (null s) ]
 
     unmarshalValue ctx =
         withObject "MyInputs" $ \o -> do
-            i <- o .: "id"
+            i <- o .: "value"
             p <- o .: "path"
             sM <- o .:? "siginput"
             s <- unmarshalValue ctx `mapM` fromMaybe [] sM
             return $ MyInputs i p s
 
 data OtherInputs = OtherInputs
-    { otherInputsId :: !Natural
+    { otherInputsValue :: !Natural
     , otherInputsSigInput :: [SigInput]
     } deriving (Eq, Show)
 
 instance MarshalJSON Ctx OtherInputs where
     marshalValue ctx (OtherInputs i s) =
         object $
-            ( "id" .= i ) :
+            ( "value" .= i ) :
             [ "siginput" .= (marshalValue ctx <$> s) | not (null s) ]
 
     unmarshalValue ctx =
         withObject "OtherInputs" $ \o -> do
-            i <- o .: "id"
+            i <- o .: "value"
             sM <- o .:? "siginput"
             s <- unmarshalValue ctx `mapM` fromMaybe [] sM
             return $ OtherInputs i s

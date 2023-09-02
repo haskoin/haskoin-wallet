@@ -5,11 +5,9 @@ nix:
   - secp256k1
   - pkg-config
 extra-deps:
-- /home/philippe/src/haskoin-core
-- /home/philippe/src/haskoin-store/data
-# - git: https://github.com/haskoin/haskoin-core.git
-#  commit: 296a8dcc305bd5ae2997eccf5b7156b06918abdf
-# - git: https://github.com/haskoin/haskoin-store.git
-#   commit: 8675393863ec99673f02fadb8ec4bb3c321bcf35
-#   subdirs:
-#   - data
+  - git: https://github.com/haskoin/haskoin-core.git
+    commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
+  - git: https://github.com/haskoin/haskoin-store.git
+    commit: 5b87029c8cce9670fad421cfd271df75ca93739c
+    subdirs:
+    - data
