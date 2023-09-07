@@ -460,21 +460,9 @@ mnemonic useDice ent =
   catchResponseError $ do
     (orig, ms) <-
       if useDice
-        then genMnemonicDice ent =<< askDiceRolls ent
+        then genMnemonicDice ent
         else genMnemonic ent
     return $ ResponseMnemonic orig (cs <$> words (cs ms))
-
--- TODO: Ask the dice rolls in sequences of 5 or so
-askDiceRolls :: Natural -> ExceptT String IO String
-askDiceRolls ent = do
-  roll1 <-
-    liftIO $
-      askInputLineHidden $
-        "Enter your " <> show (requiredRolls ent) <> " dice rolls: "
-  roll2 <- liftIO $ askInputLineHidden "Enter your dice rolls again:"
-  unless (roll1 == roll2) $
-    throwError "Dice rolls do not match"
-  return roll1
 
 createAcc :: Ctx -> Text -> Network -> Maybe Natural -> IO Response
 createAcc ctx name net derivM =
@@ -750,7 +738,7 @@ rollDice n = do
       | length acc >= fromIntegral n = return (acc, orig)
       | otherwise = do
           (origEnt, sysEnt) <- systemEntropy 1
-          go (char8ToBase6 (head $ BS.unpack sysEnt) <> acc) origEnt
+          go (word8ToBase6 (head $ BS.unpack sysEnt) <> acc) origEnt
 
 -- Utilities --
 
