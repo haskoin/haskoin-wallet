@@ -3,6 +3,7 @@
 
 module Network.Haskoin.Wallet.EntropySpec where
 
+import Control.Exception (evaluate)
 import Control.Monad
 import qualified Data.ByteString as BS
 import Data.Either
@@ -11,6 +12,8 @@ import Data.Maybe
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Util
+import Haskoin.Util.Arbitrary
+import Haskoin.Util.Arbitrary (arbitraryBS1)
 import Network.Haskoin.Wallet.AccountStore
 import Network.Haskoin.Wallet.Entropy
 import Network.Haskoin.Wallet.Signing
@@ -66,26 +69,59 @@ diceSpec =
 entropySpec :: Spec
 entropySpec = do
   it "can mix entropy" $ do
-    mixEntropy BS.empty (BS.pack [0x00]) `shouldSatisfy` isLeft
-    mixEntropy (BS.pack [0x00]) BS.empty `shouldSatisfy` isLeft
-    mixEntropy (BS.pack [0x00, 0x00]) (BS.pack [0x00])
-      `shouldSatisfy` isLeft
-    mixEntropy (BS.pack [0x00]) (BS.pack [0x00, 0x00])
-      `shouldSatisfy` isLeft
-    mixEntropy (BS.pack [0x00]) (BS.pack [0x00])
-      `shouldBe` Right (BS.pack [0x00])
-    mixEntropy (BS.pack [0x00]) (BS.pack [0xff])
-      `shouldBe` Right (BS.pack [0xff])
-    mixEntropy (BS.pack [0xff]) (BS.pack [0x00])
-      `shouldBe` Right (BS.pack [0xff])
-    mixEntropy (BS.pack [0xff]) (BS.pack [0xff])
-      `shouldBe` Right (BS.pack [0x00])
-    mixEntropy (BS.pack [0xaa]) (BS.pack [0x55])
-      `shouldBe` Right (BS.pack [0xff])
-    mixEntropy (BS.pack [0x55, 0xaa]) (BS.pack [0xaa, 0x55])
-      `shouldBe` Right (BS.pack [0xff, 0xff])
-    mixEntropy (BS.pack [0x7a, 0x54]) (BS.pack [0xd3, 0x8e])
-      `shouldBe` Right (BS.pack [0xa9, 0xda])
+    evaluate (xorBytes BS.empty $ BS.pack [0x00]) `shouldThrow` anyException
+    evaluate (xorBytes (BS.pack [0x00]) BS.empty) `shouldThrow` anyException
+    evaluate (xorBytes (BS.pack [0x00, 0x00]) (BS.pack [0x00]))
+      `shouldThrow` anyException
+    evaluate (xorBytes (BS.pack [0x00]) (BS.pack [0x00, 0x00]))
+      `shouldThrow` anyException
+    xorBytes (BS.pack [0x00]) (BS.pack [0x00])
+      `shouldBe` (BS.pack [0x00])
+    xorBytes (BS.pack [0x00]) (BS.pack [0xff])
+      `shouldBe` (BS.pack [0xff])
+    xorBytes (BS.pack [0xff]) (BS.pack [0x00])
+      `shouldBe` (BS.pack [0xff])
+    xorBytes (BS.pack [0xff]) (BS.pack [0xff])
+      `shouldBe` (BS.pack [0x00])
+    xorBytes (BS.pack [0xaa]) (BS.pack [0x55])
+      `shouldBe` (BS.pack [0xff])
+    xorBytes (BS.pack [0x55, 0xaa]) (BS.pack [0xaa, 0x55])
+      `shouldBe` (BS.pack [0xff, 0xff])
+    xorBytes (BS.pack [0x7a, 0x54]) (BS.pack [0xd3, 0x8e])
+      `shouldBe` (BS.pack [0xa9, 0xda])
+  it "can split entropy" $ do
+    splitEntropyWith
+      (BS.pack [0x00])
+      []
+      `shouldBe` [BS.pack [0x00]]
+    splitEntropyWith
+      (BS.pack [0x00])
+      [BS.pack [0x00]]
+      `shouldBe` [BS.pack [0x00], BS.pack [0x00]]
+    splitEntropyWith
+      (BS.pack [0x55])
+      [BS.pack [0xaa]]
+      `shouldBe` [BS.pack [0xff], BS.pack [0xaa]]
+    splitEntropyWith
+      (BS.pack [0x55, 0xaa])
+      [BS.pack [0xaa, 0x55]]
+      `shouldBe` [BS.pack [0xff, 0xff], BS.pack [0xaa, 0x55]]
+  prop "prop: can split entropy x2" $
+    forAll (arbitraryBSn 32) $ \s ->
+      forAll (arbitraryBSn 32) $ \k ->
+        splitEntropyWith s [k] `shouldBe` [s `xorBytes` k, k]
+  prop "prop: can split entropy x3" $
+    forAll (arbitraryBSn 32) $ \s ->
+      forAll (arbitraryBSn 32) $ \k1 ->
+        forAll (arbitraryBSn 32) $ \k2 ->
+          splitEntropyWith s [k1, k2]
+            `shouldBe` [s `xorBytes` k1 `xorBytes` k2, k1, k2]
+  prop "prop: can reconstruct secret key" $
+    forAll (arbitraryBSn 32) $ \s ->
+      forAll (arbitraryBSn 32) $ \k1 ->
+        forAll (arbitraryBSn 32) $ \k2 -> do
+          let [a, b, c] = splitEntropyWith s [k1, k2]
+          (a `xorBytes` b `xorBytes` c) `shouldBe` s
 
 -- https://github.com/iancoleman/bip39/issues/58
 mnemonicSpec :: Ctx -> Spec

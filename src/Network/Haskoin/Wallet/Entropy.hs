@@ -4,7 +4,7 @@
 
 module Network.Haskoin.Wallet.Entropy where
 
-import Control.Monad (when, (>=>))
+import Control.Monad
 import Control.Monad.Except
 import Control.Monad.IO.Class (liftIO)
 import Data.Bifoldable (bifoldl1)
@@ -15,7 +15,7 @@ import Data.List
 import Data.Maybe
 import Data.Text (Text)
 import Data.Word (Word8)
-import Haskoin.Crypto (Mnemonic, toMnemonic, xPrvIsHard)
+import Haskoin.Crypto
 import Haskoin.Util
 import Network.Haskoin.Wallet.Util
 import Numeric (readInt, showIntAtBase)
@@ -26,6 +26,8 @@ import qualified System.Directory as D
 import System.Entropy (getEntropy)
 import System.IO
 import Text.Read (readMaybe)
+import Control.Lens (parts)
+import qualified Data.Text as T
 
 -- Produces uniformily distributed dice rolls from a random byte
 -- 0,   0x00 -> [6,6,6]
@@ -110,18 +112,42 @@ packBools bs
   | otherwise = BS.pack $ boolsToWord8 <$> chunksOf 8 bs
 
 -- Mix entropy of same length by xoring them
-mixEntropy ::
-  BS.ByteString ->
-  BS.ByteString ->
-  Either String BS.ByteString
-mixEntropy ent1 ent2
+xorBytes :: BS.ByteString -> BS.ByteString -> BS.ByteString
+xorBytes ent1 ent2
   | BS.length ent1 == BS.length ent2 =
-      Right $ BS.pack $ BS.zipWith xor ent1 ent2
-  | otherwise = Left "Entropy is not of the same length"
+      BS.pack $ BS.zipWith xor ent1 ent2
+  | otherwise = error "Entropy is not of the same length"
+
+-- Split secret s into n parts
+-- generate k1 .. k(n-1) randomly
+-- compute kn = s xor k1 xor .. xor k(n-1)
+-- return k1 .. kn
+-- We have the property that s = k1 xor ... xor kn
+splitEntropy :: Natural -> BS.ByteString -> IO [BS.ByteString]
+splitEntropy n secret
+  | n < 2 = error "splitEntropy invalid number"
+  | otherwise = do
+      ks <- replicateM (fromIntegral n - 1) (snd <$> systemEntropy len)
+      return $ splitEntropyWith secret ks
+  where
+    len = fromIntegral $ BS.length secret
+
+splitEntropyWith :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
+splitEntropyWith secret ks = foldl' xorBytes secret ks : ks
+
+mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
+mergeMnemonicParts mnems
+  | length mnems < 2 = Left "Invalid call to mergeMnemonicParts"
+  | otherwise = do
+    bs <- mapM (mnemonicToSeed "") mnems
+    let ent = foldl' xorBytes (head bs) (tail bs)
+    toMnemonic ent
 
 askInputDice :: IO Natural
 askInputDice = do
-  inputM <- Haskeline.runInputT Haskline.defaultSettings $ Haskeline.getInputLine "Dice Roll: "
+  inputM <-
+    Haskeline.runInputT Haskline.defaultSettings $
+      Haskeline.getInputLine "Dice roll: "
   case readMaybe =<< inputM of
     Just n ->
       if n `elem` [1 .. 6]
@@ -135,7 +161,8 @@ askInputDice = do
 
 -- TODO: Ask the dice rolls in sequences of 5 or so
 getDiceEntropy :: Natural -> IO BS.ByteString
-getDiceEntropy ent =
+getDiceEntropy ent = do
+  putStrLn "Enter your dice rolls (from 1 to 6)"
   f [] []
   where
     f :: [Word8] -> [Bool] -> IO BS.ByteString
@@ -145,28 +172,40 @@ getDiceEntropy ent =
       | otherwise = do
           d <- askInputDice
           let (ws, bs) = base6ToWord8 [d] acc
+          unless (null ws) $ do
+            putStrLn $
+              show (length res + length ws)
+                <> "/"
+                <> show ent
+                <> " bytes collected"
           f (ws <> res) bs
 
-genMnemonic :: Natural -> ExceptT String IO (Text, Mnemonic)
-genMnemonic reqEnt
-  | reqEnt `elem` [16, 20 .. 32] = do
-      (origEnt, ent) <- liftIO $ systemEntropy reqEnt
-      when (BS.length ent /= fromIntegral reqEnt) $
-        throwError "Something went wrong with the entropy size"
-      mnem <- liftEither $ toMnemonic ent
-      return (origEnt, mnem)
-  | otherwise = throwError "The entropy value can only be in [16,20..32]"
-
-genMnemonicDice :: Natural -> ExceptT String IO (Text, Mnemonic)
-genMnemonicDice reqEnt
+-- Generate a mnemonic with optional dice entropy and key splitting
+genMnemonic ::
+  Natural ->
+  Bool ->
+  Natural ->
+  ExceptT String IO (Text, Mnemonic, [Mnemonic])
+genMnemonic reqEnt reqDice splitIn
   | reqEnt `elem` [16, 20 .. 32] = do
       (origEnt, sysEnt) <- liftIO $ systemEntropy reqEnt
-      diceEnt <- liftIO $ getDiceEntropy reqEnt
-      ent <- liftEither $ mixEntropy sysEnt diceEnt
+      ent <-
+        if reqDice
+          then do
+            diceEnt <- liftIO $ getDiceEntropy reqEnt
+            return $ sysEnt `xorBytes` diceEnt
+          else return sysEnt
       when (BS.length ent /= fromIntegral reqEnt) $
         throwError "Something went wrong with the entropy size"
       mnem <- liftEither $ toMnemonic ent
-      return (origEnt, mnem)
+      if splitIn > 1
+        then do
+          ks <- liftIO $ splitEntropy splitIn ent
+          unless (ent == foldl' xorBytes (head ks) (tail ks)) $
+            throwError "Something went wrong while splitting the keys"
+          splitMnems <- liftEither $ mapM toMnemonic ks
+          return (origEnt, mnem, splitMnems)
+        else return (origEnt, mnem, [])
   | otherwise = throwError "The entropy value can only be in [16,20..32]"
 
 systemEntropy :: Natural -> IO (Text, BS.ByteString)
@@ -178,4 +217,4 @@ systemEntropy bytes = do
 
 devRandom :: Natural -> IO BS.ByteString
 devRandom bytes =
-  withBinaryFile "/dev/random" ReadMode (`BS.hGet` (fromIntegral bytes))
+  withBinaryFile "/dev/random" ReadMode (`BS.hGet` fromIntegral bytes)

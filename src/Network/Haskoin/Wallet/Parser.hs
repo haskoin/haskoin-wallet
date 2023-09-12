@@ -29,13 +29,15 @@ import Options.Applicative.Help.Pretty hiding ((</>))
 
 data Command
   = CommandMnemonic
-      { commandUseDice :: !Bool,
-        commandEntropy :: !Natural
+      { commandEntropy :: !Natural,
+        commandUseDice :: !Bool,
+        commandSplitIn :: !Natural
       }
   | CommandCreateAcc
       { commandName :: !Text,
         commandNetwork :: !Network,
-        commandDerivation :: !(Maybe Natural)
+        commandDerivation :: !(Maybe Natural),
+        commandSplitIn :: !Natural
       }
   | CommandImportAcc
       { commandFilePath :: !FilePath
@@ -74,7 +76,8 @@ data Command
       { commandFilePath :: !FilePath
       }
   | CommandSignTx
-      { commandFilePath :: !FilePath
+      { commandFilePath :: !FilePath,
+        commandSplitIn :: !Natural
       }
   | CommandSendTx
       { commandFilePath :: !FilePath
@@ -101,7 +104,7 @@ programParser ctx =
   info (commandParser ctx <**> helper) $
     mconcat
       [ fullDesc,
-        progDesc "Lightweight Bitcoin and Bitcoin Cash Wallet"
+        progDesc "Lightweight Bitcoin and Bitcoin Cash BIP-44 Wallet"
       ]
 
 commandParser :: Ctx -> Parser Command
@@ -144,7 +147,7 @@ commandParser ctx =
 
 mnemonicParser :: ParserInfo Command
 mnemonicParser =
-  info (CommandMnemonic <$> diceOption <*> entropyOption) $
+  info (CommandMnemonic <$> entropyOption <*> diceOption <*> splitInOption) $
     mconcat
       [ progDesc "Generate a mnemonic using your systems entropy",
         footer "Next commands: createacc"
@@ -157,6 +160,7 @@ createAccParser =
         <$> textArg "Name of the new account"
         <*> networkOption
         <*> derivationOption
+        <*> splitInOption
     )
     $ mconcat
       [ progDesc "Create a new account from a mnemonic",
@@ -244,7 +248,7 @@ reviewParser =
 
 signTxParser :: ParserInfo Command
 signTxParser =
-  info (CommandSignTx <$> fileArgument "Path of the transaction file") $
+  info (CommandSignTx <$> fileArgument "Path of the transaction file" <*> splitInOption) $
     mconcat
       [ progDesc "Sign a transaction that was created with preparetx",
         footer "Next command: sendtx"
@@ -331,6 +335,19 @@ diceOption =
         long "dice",
         help "Provide additional entropy using 6-sided dice",
         showDefault
+      ]
+
+splitInOption :: Parser Natural
+splitInOption =
+  option (maybeReader $ readNatural . cs) $
+    mconcat
+      [ short 's',
+        long "split",
+        help
+          "Split the mnemonic into different pieces using an xor algorithm. \
+          \All the pieces will be required for signing.",
+        metavar "NATURAL",
+        value 1
       ]
 
 entropyOption :: Parser Natural
@@ -518,4 +535,3 @@ bitOption =
         long "bit",
         help "Use bits for parsing amounts (default: bitcoin)"
       ]
-

@@ -33,6 +33,7 @@ import Data.Maybe (fromMaybe)
 import Data.String (unwords)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import qualified Data.Text as T
 import Haskoin.Address
 import Haskoin.Crypto
 import Haskoin.Network
@@ -61,7 +62,8 @@ data Response
       }
   | ResponseMnemonic
       { responseEntropySource :: !Text,
-        responseMnemonic :: ![Text]
+        responseMnemonic :: ![Text],
+        responseSplitMnemonic :: ![[Text]]
       }
   | ResponseCreateAcc
       { responseAccountName :: !Text,
@@ -152,11 +154,12 @@ instance MarshalJSON Ctx Response where
   marshalValue ctx =
     \case
       ResponseError err -> jsonError $ cs err
-      ResponseMnemonic e w ->
+      ResponseMnemonic e w ws ->
         object
           [ "type" .= Json.String "mnemonic",
             "entropysource" .= e,
-            "mnemonic" .= w
+            "mnemonic" .= w,
+            "splitmnemonic" .= ws
           ]
       ResponseCreateAcc n a f ->
         object
@@ -295,7 +298,8 @@ instance MarshalJSON Ctx Response where
         "mnemonic" -> do
           e <- o .: "entropysource"
           m <- o .: "mnemonic"
-          return $ ResponseMnemonic e m
+          ms <- o .: "splitmnemonic"
+          return $ ResponseMnemonic e m ms
         "createacc" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
@@ -435,8 +439,8 @@ catchResponseError m = do
 commandResponse :: Ctx -> Command -> IO Response
 commandResponse ctx =
   \case
-    CommandMnemonic d e -> mnemonic d e
-    CommandCreateAcc t n dM -> createAcc ctx t n dM
+    CommandMnemonic e d s -> mnemonic e d s
+    CommandCreateAcc t n dM s -> createAcc ctx t n dM s
     CommandImportAcc f -> importAcc ctx f
     CommandRenameAcc old new -> renameAcc ctx old new
     CommandAccounts -> accounts ctx
@@ -448,28 +452,25 @@ commandResponse ctx =
     CommandPrepareTx rcpts accM unit fee dust rcptPay ->
       prepareTx ctx rcpts accM unit fee dust rcptPay
     CommandReview file -> cmdReview ctx file
-    CommandSignTx file -> cmdSignTx ctx file
+    CommandSignTx file s -> cmdSignTx ctx file s
     CommandSendTx file -> cmdSendTx ctx file
     CommandPrepareSweep as fileM accM fee dust ->
       prepareSweep ctx as fileM accM fee dust
     CommandSignSweep dir keyFile accM -> signSweep ctx dir keyFile accM
     CommandRollDice n -> rollDice n
 
-mnemonic :: Bool -> Natural -> IO Response
-mnemonic useDice ent =
+mnemonic :: Natural -> Bool -> Natural -> IO Response
+mnemonic ent useDice splitIn =
   catchResponseError $ do
-    (orig, ms) <-
-      if useDice
-        then genMnemonicDice ent
-        else genMnemonic ent
-    return $ ResponseMnemonic orig (cs <$> words (cs ms))
+    (orig, ms, splitMs) <- genMnemonic ent useDice splitIn
+    return $ ResponseMnemonic orig (T.words ms) (T.words <$> splitMs)
 
-createAcc :: Ctx -> Text -> Network -> Maybe Natural -> IO Response
-createAcc ctx name net derivM =
+createAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
+createAcc ctx name net derivM splitIn =
   catchResponseError $
     withAccountMap ctx $ do
       d <- maybe nextAccountDeriv return derivM
-      prvKey <- lift $ askSigningKey ctx net d
+      prvKey <- lift $ askSigningKey ctx net d splitIn
       let xpub = deriveXPubKey ctx prvKey
           store = emptyAccountStore net xpub
       path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net name
@@ -594,13 +595,13 @@ toRecipient net unit (a, v) = do
     badAmnt =
       "Could not parse the amount " <> a <> " as " <> showUnit unit 1
 
-cmdSignTx :: Ctx -> FilePath -> IO Response
-cmdSignTx ctx fp =
+cmdSignTx :: Ctx -> FilePath -> Natural -> IO Response
+cmdSignTx ctx fp splitIn =
   catchResponseError $ do
     txSignData <- liftEither =<< liftIO (readMarshalFile ctx fp)
     let net = txSignDataNetwork txSignData
         acc = txSignDataAccount txSignData
-    prvKey <- askSigningKey ctx net acc
+    prvKey <- askSigningKey ctx net acc splitIn
     (newSignData, txInfo) <- liftEither $ signWalletTx ctx txSignData prvKey
     path <- liftIO $ writeDoc TxFolder newSignData
     return $ ResponseSignTx (cs path) txInfo net
@@ -770,11 +771,23 @@ askInputLine message = do
     return
     inputM
 
-askSigningKey :: Ctx -> Network -> Natural -> ExceptT String IO XPrvKey
-askSigningKey ctx net acc = do
-  mnm <- liftIO $ askInputLineHidden "Enter your private mnemonic: "
-  -- We validate the mnemonic before asking the password
-  _ <- liftEither $ mnemonicToSeed "" (cs mnm)
+askMnemonic :: String -> ExceptT String IO Mnemonic
+askMnemonic txt = do
+  mnm <- liftIO $ askInputLineHidden txt
+  _ <- liftEither $ mnemonicToSeed "" (cs mnm) -- validate the mnemonic
+  return $ cs mnm
+
+askSigningKey ::
+  Ctx -> Network -> Natural -> Natural -> ExceptT String IO XPrvKey
+askSigningKey _ _ _ 0 = throwError "Mnemonic split can not be 0"
+askSigningKey ctx net acc splitIn = do
+  mnm <-
+    if splitIn == 1
+      then askMnemonic "Enter your mnemonic: "
+      else do
+        ms <- forM [1 .. splitIn] $ \n ->
+          askMnemonic $ "Split mnemonic part #" <> show n <> ": "
+        liftEither $ mergeMnemonicParts ms
   passStr <- askPassword
   liftEither $ signingKey net ctx (cs passStr) (cs mnm) acc
 
