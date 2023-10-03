@@ -76,6 +76,12 @@ addrToText2 net (a, v) = (,v) <$> addrToTextE net a
 textToAddr2 :: Network -> (Text, v) -> Either String (Address, v)
 textToAddr2 net (a, v) = (,v) <$> textToAddrE net a
 
+addrToText3 :: Network -> (Address, v, w) -> Either String (Text, v, w)
+addrToText3 net (a, v, w) = (,v,w) <$> addrToTextE net a
+
+textToAddr3 :: Network -> (Text, v, w) -> Either String (Address, v, w)
+textToAddr3 net (a, v, w) = (,v,w) <$> textToAddrE net a
+
 lastList :: Natural -> [a] -> [a]
 lastList count xs = drop (max 0 $ length xs - fromIntegral count) xs
 

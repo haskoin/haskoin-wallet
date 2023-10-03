@@ -58,7 +58,8 @@ data Command
         commandPage :: !Page
       }
   | CommandReceive
-      { commandMaybeAcc :: !(Maybe Text)
+      { commandLabel :: !Text,
+        commandMaybeAcc :: !(Maybe Text)
       }
   | CommandTransactions
       { commandMaybeAcc :: !(Maybe Text),
@@ -210,8 +211,12 @@ addressesParser ctx =
 
 receiveParser :: Ctx -> ParserInfo Command
 receiveParser ctx =
-  info (CommandReceive <$> accountOption ctx) $
-    mconcat [progDesc "Get a new address for receiving a payment"]
+  info
+    ( CommandReceive
+        <$> textArg "Specify a label for the address"
+        <*> accountOption ctx
+    )
+    $ mconcat [progDesc "Get a new address for receiving a payment"]
 
 transactionsParser :: Ctx -> ParserInfo Command
 transactionsParser ctx =
@@ -389,7 +394,7 @@ networkOption =
         help "Specify which coin network to use",
         metavar "TEXT",
         value btc,
-        showDefault,
+        showDefaultWith (.name),
         completeWith ((.name) <$> allNets)
       ]
   where

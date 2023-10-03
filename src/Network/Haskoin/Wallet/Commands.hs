@@ -94,12 +94,12 @@ data Response
   | ResponseAddresses
       { responseAccountName :: !Text,
         responseAccount :: !AccountStore,
-        responseAddresses :: ![(Address, SoftPath)]
+        responseAddresses :: ![(Address, SoftPath, Text)]
       }
   | ResponseReceive
       { responseAccountName :: !Text,
         responseAccount :: !AccountStore,
-        responseAddress :: !(Address, SoftPath)
+        responseAddress :: !(Address, SoftPath, Text)
       }
   | ResponseTransactions
       { responseAccountName :: !Text,
@@ -200,7 +200,7 @@ instance MarshalJSON Ctx Response where
             "account" .= marshalValue ctx a
           ]
       ResponseAddresses n a addrs ->
-        case mapM (addrToText2 (accountStoreNetwork a)) addrs of
+        case mapM (addrToText3 (accountStoreNetwork a)) addrs of
           Right xs ->
             object
               [ "type" .= Json.String "addresses",
@@ -210,7 +210,7 @@ instance MarshalJSON Ctx Response where
               ]
           Left err -> jsonError err
       ResponseReceive n a addr ->
-        case addrToText2 (accountStoreNetwork a) addr of
+        case addrToText3 (accountStoreNetwork a) addr of
           Right x ->
             object
               [ "type" .= Json.String "receive",
@@ -329,13 +329,13 @@ instance MarshalJSON Ctx Response where
         "addresses" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
-          let f = textToAddr2 (accountStoreNetwork a)
+          let f = textToAddr3 (accountStoreNetwork a)
           xs <- either fail return . mapM f =<< o .: "addresses"
           return $ ResponseAddresses n a xs
         "receive" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
-          let f = textToAddr2 (accountStoreNetwork a)
+          let f = textToAddr3 (accountStoreNetwork a)
           x <- either fail return . f =<< o .: "address"
           return $ ResponseReceive n a x
         "transactions" -> do
@@ -447,7 +447,7 @@ commandResponse ctx =
     CommandBalance accM -> balance ctx accM
     CommandResetAcc accM -> resetAccount ctx accM
     CommandAddresses accM p -> addresses ctx accM p
-    CommandReceive accM -> receive ctx accM
+    CommandReceive l accM -> receive ctx l accM
     CommandTransactions accM p -> transactions ctx accM p
     CommandPrepareTx rcpts accM unit fee dust rcptPay ->
       prepareTx ctx rcpts accM unit fee dust rcptPay
@@ -522,16 +522,31 @@ addresses ctx accM page =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
       store <- get
+      labels <- readAccountLabels storeName
       let addrs = toPage page $ reverse $ extAddresses ctx store
-      return $ ResponseAddresses storeName store addrs
+      return $ ResponseAddresses storeName store $ zipLabels addrs labels
 
-receive :: Ctx -> Maybe Text -> IO Response
-receive ctx accM =
+zipLabels ::
+  [(Address, SoftPath)] -> Map Natural Text -> [(Address, SoftPath, Text)]
+zipLabels addrs m =
+  f <$> addrs
+  where
+    f (a, p) =
+      ( a,
+        p,
+        fromMaybe "No Label" $
+          Map.lookup (fromIntegral $ last $ pathToList p) m
+      )
+
+receive :: Ctx -> Text -> Maybe Text -> IO Response
+receive ctx label accM =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      addr <- genExtAddress ctx
+      (addr, path) <- genExtAddress ctx
       store <- get
-      return $ ResponseReceive storeName store addr
+      let d = last $ pathToList path
+      writeAccountLabel storeName (fromIntegral d) label
+      return $ ResponseReceive storeName store (addr, path, label)
 
 transactions :: Ctx -> Maybe Text -> Page -> IO Response
 transactions ctx accM page =
