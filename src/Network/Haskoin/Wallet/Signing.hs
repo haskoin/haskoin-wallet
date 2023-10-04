@@ -248,7 +248,7 @@ buildSweepTxs net ctx allCoins feeByte dust = do
             coinsTot = sum $ (.value) <$> pickedCoins
             fee = guessTxFee (fromIntegral feeByte) 2 (length pickedCoins)
             amntTot = coinsTot - fee
-            amntMin = fromIntegral dust
+            amntMin = fromIntegral dust + 1
         when (amntTot < 2 * amntMin) $
             throwError "Could not find a sweep solution"
         amnt1 <- randomRange amntMin (amntTot - amntMin)

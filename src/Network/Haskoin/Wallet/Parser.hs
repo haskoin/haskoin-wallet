@@ -355,7 +355,16 @@ prepareSweepParser ctx =
     )
     $ mconcat
       [ progDesc "Sweep funds into this wallet",
-        footer "Next command: signsweep"
+        footer
+          "This utility command will prepare a set of unsigned transactions\
+          \ that will send all the funds available in the given addresses to\
+          \ your hw account. The typical use case for this command is to\
+          \ migrate an old wallet to hw. You can pass the addresses on the\
+          \ command line or they can be parsed from a file. The preparesweep\
+          \ command will randomize all the coins and create a number of transactions\
+          \ containing between 1 and 5 inputs and 2 outputs. The transactions\
+          \ will be available in the ~/.hw/sweep-[id] folder. You can then\
+          \ use the signsweep command to sign the transactions."
       ]
 
 signSweepParser :: Ctx -> ParserInfo Command
@@ -368,7 +377,9 @@ signSweepParser ctx =
     )
     $ mconcat
       [ progDesc "Sign all the transactions contained in a sweep folder",
-        footer "Next command: sendtx"
+        footer
+          "The private keys have to be provided in a separate file.\
+          \ The currently supported formats are WIF and MiniKey."
       ]
 
 rollDiceParser :: ParserInfo Command
