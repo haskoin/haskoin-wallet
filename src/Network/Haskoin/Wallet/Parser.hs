@@ -83,6 +83,7 @@ data Command
   | CommandSendTx
       { commandFilePath :: !FilePath
       }
+  | CommandVersion
   | CommandPrepareSweep
       { commandSweepAddrs :: ![Text],
         commandMaybeFilePath :: !(Maybe FilePath),
@@ -105,7 +106,12 @@ programParser ctx =
   info (commandParser ctx <**> helper) $
     mconcat
       [ fullDesc,
-        progDesc "Lightweight Bitcoin and Bitcoin Cash BIP-44 Wallet"
+        progDesc
+          "hw is a lightweight BIP44 wallet for bitcoin and bitcoin-cash. \
+          \ It is designed so that mnemonic generation, account creation and\
+          \ transaction signing can happen on an offline, air-gapped computer.\
+          \ It will always ask for the mnemonic when signing and never store\
+          \ private keys on disk."
       ]
 
 commandParser :: Ctx -> Parser Command
@@ -119,13 +125,17 @@ commandParser ctx =
             command "importacc" importAccParser,
             command "renameacc" (renameAccParser ctx),
             command "accounts" accountsParser,
-            command "balance" (balanceParser ctx)
+            command "balance" (balanceParser ctx),
+            command "resetacc" (resetAccParser ctx),
+            metavar "COMMAND",
+            style (const "COMMAND --help")
           ],
       hsubparser $
         mconcat
           [ commandGroup "Address management",
             command "addresses" (addressesParser ctx),
-            command "receive" (receiveParser ctx)
+            command "receive" (receiveParser ctx),
+            hidden
           ],
       hsubparser $
         mconcat
@@ -134,24 +144,40 @@ commandParser ctx =
             command "preparetx" (prepareTxParser ctx),
             command "review" reviewParser,
             command "signtx" signTxParser,
-            command "sendtx" sendTxParser
+            command "sendtx" sendTxParser,
+            hidden
           ],
       hsubparser $
         mconcat
           [ commandGroup "Utilities",
+            command "version" versionParser,
             command "preparesweep" (prepareSweepParser ctx),
             command "signsweep" (signSweepParser ctx),
-            command "resetacc" (resetAccParser ctx),
-            command "rolldice" rollDiceParser
+            command "rolldice" rollDiceParser,
+            hidden
           ]
     ]
+
+offline :: Doc -> Maybe Doc
+offline s = Just $ s <> annotate (color Red) " (Offline)"
 
 mnemonicParser :: ParserInfo Command
 mnemonicParser =
   info (CommandMnemonic <$> entropyOption <*> diceOption <*> splitInOption) $
     mconcat
-      [ progDesc "Generate a mnemonic using your systems entropy",
-        footer "Next commands: createacc"
+      [ progDescDoc $ offline "Generate a mnemonic",
+        footer
+          "Generate a mnemonic using the systems entropy pool.\
+          \ By default it should be /dev/random on linux machines.\
+          \ If you use the --dice option, the additional dice entropy will be\
+          \ mixed with the system entropy. You should ideally run this\
+          \ command on an offline (air-gapped) computer. The mnemonic will NOT\
+          \ be stored on disk. It will only be printed to the screen and you\
+          \ should write it down and keep it in a secure location. If you\
+          \ choose to use the --split option, the mnemonic will be split into\
+          \ different pieces that you can write down and store in separate\
+          \ locations. ALL the pieces will be required for signing so make\
+          \ sure you have copies of all of them."
       ]
 
 createAccParser :: ParserInfo Command
@@ -164,17 +190,29 @@ createAccParser =
         <*> splitInOption
     )
     $ mconcat
-      [ progDesc "Create a new account from a mnemonic",
-        footer "Next command: importacc"
+      [ progDescDoc $ offline "Create a new account",
+        footer
+          "Create a new account with a given name. This command requires you\
+          \ to type your mnemonic and should ideally be run on an offline\
+          \ computer. If you have a split mnemonic, you will need to use the\
+          \ --split option. This command will derive the public component of\
+          \ the account and store it on disk. No private keys will be stored\
+          \ on disk. You will be asked for the mnemonic again when you will\
+          \ sign transactions. The public key file for the account will be\
+          \ stored in ~/.hw/pubkeys which can be imported on an online\
+          \ computer."
       ]
 
 importAccParser :: ParserInfo Command
 importAccParser =
-  info
-    (CommandImportAcc <$> fileArgument "Path of the account file")
-    $ mconcat
-      [ progDesc "Import an account file into the wallet",
-        footer "Next command: receive"
+  info (CommandImportAcc <$> fileArgument "Path of the account file") $
+    mconcat
+      [ progDesc "Import a public key account file",
+        footer
+          "When creating a new account using the createacc command, a\
+          \ public key account file will be generated in ~/.hw/pubkeys\
+          \ which can be imported into a different computer with importacc.\
+          \ This will allow you to monitor the transactions of that account."
       ]
 
 renameAccParser :: Ctx -> ParserInfo Command
@@ -188,7 +226,7 @@ renameAccParser ctx =
 
 accountsParser :: ParserInfo Command
 accountsParser =
-  info (pure CommandAccounts) $ mconcat [progDesc "Return all accounts"]
+  info (pure CommandAccounts) $ mconcat [progDesc "Display all accounts"]
 
 balanceParser :: Ctx -> ParserInfo Command
 balanceParser ctx =
@@ -198,7 +236,13 @@ balanceParser ctx =
 resetAccParser :: Ctx -> ParserInfo Command
 resetAccParser ctx =
   info (CommandResetAcc <$> accountOption ctx) $
-    mconcat [progDesc "Reset the external and internal derivation indices"]
+    mconcat
+      [ progDesc "Reset the external and internal derivation indices",
+        footer
+          "If your account is somehow out of sync with the blockchain, you can\
+          \ call resetacc to scan the blockchain and reset the indices for your\
+          \ internal and external addresses."
+      ]
 
 addressesParser :: Ctx -> ParserInfo Command
 addressesParser ctx =
@@ -240,7 +284,17 @@ prepareTxParser ctx =
     )
     $ mconcat
       [ progDesc "Prepare a new unsigned transaction",
-        footer "Next command: review, signtx"
+        footer
+          "You can call preparetx on an online computer to create an unsigned\
+          \ transaction that spends funds from your account. This can be done\
+          \ without having access to your mnemonic. A file containing your\
+          \ unsigned transaction will be created in ~/.hw/transactions.\
+          \ You can then inspect the transaction using the review command.\
+          \ If you are unhappy with the transaction, you can simply delete the\
+          \ file in ~/.hw/transactions. Otherwise, you can move the transaction\
+          \ file to an offline computer and sign it with the signtx command.\
+          \ Once signed, you can move the signed transaction file back to an\
+          \ online computer and broadcast it using the sendtx command."
       ]
 
 reviewParser :: ParserInfo Command
@@ -248,21 +302,46 @@ reviewParser =
   info (CommandReview <$> fileArgument "Path of the transaction file") $
     mconcat
       [ progDesc "Review the contents of a transaction file",
-        footer "Next command: signtx, sendtx"
+        footer
+          "The review command allows you to inspect the details of a transaction\
+          \ file that was created using the preparetx command. This might be\
+          \ useful to check that everything is correct before signing (signtx) and\
+          \ broadcasting (sendtx) the transaction."
       ]
 
 signTxParser :: ParserInfo Command
 signTxParser =
-  info (CommandSignTx <$> fileArgument "Path of the transaction file" <*> splitInOption) $
-    mconcat
-      [ progDesc "Sign a transaction that was created with preparetx",
-        footer "Next command: sendtx"
+  info
+    ( CommandSignTx
+        <$> fileArgument "Path of the transaction file"
+        <*> splitInOption
+    )
+    $ mconcat
+      [ progDescDoc $
+          offline "Sign a transaction that was created with preparetx",
+        footer
+          "The signtx command allows you to sign an unsigned transaction file\
+          \ that was created using the preparetx command. Ideally you want to\
+          \ run signtx on an offline computer as you will have to type the\
+          \ mnemonic. Once signed, a new signed transaction file will be created\
+          \ in ~/.hw/transactions. You can move this file to an online computer\
+          \ and broadcast it using the sendtx command. The mnemonic is only used\
+          \ to sign the transaction. The mnemonic or the private keys will not\
+          \ be stored on disk. If you want to sign another transaction, you will\
+          \ have to enter the mnemonic again. If you have a split mnemonic, you\
+          \ will have to use the --split option."
       ]
 
 sendTxParser :: ParserInfo Command
 sendTxParser =
   info (CommandSendTx <$> fileArgument "Path of the transaction file") $
-    mconcat [progDesc "Broadcast a signed transaction to the network"]
+    mconcat [progDesc "Broadcast a signed transaction file to the network"]
+
+versionParser :: ParserInfo Command
+versionParser =
+  info (pure CommandVersion) $
+    mconcat
+      [progDesc "Display the version of hw"]
 
 prepareSweepParser :: Ctx -> ParserInfo Command
 prepareSweepParser ctx =
@@ -351,7 +430,7 @@ splitInOption =
         help
           "Split the mnemonic into different pieces using an xor algorithm. \
           \All the pieces will be required for signing.",
-        metavar "NATURAL",
+        metavar "INT",
         value 1
       ]
 
@@ -382,7 +461,7 @@ derivationOption =
         [ short 'd',
           long "derivation",
           help "Specify a different bip44 account derivation",
-          metavar "NATURAL"
+          metavar "INT"
         ]
 
 networkOption :: Parser Network
@@ -391,7 +470,9 @@ networkOption =
     mconcat
       [ short 'n',
         long "network",
-        help "Specify which coin network to use",
+        help $
+          unwords $
+            "Specify which coin network to use: " : ((.name) <$> allNets),
         metavar "TEXT",
         value btc,
         showDefaultWith (.name),

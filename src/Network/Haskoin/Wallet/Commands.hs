@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
@@ -30,6 +31,7 @@ import Data.List
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
+import Data.String
 import Data.String (unwords)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -55,6 +57,15 @@ import Options.Applicative.Help.Pretty hiding ((</>))
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
 import System.IO (IOMode (..), withFile)
+
+-- | Version of Haskoin Wallet package.
+versionString :: (IsString a) => a
+
+#ifdef CURRENT_PACKAGE_VERSION
+versionString = CURRENT_PACKAGE_VERSION
+#else
+versionString = "Unavailable"
+#endif
 
 data Response
   = ResponseError
@@ -129,6 +140,8 @@ data Response
         responseTransaction :: !TxInfo,
         responseNetworkTxId :: !TxHash
       }
+  | ResponseVersion
+      {responseVersion :: !Text}
   | ResponsePrepareSweep
       { responseAccountName :: !Text,
         responseAccount :: !AccountStore,
@@ -264,6 +277,11 @@ instance MarshalJSON Ctx Response where
               .= marshalValue (accountStoreNetwork a, ctx) t,
             "networktxid" .= h
           ]
+      ResponseVersion v ->
+        object
+          [ "type" .= Json.String "version",
+            "version" .= v
+          ]
       ResponsePrepareSweep n a fs ts ->
         object
           [ "type" .= Json.String "preparesweep",
@@ -375,6 +393,9 @@ instance MarshalJSON Ctx Response where
           t <- f =<< o .: "transaction"
           h <- o .: "networktxid"
           return $ ResponseSendTx n a t h
+        "version" -> do
+          v <- o .: "version"
+          return $ ResponseVersion v
         "preparesweep" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
@@ -454,6 +475,7 @@ commandResponse ctx =
     CommandReview file -> cmdReview ctx file
     CommandSignTx file s -> cmdSignTx ctx file s
     CommandSendTx file -> cmdSendTx ctx file
+    CommandVersion -> cmdVersion
     CommandPrepareSweep as fileM accM fee dust ->
       prepareSweep ctx as fileM accM fee dust
     CommandSignSweep dir keyFile accM -> signSweep ctx dir keyFile accM
@@ -652,6 +674,9 @@ cmdSendTx ctx fp =
         liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
       return $ ResponseSendTx storeName store txInfo netTxId
 
+cmdVersion :: IO Response
+cmdVersion = return $ ResponseVersion versionString
+
 prepareSweep ::
   Ctx ->
   [Text] ->
@@ -715,19 +740,24 @@ resetAccount :: Ctx -> Maybe Text -> IO Response
 resetAccount ctx accM =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      updateAccountIndices ctx
+      updateAccountIndices ctx storeName
       store <- get
       return $ ResponseResetAcc storeName store
 
 updateAccountIndices ::
-  (MonadError String m, MonadIO m, MonadState AccountStore m) => Ctx -> m ()
-updateAccountIndices ctx = do
+  (MonadError String m, MonadIO m, MonadState AccountStore m) =>
+  Ctx ->
+  Text ->
+  m ()
+updateAccountIndices ctx storeName = do
   net <- gets accountStoreNetwork
   pub <- gets accountStoreXPubKey
   checkHealth ctx net
   e <- go net pub extDeriv 0 (Page 20 0)
   i <- go net pub intDeriv 0 (Page 20 0)
-  modify $ \s -> s {accountStoreExternal = e, accountStoreInternal = i}
+  m <- readAccountLabels storeName
+  let eMax = maximum $ e : ((+1) <$> Map.keys m)
+  modify $ \s -> s {accountStoreExternal = eMax, accountStoreInternal = i}
   where
     go net pub deriv d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx deriv page pub
