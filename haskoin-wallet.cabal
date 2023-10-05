@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: f54a33dfc091c5f913bcd72c955c98a414721267d0cba55ddb5dacf77616cc8d
+-- hash: bcfb029745842f0bf0972b664cc70165ab6d6c346ca41d665f38e9da9b45d1c5
 
 name:           haskoin-wallet
-version:        0.6.1
+version:        0.7.0
 synopsis:       Lightweight command-line wallet for Bitcoin and Bitcoin Cash
 description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
                 BIP44 account structure. It requires a full blockchain index such as
@@ -100,7 +100,7 @@ executable hw
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.0
     , haskoin-store-data >=1.0.0
-    , haskoin-wallet ==0.6.1
+    , haskoin-wallet ==0.7.0
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -151,7 +151,7 @@ test-suite spec
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.0
     , haskoin-store-data >=1.0.0
-    , haskoin-wallet ==0.6.1
+    , haskoin-wallet ==0.7.0
     , hspec >=2.7.1
     , http-types >=0.12.3
     , lens >=4.18.1

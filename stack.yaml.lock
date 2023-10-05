@@ -16,16 +16,16 @@ packages:
     commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
     git: https://github.com/haskoin/haskoin-core.git
 - completed:
-    commit: 5b87029c8cce9670fad421cfd271df75ca93739c
+    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
     git: https://github.com/haskoin/haskoin-store.git
     name: haskoin-store-data
     pantry-tree:
-      sha256: 445721ee7d608221afb516782e28025f108720076e67a5b8921b00073b77dc8b
+      sha256: 358864bbacdb6db4a777d74042dce0e2157b0a719b96c56fc5218fda10361573
       size: 624
     subdir: data
-    version: 1.0.2
+    version: 1.1.0
   original:
-    commit: 5b87029c8cce9670fad421cfd271df75ca93739c
+    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
     git: https://github.com/haskoin/haskoin-store.git
     subdir: data
 snapshots:

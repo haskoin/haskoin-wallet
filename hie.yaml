@@ -1,0 +1,8 @@
+cradle:
+  stack:
+    - path: ./src
+      component: "haskoin-wallet:lib"
+    - path: ./test
+      component: "haskoin-wallet:test:spec"
+    - path: ./app
+      component: "haskoin-wallet:exe:hw"
