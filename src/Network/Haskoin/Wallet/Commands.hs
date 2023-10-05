@@ -1,6 +1,7 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
@@ -28,7 +29,7 @@ import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Haskoin.Address (Address)
+import Haskoin.Address (Address, addrToText, textToAddr)
 import Haskoin.Crypto
   ( Ctx,
     Mnemonic,
@@ -38,7 +39,7 @@ import Haskoin.Crypto
     mnemonicToSeed,
     pathToList,
   )
-import Haskoin.Network (Network (name), netByName)
+import Haskoin.Network (Network(name), netByName)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
   ( GetAddrsBalance (GetAddrsBalance),
@@ -148,6 +149,27 @@ versionString = CURRENT_PACKAGE_VERSION
 versionString = "Unavailable"
 #endif
 
+data AddressResponse = AddressResponse
+  { addressResponseAddr :: !Address,
+    addressResponseSoftPath :: !SoftPath,
+    addressResponseLabel :: !Text
+  }
+  deriving (Eq, Show)
+
+instance MarshalJSON Network AddressResponse where
+  marshalValue net (AddressResponse a d l) =
+    case addrToText net a of
+      Just t -> object ["address" .= t, "derivation" .= d, "label" .= l]
+      _ -> jsonError "Invalid address"
+  unmarshalValue net =
+    Json.withObject "response" $ \o -> do
+      t <- o .: "address"
+      d <- o .: "derivation"
+      l <- o .: "label"
+      case textToAddr net t of
+        Just a -> return $ AddressResponse a d l
+        _ -> fail "Invalid address"
+
 data Response
   = ResponseError
       { responseError :: !Text
@@ -186,7 +208,7 @@ data Response
   | ResponseAddresses
       { responseAccountName :: !Text,
         responseAccount :: !AccountStore,
-        responseAddresses :: ![(Address, SoftPath, Text)]
+        responseAddresses :: ![AddressResponse]
       }
   | ResponseReceive
       { responseAccountName :: !Text,
@@ -277,9 +299,7 @@ instance MarshalJSON Ctx Response where
           ]
       ResponseAccounts a ->
         object
-          [ "type" .= Json.String "accounts",
-            "accounts" .= marshalValue ctx a
-          ]
+          ["type" .= Json.String "accounts", "accounts" .= marshalValue ctx a]
       ResponseBalance n a b ->
         object
           [ "type" .= Json.String "balance",
@@ -294,15 +314,12 @@ instance MarshalJSON Ctx Response where
             "account" .= marshalValue ctx a
           ]
       ResponseAddresses n a addrs ->
-        case mapM (addrToText3 (accountStoreNetwork a)) addrs of
-          Right xs ->
-            object
-              [ "type" .= Json.String "addresses",
-                "accountname" .= n,
-                "account" .= marshalValue ctx a,
-                "addresses" .= xs
-              ]
-          Left err -> jsonError err
+        object
+          [ "type" .= Json.String "addresses",
+            "accountname" .= n,
+            "account" .= marshalValue ctx a,
+            "addresses" .= (marshalValue (accountStoreNetwork a) <$> addrs)
+          ]
       ResponseReceive n a addr ->
         case addrToText3 (accountStoreNetwork a) addr of
           Right x ->
@@ -319,8 +336,7 @@ instance MarshalJSON Ctx Response where
             "accountname" .= n,
             "account" .= marshalValue ctx a,
             "transactions"
-              .= Json.toJSON
-                (marshalValue (accountStoreNetwork a, ctx) <$> txs)
+              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> txs)
           ]
       ResponsePrepareTx n a f t ->
         object
@@ -328,8 +344,7 @@ instance MarshalJSON Ctx Response where
             "accountname" .= n,
             "account" .= marshalValue ctx a,
             "txfile" .= f,
-            "unsignedtx"
-              .= marshalValue (accountStoreNetwork a, ctx) t
+            "unsignedtx" .= marshalValue (accountStoreNetwork a, ctx) t
           ]
       ResponseReview n a wTxM uTxM -> do
         let net = accountStoreNetwork a
@@ -354,15 +369,11 @@ instance MarshalJSON Ctx Response where
           [ "type" .= Json.String "sendtx",
             "accountname" .= n,
             "account" .= marshalValue ctx a,
-            "transaction"
-              .= marshalValue (accountStoreNetwork a, ctx) t,
+            "transaction" .= marshalValue (accountStoreNetwork a, ctx) t,
             "networktxid" .= h
           ]
       ResponseVersion v ->
-        object
-          [ "type" .= Json.String "version",
-            "version" .= v
-          ]
+        object ["type" .= Json.String "version", "version" .= v]
       ResponsePrepareSweep n a fs ts ->
         object
           [ "type" .= Json.String "preparesweep",
@@ -370,8 +381,7 @@ instance MarshalJSON Ctx Response where
             "account" .= marshalValue ctx a,
             "txfiles" .= fs,
             "unsignedtxs"
-              .= Json.toJSON
-                (marshalValue (accountStoreNetwork a, ctx) <$> ts)
+              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> ts)
           ]
       ResponseSignSweep n a fs ts ->
         object
@@ -380,15 +390,11 @@ instance MarshalJSON Ctx Response where
             "account" .= marshalValue ctx a,
             "txfiles" .= fs,
             "transactions"
-              .= Json.toJSON
-                (marshalValue (accountStoreNetwork a, ctx) <$> ts)
+              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> ts)
           ]
       ResponseRollDice ns e ->
         object
-          [ "type" .= Json.String "rolldice",
-            "entropysource" .= e,
-            "dice" .= ns
-          ]
+          ["type" .= Json.String "rolldice", "entropysource" .= e, "dice" .= ns]
   unmarshalValue ctx =
     Json.withObject "response" $ \o -> do
       Json.String resType <- o .: "type"
@@ -428,9 +434,9 @@ instance MarshalJSON Ctx Response where
         "addresses" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
-          let f = textToAddr3 (accountStoreNetwork a)
-          xs <- either fail return . mapM f =<< o .: "addresses"
-          return $ ResponseAddresses n a xs
+          addrs <-
+            mapM (unmarshalValue (accountStoreNetwork a)) =<< o .: "addresses"
+          return $ ResponseAddresses n a addrs
         "receive" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
@@ -456,11 +462,8 @@ instance MarshalJSON Ctx Response where
           let f = unmarshalValue (accountStoreNetwork a, ctx)
               g = unmarshalValue (accountStoreNetwork a, ctx)
           wTxM <-
-            maybe (return Nothing) ((Just <$>) . f)
-              =<< o .:? "transaction"
-          uTxM <-
-            maybe (return Nothing) ((Just <$>) . g)
-              =<< o .:? "unsignedtx"
+            maybe (return Nothing) ((Just <$>) . f) =<< o .:? "transaction"
+          uTxM <- maybe (return Nothing) ((Just <$>) . g) =<< o .:? "unsignedtx"
           return $ ResponseReview n a wTxM uTxM
         "signtx" -> do
           net <- maybe mzero return . netByName =<< o .: "network"
@@ -630,16 +633,14 @@ addresses ctx accM page =
       return $ ResponseAddresses storeName store $ zipLabels addrs labels
 
 zipLabels ::
-  [(Address, SoftPath)] -> Map Natural Text -> [(Address, SoftPath, Text)]
+  [(Address, SoftPath)] -> Map Natural Text -> [AddressResponse]
 zipLabels addrs m =
   f <$> addrs
   where
     f (a, p) =
-      ( a,
-        p,
+      AddressResponse a p $
         fromMaybe "No Label" $
           Map.lookup (fromIntegral $ last $ pathToList p) m
-      )
 
 receive :: Ctx -> Text -> Maybe Text -> IO Response
 receive ctx label accM =
