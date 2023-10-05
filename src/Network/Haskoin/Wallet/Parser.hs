@@ -3,27 +3,68 @@
 
 module Network.Haskoin.Wallet.Parser where
 
-import Control.Monad (forM, join, unless, when)
-import Control.Monad.Except
-import Data.Aeson.TH
-import Data.Either (either, fromRight, rights)
-import Data.Foldable (asum)
+import Control.Monad.Except (runExceptT)
+import Data.Either (fromRight)
 import Data.List (isPrefixOf, nub, sort)
-import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.String (unwords)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Haskoin.Address
-import Haskoin.Crypto
-import Haskoin.Network
-import Haskoin.Util
+import Haskoin.Crypto (Ctx)
+import Haskoin.Network (Network (name), allNets, btc, netByName)
 import Network.Haskoin.Wallet.AccountStore
+  ( accountMapKeys,
+    withAccountMap,
+  )
 import Network.Haskoin.Wallet.Amounts
-import Network.Haskoin.Wallet.Util
-import Numeric.Natural
+  ( AmountUnit (..),
+    readNatural,
+  )
+import Network.Haskoin.Wallet.Util (Page (Page))
+import Numeric.Natural (Natural)
 import Options.Applicative
-import Options.Applicative.Help.Pretty hiding ((</>))
+  ( Alternative (many, some, (<|>)),
+    Parser,
+    ParserInfo,
+    action,
+    argument,
+    asum,
+    command,
+    commandGroup,
+    completeWith,
+    completer,
+    eitherReader,
+    flag,
+    footer,
+    fullDesc,
+    help,
+    helper,
+    hidden,
+    hsubparser,
+    info,
+    long,
+    maybeReader,
+    metavar,
+    mkCompleter,
+    option,
+    optional,
+    progDesc,
+    progDescDoc,
+    short,
+    showDefault,
+    showDefaultWith,
+    str,
+    strArgument,
+    strOption,
+    style,
+    switch,
+    value,
+    (<**>),
+  )
+import Options.Applicative.Help.Pretty
+  ( Color (Red),
+    Doc,
+    annotate,
+    color,
+  )
 
 {- Command Parsers -}
 
@@ -34,7 +75,7 @@ data Command
         commandSplitIn :: !Natural
       }
   | CommandCreateAcc
-      { commandName :: !Text,
+      { commandName :: !Data.Text.Text,
         commandNetwork :: !Network,
         commandDerivation :: !(Maybe Natural),
         commandSplitIn :: !Natural
@@ -43,31 +84,31 @@ data Command
       { commandFilePath :: !FilePath
       }
   | CommandRenameAcc
-      { commandOldName :: !Text,
-        commandNewName :: !Text
+      { commandOldName :: !Data.Text.Text,
+        commandNewName :: !Data.Text.Text
       }
   | CommandAccounts
   | CommandResetAcc
-      { commandMaybeAcc :: !(Maybe Text)
+      { commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
   | CommandBalance
-      { commandMaybeAcc :: !(Maybe Text)
+      { commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
   | CommandAddresses
-      { commandMaybeAcc :: !(Maybe Text),
+      { commandMaybeAcc :: !(Maybe Data.Text.Text),
         commandPage :: !Page
       }
   | CommandReceive
-      { commandLabel :: !Text,
-        commandMaybeAcc :: !(Maybe Text)
+      { commandLabel :: !Data.Text.Text,
+        commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
   | CommandTransactions
-      { commandMaybeAcc :: !(Maybe Text),
+      { commandMaybeAcc :: !(Maybe Data.Text.Text),
         commandPage :: !Page
       }
   | CommandPrepareTx
-      { commandRecipients :: ![(Text, Text)],
-        commandMaybeAcc :: !(Maybe Text),
+      { commandRecipients :: ![(Data.Text.Text, Data.Text.Text)],
+        commandMaybeAcc :: !(Maybe Data.Text.Text),
         commandUnit :: !AmountUnit,
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
@@ -85,16 +126,16 @@ data Command
       }
   | CommandVersion
   | CommandPrepareSweep
-      { commandSweepAddrs :: ![Text],
+      { commandSweepAddrs :: ![Data.Text.Text],
         commandMaybeFilePath :: !(Maybe FilePath),
-        commandMaybeAcc :: !(Maybe Text),
+        commandMaybeAcc :: !(Maybe Data.Text.Text),
         commandFeeByte :: !Natural,
         commandDust :: !Natural
       }
   | CommandSignSweep
       { commandSweepPath :: !FilePath,
         commandSecKeyPath :: !FilePath,
-        commandMaybeAcc :: !(Maybe Text)
+        commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
   | CommandRollDice
       { commandCount :: !Natural
@@ -390,7 +431,7 @@ rollDiceParser =
 
 {- Option Parsers -}
 
-textArg :: String -> Parser Text
+textArg :: String -> Parser Data.Text.Text
 textArg desc = argument str $ mconcat [help desc, metavar "TEXT"]
 
 fileArgument :: String -> Parser FilePath
@@ -439,8 +480,8 @@ splitInOption =
       [ short 's',
         long "split",
         help
-          "Split the mnemonic into different pieces using an xor algorithm. \
-          \All the pieces will be required for signing.",
+          "Split the mnemonic into different pieces using an xor algorithm.\
+          \ All the pieces will be required for signing.",
         metavar "INT",
         value 1
       ]
@@ -498,7 +539,7 @@ networkOption =
             : ((.name) <$> allNets)
     f (Just res) = Right res
 
-accountOption :: Ctx -> Parser (Maybe Text)
+accountOption :: Ctx -> Parser (Maybe Data.Text.Text)
 accountOption ctx =
   optional $
     strOption $
@@ -510,7 +551,7 @@ accountOption ctx =
           completer (mkCompleter $ accountCompleter ctx)
         ]
 
-accountArg :: Ctx -> String -> Parser Text
+accountArg :: Ctx -> String -> Parser Data.Text.Text
 accountArg ctx desc =
   argument str $
     mconcat
@@ -526,11 +567,11 @@ accountCompleter ctx pref = do
   where
     run = runExceptT $ withAccountMap ctx accountMapKeys
 
-recipientArg :: Parser (Text, Text)
+recipientArg :: Parser (Data.Text.Text, Data.Text.Text)
 recipientArg =
   (,) <$> addressArg "Recipient address" <*> amountArg
 
-amountArg :: Parser Text
+amountArg :: Parser Data.Text.Text
 amountArg =
   strArgument $
     mconcat
@@ -538,7 +579,7 @@ amountArg =
         metavar "AMOUNT"
       ]
 
-addressArg :: String -> Parser Text
+addressArg :: String -> Parser Data.Text.Text
 addressArg desc =
   strArgument $
     mconcat

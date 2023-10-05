@@ -8,55 +8,136 @@
 
 module Network.Haskoin.Wallet.Commands where
 
-import Control.Arrow (first, second)
-import Control.Monad (forM, join, mzero, unless, when, (<=<))
+import Control.Monad (forM, mzero, unless, when, (<=<))
 import Control.Monad.Except
-import Control.Monad.Reader
-import Control.Monad.State
+  ( ExceptT,
+    MonadError (throwError),
+    liftEither,
+    runExceptT,
+  )
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.State (MonadState (get), gets, modify)
 import Data.Aeson (object, (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
-import Data.Aeson.TH
-import qualified Data.Aeson.Types as Json
 import qualified Data.ByteString as BS
-import qualified Data.ByteString.Char8 as C8
 import Data.Default (def)
-import Data.Either (fromRight)
-import Data.Foldable (asum)
-import Data.List
-  ( isPrefixOf,
-    nub,
-    sort,
-    sortOn,
-  )
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
-import Data.String
-import Data.String (unwords)
+import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as T
-import Haskoin.Address
+import Haskoin.Address (Address)
 import Haskoin.Crypto
-import Haskoin.Network
+  ( Ctx,
+    Mnemonic,
+    SoftPath,
+    XPrvKey,
+    deriveXPubKey,
+    mnemonicToSeed,
+    pathToList,
+  )
+import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-import Haskoin.Transaction
+  ( GetAddrsBalance (GetAddrsBalance),
+    GetAddrsTxs (GetAddrsTxs),
+    GetBlockBest (GetBlockBest),
+    GetHealth (GetHealth),
+    GetTxs (GetTxs),
+    LimitsParam (limit),
+    PostTx (PostTx),
+    apiBatch,
+    apiCall,
+  )
+import Haskoin.Transaction (TxHash)
 import Haskoin.Util
+  ( MarshalJSON (marshalValue, unmarshalValue),
+    maybeToEither,
+  )
 import Network.Haskoin.Wallet.AccountStore
+  ( AccountMap,
+    AccountStore
+      ( accountStoreExternal,
+        accountStoreInternal,
+        accountStoreNetwork,
+        accountStoreXPubKey
+      ),
+    accountStoreAccount,
+    addrsDerivPage,
+    emptyAccountStore,
+    extAddresses,
+    extDeriv,
+    genExtAddress,
+    getAccountStoreByDeriv,
+    insertAccountStore,
+    intDeriv,
+    nextAccountDeriv,
+    readAccountLabels,
+    readAccountMap,
+    renameAccountStore,
+    storeAddressMap,
+    withAccountMap,
+    withAccountStore,
+    writeAccountLabel,
+  )
 import Network.Haskoin.Wallet.Amounts
+  ( AmountUnit,
+    readAmount,
+    showUnit,
+  )
 import Network.Haskoin.Wallet.Entropy
+  ( genMnemonic,
+    mergeMnemonicParts,
+    systemEntropy,
+    word8ToBase6,
+  )
 import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Parser
+  ( HWFolder (PubKeyFolder, SweepFolder, TxFolder),
+    PubKeyDoc (PubKeyDoc),
+    TxSignData
+      ( TxSignData,
+        txSignDataAccount,
+        txSignDataNetwork,
+        txSignDataTx
+      ),
+    parseAddrsFile,
+    parseSecKeysFile,
+    readFileWords,
+    readMarshalFile,
+    txsChecksum,
+    writeDoc,
+  )
+import Network.Haskoin.Wallet.Parser (Command (..))
 import Network.Haskoin.Wallet.Signing
+  ( buildSweepSignData,
+    buildTxSignData,
+    conf,
+    signTxWithKeys,
+    signWalletTx,
+    signingKey,
+  )
 import Network.Haskoin.Wallet.TxInfo
+  ( TxInfo,
+    UnsignedTxInfo,
+    parseTxSignData,
+    toTxInfo,
+    unsignedToTxInfo,
+  )
 import Network.Haskoin.Wallet.Util
-import Numeric.Natural
-import Options.Applicative
-import Options.Applicative.Help.Pretty hiding ((</>))
+  ( Page (Page),
+    addrToText3,
+    liftExcept,
+    sortDesc,
+    textToAddr3,
+    textToAddrE,
+    toPage,
+    (</>),
+  )
+import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
-import System.IO (IOMode (..), withFile)
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -741,8 +822,7 @@ resetAccount ctx accM =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
       updateAccountIndices ctx storeName
-      store <- get
-      return $ ResponseResetAcc storeName store
+      gets (ResponseResetAcc storeName)
 
 updateAccountIndices ::
   (MonadError String m, MonadIO m, MonadState AccountStore m) =>
@@ -756,7 +836,7 @@ updateAccountIndices ctx storeName = do
   e <- go net pub extDeriv 0 (Page 20 0)
   i <- go net pub intDeriv 0 (Page 20 0)
   m <- readAccountLabels storeName
-  let eMax = maximum $ e : ((+1) <$> Map.keys m)
+  let eMax = maximum $ e : ((+ 1) <$> Map.keys m)
   modify $ \s -> s {accountStoreExternal = eMax, accountStoreInternal = i}
   where
     go net pub deriv d page@(Page lim off) = do

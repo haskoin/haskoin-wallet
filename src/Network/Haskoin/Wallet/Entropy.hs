@@ -4,30 +4,30 @@
 
 module Network.Haskoin.Wallet.Entropy where
 
-import Control.Monad
+import Control.Monad (replicateM, unless, when)
 import Control.Monad.Except
+  ( ExceptT,
+    MonadError (throwError),
+    liftEither,
+  )
 import Control.Monad.IO.Class (liftIO)
-import Data.Bifoldable (bifoldl1)
-import Data.Bits
+import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
-import Data.Either (either)
-import Data.List
-import Data.Maybe
+import Data.List (foldl')
 import Data.Text (Text)
+import qualified Data.Text as T
 import Data.Word (Word8)
-import Haskoin.Crypto
-import Haskoin.Util
-import Network.Haskoin.Wallet.Util
-import Numeric (readInt, showIntAtBase)
-import Numeric.Natural
+import Haskoin.Crypto (Mnemonic, mnemonicToSeed, toMnemonic)
+import Haskoin.Util (bsToInteger)
+import Network.Haskoin.Wallet.Util (chunksOf)
+import Numeric (showIntAtBase)
+import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Console.Haskeline as Haskline
 import qualified System.Directory as D
 import System.Entropy (getEntropy)
-import System.IO
+import System.IO (IOMode (ReadMode), withBinaryFile)
 import Text.Read (readMaybe)
-import Control.Lens (parts)
-import qualified Data.Text as T
 
 -- Produces uniformily distributed dice rolls from a random byte
 -- 0,   0x00 -> [6,6,6]
@@ -139,9 +139,9 @@ mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
 mergeMnemonicParts mnems
   | length mnems < 2 = Left "Invalid call to mergeMnemonicParts"
   | otherwise = do
-    bs <- mapM (mnemonicToSeed "") mnems
-    let ent = foldl' xorBytes (head bs) (tail bs)
-    toMnemonic ent
+      bs <- mapM (mnemonicToSeed "") mnems
+      let ent = foldl' xorBytes (head bs) (tail bs)
+      toMnemonic ent
 
 askInputDice :: IO Natural
 askInputDice = do

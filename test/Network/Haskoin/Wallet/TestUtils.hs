@@ -4,9 +4,12 @@
 
 module Network.Haskoin.Wallet.TestUtils where
 
-import Numeric.Natural
-import Test.Hspec
-import Test.QuickCheck
+import Data.Either (fromRight)
+import Numeric.Natural (Natural)
+import Test.QuickCheck (Gen, arbitrarySizedNatural)
 
-genNatural :: Gen Natural
-genNatural = arbitrarySizedNatural
+genNatural :: Test.QuickCheck.Gen Natural
+genNatural = Test.QuickCheck.arbitrarySizedNatural
+
+forceRight :: Either a b -> b
+forceRight = fromRight (error "fromRight")

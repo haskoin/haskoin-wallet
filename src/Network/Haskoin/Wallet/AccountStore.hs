@@ -7,34 +7,51 @@
 
 module Network.Haskoin.Wallet.AccountStore where
 
-import Control.Arrow (first)
-import Control.Monad
-import Control.Monad.Except
-import Control.Monad.Reader
+import Control.Monad (MonadPlus (mzero), unless, void, when)
+import Control.Monad.Except (MonadError (throwError), liftEither)
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Control.Monad.State
-import qualified Data.Aeson as Json
-import qualified Data.Aeson.Encode.Pretty as Pretty
+  ( MonadState (get, put),
+    StateT (runStateT),
+    execStateT,
+    gets,
+  )
 import Data.Aeson.Types
+  ( FromJSON (parseJSON),
+    KeyValue ((.=)),
+    ToJSON (toJSON),
+    object,
+    withObject,
+    (.:),
+  )
 import Data.Bits (clearBit)
-import qualified Data.ByteString.Char8 as C8
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.HashMap.Strict as HMap
 import Data.List (find, nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, maybe)
-import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import Haskoin.Address
+import Haskoin.Address (Address)
 import Haskoin.Crypto
-import Haskoin.Network
-import Haskoin.Util
+  ( Ctx,
+    DerivPathI (Deriv, (:/), (:|)),
+    HardPath,
+    SoftPath,
+    XPubKey,
+    derivePathAddr,
+    derivePathAddrs,
+    pathToList,
+    xPubChild,
+  )
+import Haskoin.Network (Network (bip44Coin, name), netByName)
+import Haskoin.Util (MarshalJSON (marshalValue, unmarshalValue))
 import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Util
-import Numeric.Natural
-import Options.Applicative.Help.Pretty hiding ((</>))
+  ( hwDataDirectory,
+    readJsonFile,
+    readMarshalFile,
+    writeJsonFile,
+  )
+import Network.Haskoin.Wallet.Util (Page (Page), (</>))
+import Numeric.Natural (Natural)
 import qualified System.Directory as D
 
 newtype AccountMap = AccountMap {getAccountMap :: Map Text AccountStore}

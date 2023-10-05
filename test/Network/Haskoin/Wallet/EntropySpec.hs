@@ -4,25 +4,46 @@
 module Network.Haskoin.Wallet.EntropySpec where
 
 import Control.Exception (evaluate)
-import Control.Monad
+import Control.Monad (forM_)
 import qualified Data.ByteString as BS
-import Data.Either
-import Data.Functor.Identity
-import Data.Maybe
+import Data.Functor.Identity (Identity (runIdentity))
 import Data.Text (Text)
 import Haskoin
-import Haskoin.Util
-import Haskoin.Util.Arbitrary
-import Haskoin.Util.Arbitrary (arbitraryBS1)
+  ( Ctx,
+    addrToText,
+    btc,
+    derivePathAddr,
+    deriveXPubKey,
+    prepareContext,
+  )
+import Haskoin.Util.Arbitrary (arbitraryBSn)
 import Network.Haskoin.Wallet.AccountStore
+  ( emptyAccountStore,
+    extDeriv,
+    genExtAddress,
+    genIntAddress,
+    runAccountStoreT,
+  )
 import Network.Haskoin.Wallet.Entropy
-import Network.Haskoin.Wallet.Signing
-import Network.Haskoin.Wallet.TestUtils
-import Numeric (showIntAtBase)
-import Test.HUnit
+  ( base6ToWord8,
+    splitEntropyWith,
+    word8ToBase6,
+    xorBytes,
+  )
+import Network.Haskoin.Wallet.Signing (signingKey)
+import Network.Haskoin.Wallet.TestUtils (forceRight)
+import Test.HUnit (Assertion, assertEqual)
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck
+  ( Spec,
+    anyException,
+    describe,
+    expectationFailure,
+    it,
+    shouldBe,
+    shouldThrow,
+  )
+import Test.Hspec.QuickCheck (prop)
+import Test.QuickCheck (forAll)
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -75,36 +96,22 @@ entropySpec = do
       `shouldThrow` anyException
     evaluate (xorBytes (BS.pack [0x00]) (BS.pack [0x00, 0x00]))
       `shouldThrow` anyException
-    xorBytes (BS.pack [0x00]) (BS.pack [0x00])
-      `shouldBe` (BS.pack [0x00])
-    xorBytes (BS.pack [0x00]) (BS.pack [0xff])
-      `shouldBe` (BS.pack [0xff])
-    xorBytes (BS.pack [0xff]) (BS.pack [0x00])
-      `shouldBe` (BS.pack [0xff])
-    xorBytes (BS.pack [0xff]) (BS.pack [0xff])
-      `shouldBe` (BS.pack [0x00])
-    xorBytes (BS.pack [0xaa]) (BS.pack [0x55])
-      `shouldBe` (BS.pack [0xff])
+    xorBytes (BS.pack [0x00]) (BS.pack [0x00]) `shouldBe` BS.pack [0x00]
+    xorBytes (BS.pack [0x00]) (BS.pack [0xff]) `shouldBe` BS.pack [0xff]
+    xorBytes (BS.pack [0xff]) (BS.pack [0x00]) `shouldBe` BS.pack [0xff]
+    xorBytes (BS.pack [0xff]) (BS.pack [0xff]) `shouldBe` BS.pack [0x00]
+    xorBytes (BS.pack [0xaa]) (BS.pack [0x55]) `shouldBe` BS.pack [0xff]
     xorBytes (BS.pack [0x55, 0xaa]) (BS.pack [0xaa, 0x55])
-      `shouldBe` (BS.pack [0xff, 0xff])
+      `shouldBe` BS.pack [0xff, 0xff]
     xorBytes (BS.pack [0x7a, 0x54]) (BS.pack [0xd3, 0x8e])
-      `shouldBe` (BS.pack [0xa9, 0xda])
+      `shouldBe` BS.pack [0xa9, 0xda]
   it "can split entropy" $ do
-    splitEntropyWith
-      (BS.pack [0x00])
-      []
-      `shouldBe` [BS.pack [0x00]]
-    splitEntropyWith
-      (BS.pack [0x00])
-      [BS.pack [0x00]]
+    splitEntropyWith (BS.pack [0x00]) [] `shouldBe` [BS.pack [0x00]]
+    splitEntropyWith (BS.pack [0x00]) [BS.pack [0x00]]
       `shouldBe` [BS.pack [0x00], BS.pack [0x00]]
-    splitEntropyWith
-      (BS.pack [0x55])
-      [BS.pack [0xaa]]
+    splitEntropyWith (BS.pack [0x55]) [BS.pack [0xaa]]
       `shouldBe` [BS.pack [0xff], BS.pack [0xaa]]
-    splitEntropyWith
-      (BS.pack [0x55, 0xaa])
-      [BS.pack [0xaa, 0x55]]
+    splitEntropyWith (BS.pack [0x55, 0xaa]) [BS.pack [0xaa, 0x55]]
       `shouldBe` [BS.pack [0xff, 0xff], BS.pack [0xaa, 0x55]]
   prop "prop: can split entropy x2" $
     forAll (arbitraryBSn 32) $ \s ->
@@ -120,17 +127,19 @@ entropySpec = do
     forAll (arbitraryBSn 32) $ \s ->
       forAll (arbitraryBSn 32) $ \k1 ->
         forAll (arbitraryBSn 32) $ \k2 -> do
-          let [a, b, c] = splitEntropyWith s [k1, k2]
-          (a `xorBytes` b `xorBytes` c) `shouldBe` s
+          case splitEntropyWith s [k1, k2] of
+            [a, b, c] -> (a `xorBytes` b `xorBytes` c) `shouldBe` s
+            _ -> expectationFailure "Invalid splitEntropyWith"
 
 -- https://github.com/iancoleman/bip39/issues/58
 mnemonicSpec :: Ctx -> Spec
 mnemonicSpec ctx =
   describe "Mnemonic API" $ do
     it "Can derive iancoleman issue 58" $ do
-      let m = "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
+      let m =
+            "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
           p = "banana"
-          Right xpub = deriveXPubKey ctx <$> signingKey btc ctx p m 0
+          xpub = forceRight $ deriveXPubKey ctx <$> signingKey btc ctx p m 0
           (addr0, _) = derivePathAddr ctx xpub extDeriv 0
       addrToText btc addr0 `shouldBe` Just "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
     it "Passes the bip44 test vectors" $
@@ -138,10 +147,16 @@ mnemonicSpec ctx =
 
 testBip44Vector :: Ctx -> (Text, Text, Text, Text) -> Assertion
 testBip44Vector ctx (mnem, pass, addr0, addr1) = do
-  assertEqual "Addr External" (Just addr0) (addrToText btc $ fst $ r (genExtAddress ctx))
-  assertEqual "Addr Internal" (Just addr1) (addrToText btc $ fst $ r (genIntAddress ctx))
+  assertEqual
+    "Addr External"
+    (Just addr0)
+    (addrToText btc $ fst $ r (genExtAddress ctx))
+  assertEqual
+    "Addr Internal"
+    (Just addr1)
+    (addrToText btc $ fst $ r (genIntAddress ctx))
   where
-    Right k = signingKey btc ctx pass mnem 0
+    k = forceRight $ signingKey btc ctx pass mnem 0
     p = deriveXPubKey ctx k
     s = emptyAccountStore btc p
     r a = fst $ runIdentity $ runAccountStoreT a s
