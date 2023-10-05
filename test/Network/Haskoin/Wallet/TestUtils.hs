@@ -1,21 +1,15 @@
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE OverloadedStrings         #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
+
 module Network.Haskoin.Wallet.TestUtils where
 
-import qualified Data.Aeson                          as A
-import           Data.Proxy
-import qualified Data.Serialize                      as S
-import qualified Data.Typeable                       as T
-import           Data.Word
-import           Haskoin.Constants
-import           Haskoin.Util.Arbitrary
-import           Network.Haskoin.Wallet.AccountStore
-import           Network.Haskoin.Wallet.Signing
-import           Numeric.Natural
-import           Test.Hspec
-import           Test.QuickCheck
+import Data.Either (fromRight)
+import Numeric.Natural (Natural)
+import Test.QuickCheck (Gen, arbitrarySizedNatural)
 
-genNatural :: Gen Natural
-genNatural = arbitrarySizedNatural
+genNatural :: Test.QuickCheck.Gen Natural
+genNatural = Test.QuickCheck.arbitrarySizedNatural
 
+forceRight :: Either a b -> b
+forceRight = fromRight (error "fromRight")

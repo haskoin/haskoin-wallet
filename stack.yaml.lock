@@ -5,32 +5,32 @@
 
 packages:
 - completed:
+    commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
+    git: https://github.com/haskoin/haskoin-core.git
     name: haskoin-core
-    version: 0.21.2
-    git: https://github.com/haskoin/haskoin-core.git
     pantry-tree:
-      size: 7102
-      sha256: 44112cb8820ddd76373209f154a9cfaf35d7807909b1b68dc4ea180c7a4b0299
-    commit: 2a13ee8be20d7cd3646bb73dc5da4beeaf409ee2
+      sha256: 5b6b7ddc6eae4d0c56f8af5f2485476a47ea82ecfcc97a70f1ff3524f3f269d9
+      size: 7357
+    version: 1.0.3
   original:
+    commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
     git: https://github.com/haskoin/haskoin-core.git
-    commit: 2a13ee8be20d7cd3646bb73dc5da4beeaf409ee2
 - completed:
-    subdir: data
+    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
+    git: https://github.com/haskoin/haskoin-store.git
     name: haskoin-store-data
-    version: 0.65.2
-    git: https://github.com/haskoin/haskoin-store.git
     pantry-tree:
-      size: 728
-      sha256: 2baf75c431e7a5a3cb393bd1517454e34b694e0effc8ae41be0c3d066dd592b3
-    commit: bb48270cb297e882de2fd01ddfe750b0311c6212
-  original:
+      sha256: 358864bbacdb6db4a777d74042dce0e2157b0a719b96c56fc5218fda10361573
+      size: 624
     subdir: data
+    version: 1.1.0
+  original:
+    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
     git: https://github.com/haskoin/haskoin-store.git
-    commit: bb48270cb297e882de2fd01ddfe750b0311c6212
+    subdir: data
 snapshots:
 - completed:
-    size: 617368
-    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/lts/19/3.yaml
-    sha256: a209d3455279ee76eb45f01f73bbb960ceaaa8dfad8891435384689df4dcb653
-  original: lts-19.3
+    sha256: d4a54df12888fc5d1ef2d4ff987225fa7bedb2cff74385b33fbec4a384ebd619
+    size: 644615
+    url: https://raw.githubusercontent.com/commercialhaskell/stackage-snapshots/master/nightly/2023/8/2.yaml
+  original: nightly-2023-08-02

@@ -1,326 +1,410 @@
-{-# LANGUAGE FlexibleContexts  #-}
-{-# LANGUAGE LambdaCase        #-}
+{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+
 module Network.Haskoin.Wallet.AccountStore where
 
-import           Control.Arrow                   (first)
-import           Control.Monad
-import           Control.Monad.Except
-import           Control.Monad.Reader
-import           Control.Monad.State
-import qualified Data.Aeson                      as Json
-import qualified Data.Aeson.Encode.Pretty        as Pretty
-import           Data.Aeson.Types
-import           Data.Bits                       (clearBit)
-import qualified Data.ByteString.Char8           as C8
-import qualified Data.ByteString.Lazy            as BL
-import qualified Data.HashMap.Strict             as HMap
-import           Data.List                       (find, nub)
-import           Data.Map.Strict                 (Map)
-import qualified Data.Map.Strict                 as Map
-import           Data.Maybe                      (fromMaybe, maybe)
-import qualified Data.Serialize                  as S
-import           Data.String.Conversions         (cs)
-import           Data.Text                       (Text)
-import qualified Data.Text                       as Text
-import           Haskoin.Address
-import           Haskoin.Constants
-import           Haskoin.Keys
-import           Haskoin.Util
-import           Network.Haskoin.Wallet.FileIO
-import           Network.Haskoin.Wallet.Util
-import           Numeric.Natural
-import           Options.Applicative.Help.Pretty hiding ((</>))
-import qualified System.Directory                as D
+import Control.Monad (MonadPlus (mzero), unless, void, when)
+import Control.Monad.Except (MonadError (throwError), liftEither)
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.State
+  ( MonadState (get, put),
+    StateT (runStateT),
+    execStateT,
+    gets,
+  )
+import Data.Aeson.Types
+  ( FromJSON (parseJSON),
+    KeyValue ((.=)),
+    ToJSON (toJSON),
+    object,
+    withObject,
+    (.:),
+  )
+import Data.Bits (clearBit)
+import Data.List (find, nub)
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
+import Data.String.Conversions (cs)
+import Data.Text (Text)
+import Haskoin.Address (Address)
+import Haskoin.Crypto
+  ( Ctx,
+    DerivPathI (Deriv, (:/), (:|)),
+    HardPath,
+    SoftPath,
+    XPubKey,
+    derivePathAddr,
+    derivePathAddrs,
+    pathToList,
+    xPubChild,
+  )
+import Haskoin.Network (Network (bip44Coin, name), netByName)
+import Haskoin.Util (MarshalJSON (marshalValue, unmarshalValue))
+import Network.Haskoin.Wallet.FileIO
+  ( hwDataDirectory,
+    readJsonFile,
+    readMarshalFile,
+    writeJsonFile,
+  )
+import Network.Haskoin.Wallet.Util (Page (Page), (</>))
+import Numeric.Natural (Natural)
+import qualified System.Directory as D
 
-type AccountMap = Map Text AccountStore
+newtype AccountMap = AccountMap {getAccountMap :: Map Text AccountStore}
+  deriving (Eq, Show)
+
+instance MarshalJSON Ctx AccountMap where
+  marshalValue ctx (AccountMap m) = toJSON $ Map.map (marshalValue ctx) m
+  unmarshalValue ctx v = do
+    m <- parseJSON v
+    AccountMap <$> mapM (unmarshalValue ctx) m
 
 data AccountStore = AccountStore
-    { accountStoreXPubKey  :: !XPubKey
-    , accountStoreExternal :: !Natural
-    , accountStoreInternal :: !Natural
-    , accountStoreDeriv    :: !HardPath
-    , accountStoreNetwork  :: !Network
-    }
-    deriving (Eq, Show)
+  { accountStoreXPubKey :: !XPubKey,
+    accountStoreExternal :: !Natural,
+    accountStoreInternal :: !Natural,
+    accountStoreDeriv :: !HardPath,
+    accountStoreNetwork :: !Network
+  }
+  deriving (Eq, Show)
 
-instance FromJSON AccountStore where
-    parseJSON =
-        withObject "accountstore" $ \o -> do
-            net <- maybe mzero return . netByName =<< o .: "network"
-            AccountStore
-                <$> (xPubFromJSON net =<< o .: "xpubkey")
-                <*> o .: "external"
-                <*> o .: "internal"
-                <*> o .: "deriv"
-                <*> return net
+instance MarshalJSON Ctx AccountStore where
+  marshalValue ctx (AccountStore k e i d net) =
+    object
+      [ "xpubkey" .= marshalValue (net, ctx) k,
+        "external" .= e,
+        "internal" .= i,
+        "deriv" .= d,
+        "network" .= net.name
+      ]
+  unmarshalValue ctx =
+    withObject "accountstore" $ \o -> do
+      net <- maybe mzero return . netByName =<< o .: "network"
+      AccountStore
+        <$> (unmarshalValue (net, ctx) =<< o .: "xpubkey")
+        <*> o .: "external"
+        <*> o .: "internal"
+        <*> o .: "deriv"
+        <*> return net
 
-instance ToJSON AccountStore where
-    toJSON (AccountStore k e i d net) =
-        object
-            [ "xpubkey" .= xPubToJSON net k
-            , "external" .= e
-            , "internal" .= i
-            , "deriv" .= d
-            , "network" .= getNetworkName net
-            ]
+newtype LabelMap = LabelMap {getLabelMap :: Map Text (Map Natural Text)}
+  deriving (Eq, Show)
+
+instance ToJSON LabelMap where
+  toJSON (LabelMap m) = toJSON m
+
+instance FromJSON LabelMap where
+  parseJSON v = do
+    m <- parseJSON v
+    return $ LabelMap m
+
+-- LabelMap IO --
+
+labelMapFilePath :: IO FilePath
+labelMapFilePath = do
+  dir <- hwDataDirectory Nothing
+  return $ dir </> "labels.json"
+
+readLabelMap :: IO (Either String LabelMap)
+readLabelMap = do
+  fp <- labelMapFilePath
+  exists <- D.doesFileExist fp
+  unless exists $ writeLabelMap $ LabelMap Map.empty
+  readJsonFile fp
+
+writeLabelMap :: LabelMap -> IO ()
+writeLabelMap labelMap = do
+  file <- labelMapFilePath
+  writeJsonFile file $ toJSON labelMap
+
+readAccountLabels ::
+  (MonadIO m, MonadError String m) => Text -> m (Map Natural Text)
+readAccountLabels accName = do
+  LabelMap m <- liftEither =<< liftIO readLabelMap
+  case Map.lookup accName m of
+    Just labels -> return labels
+    Nothing -> do
+      liftIO $ writeLabelMap $ LabelMap $ Map.insert accName Map.empty m
+      return Map.empty
+
+writeAccountLabel ::
+  (MonadIO m, MonadError String m) => Text -> Natural -> Text -> m ()
+writeAccountLabel accName d label = do
+  LabelMap m <- liftEither =<< liftIO readLabelMap
+  let lMap = case Map.lookup accName m of
+        Just x -> x
+        _ -> Map.empty
+      resMap = Map.insert d label lMap
+  liftIO $ writeLabelMap $ LabelMap $ Map.insert accName resMap m
 
 -- Commit --
 
 data Commit a
-    = NoCommit { commitValue :: !a }
-    | Commit { commitValue :: !a }
-    deriving (Eq, Show)
+  = NoCommit {commitValue :: !a}
+  | Commit {commitValue :: !a}
+  deriving (Eq, Show)
 
-toCommit :: Eq a => a -> a -> Commit a
+toCommit :: (Eq a) => a -> a -> Commit a
 toCommit old new =
-    if old == new
-       then NoCommit new
-       else Commit new
+  if old == new
+    then NoCommit new
+    else Commit new
 
 -- AccountMap State --
 
-commitAccountMap :: Commit AccountMap -> IO AccountMap
-commitAccountMap (NoCommit val) = return val
-commitAccountMap (Commit val) = do
-    writeAccountMap val
-    return val
+commitAccountMap :: Ctx -> Commit AccountMap -> IO AccountMap
+commitAccountMap _ (NoCommit val) = return val
+commitAccountMap ctx (Commit val) = do
+  writeAccountMap ctx val
+  return val
 
 runAccountMapT ::
-       Monad m
-    => StateT AccountMap m a
-    -> AccountMap
-    -> m (a, Commit AccountMap)
+  (Monad m) =>
+  StateT AccountMap m a ->
+  AccountMap ->
+  m (a, Commit AccountMap)
 runAccountMapT m origMap = do
-    (a, newMap) <- runStateT m origMap
-    return (a, toCommit origMap newMap)
+  (a, newMap) <- runStateT m origMap
+  return (a, toCommit origMap newMap)
 
 execAccountMapT ::
-       Monad m => StateT AccountMap m a -> AccountMap -> m (Commit AccountMap)
+  (Monad m) => StateT AccountMap m a -> AccountMap -> m (Commit AccountMap)
 execAccountMapT m origMap = do
-    newMap <- execStateT m origMap
-    return $ toCommit origMap newMap
+  newMap <- execStateT m origMap
+  return $ toCommit origMap newMap
 
 withAccountMap ::
-       (MonadError String m, MonadIO m) => StateT AccountMap m a -> m a
-withAccountMap m = do
-    accMap <- liftEither =<< liftIO readAccountMap
-    (res, c) <- runAccountMapT m accMap
-    _ <- liftIO $ commitAccountMap c
-    return res
+  (MonadError String m, MonadIO m) => Ctx -> StateT AccountMap m a -> m a
+withAccountMap ctx m = do
+  accMap <- liftEither =<< liftIO (readAccountMap ctx)
+  (res, c) <- runAccountMapT m accMap
+  _ <- liftIO $ commitAccountMap ctx c
+  return res
 
 -- AccountMap IO --
 
 accountMapFilePath :: IO FilePath
 accountMapFilePath = do
-    dir <- hwDataDirectory Nothing
-    return $ dir </> "bip44accounts.json"
+  dir <- hwDataDirectory Nothing
+  return $ dir </> "bip44accounts.json"
 
-readAccountMap :: IO (Either String AccountMap)
-readAccountMap = do
-    fp <- accountMapFilePath
-    exists <- D.doesFileExist fp
-    unless exists $ writeAccountMap Map.empty
-    readJsonFile fp
+readAccountMap :: Ctx -> IO (Either String AccountMap)
+readAccountMap ctx = do
+  fp <- accountMapFilePath
+  exists <- D.doesFileExist fp
+  unless exists $ writeAccountMap ctx $ AccountMap Map.empty
+  readMarshalFile ctx fp
 
-writeAccountMap :: AccountMap -> IO ()
-writeAccountMap accMap = do
-    file <- accountMapFilePath
-    writeJsonFile file accMap
+writeAccountMap :: Ctx -> AccountMap -> IO ()
+writeAccountMap ctx accMap = do
+  file <- accountMapFilePath
+  writeJsonFile file $ marshalValue ctx accMap
 
 -- AccountMap --
 
 accountMapKeys :: (MonadState AccountMap m, MonadError String m) => m [Text]
-accountMapKeys = gets Map.keys
+accountMapKeys = gets (Map.keys . getAccountMap)
 
 getAccountStore ::
-       (MonadState AccountMap m, MonadError String m)
-    => Maybe Text
-    -> m (Text, AccountStore)
+  (MonadState AccountMap m, MonadError String m) =>
+  Maybe Text ->
+  m (Text, AccountStore)
 getAccountStore keyM = do
-    accMap <- get
-    case keyM of
-        Nothing ->
-            case Map.assocs accMap of
-                [keyval] -> return keyval
-                [] -> throwError "There are no accounts in the wallet"
-                _ -> throwError "Specify which account you want to use"
-        Just key ->
-            case key `Map.lookup` accMap of
-                Just val -> return (key, val)
-                _ -> throwError $ "The account " <> cs key <> "does not exist"
+  accMap <- gets getAccountMap
+  case keyM of
+    Nothing ->
+      case Map.assocs accMap of
+        [keyval] -> return keyval
+        [] -> throwError "There are no accounts in the wallet"
+        _ -> throwError "Specify which account you want to use"
+    Just key ->
+      case key `Map.lookup` accMap of
+        Just val -> return (key, val)
+        _ -> throwError $ "The account " <> cs key <> "does not exist"
 
 getAccountStoreByDeriv ::
-       (MonadState AccountMap m, MonadError String m)
-    => Network
-    -> Natural
-    -> m (Text, AccountStore)
+  (MonadState AccountMap m, MonadError String m) =>
+  Network ->
+  Natural ->
+  m (Text, AccountStore)
 getAccountStoreByDeriv net acc = do
-    accMap <- get
-    case find ((== path) . accountStoreDeriv . snd) $ Map.assocs accMap of
-        Just res -> return res
-        Nothing -> throwError $ "No account exists with derivation " <> show acc
+  accMap <- gets getAccountMap
+  case find ((== path) . accountStoreDeriv . snd) $ Map.assocs accMap of
+    Just res -> return res
+    Nothing -> throwError $ "No account exists with derivation " <> show acc
   where
     path = bip44Deriv net acc
 
 nextAccountDeriv :: (MonadState AccountMap m, MonadError String m) => m Natural
 nextAccountDeriv = do
-    accMap <- get
-    ds <- mapM (liftEither . accountStoreAccount) $ Map.elems accMap
-    return $ if null ds then 0 else maximum ds + 1
+  accMap <- gets getAccountMap
+  ds <- mapM (liftEither . accountStoreAccount) $ Map.elems accMap
+  return $ if null ds then 0 else maximum ds + 1
 
 alterAccountStore ::
-       (MonadState AccountMap m, MonadError String m)
-    => Text
-    -> (Maybe AccountStore -> Either String (Maybe AccountStore))
-    -> m (Maybe AccountStore)
+  (MonadState AccountMap m, MonadError String m) =>
+  Text ->
+  (Maybe AccountStore -> Either String (Maybe AccountStore)) ->
+  m (Maybe AccountStore)
 alterAccountStore key f = do
-    accMap <- get
-    accM <- liftEither $ f (key `Map.lookup` accMap)
-    let newMap = Map.alter (const accM) key accMap
-    unless (validAccountMap newMap) $ 
-        throwError "Duplicate account public keys"
-    put newMap
-    return accM
+  accMap <- gets getAccountMap
+  accM <- liftEither $ f (key `Map.lookup` accMap)
+  let newMap = AccountMap $ Map.alter (const accM) key accMap
+  unless (validAccountMap newMap) $
+    throwError "Duplicate account public keys"
+  put newMap
+  return accM
 
 validAccountMap :: AccountMap -> Bool
-validAccountMap accMap =
-    length (nub pubKeys) == length pubKeys
+validAccountMap (AccountMap accMap) =
+  length (nub pubKeys) == length pubKeys
   where
     pubKeys = accountStoreXPubKey <$> Map.elems accMap
 
 insertAccountStore ::
-       (MonadState AccountMap m, MonadError String m)
-    => Text
-    -> AccountStore
-    -> m ()
+  (MonadState AccountMap m, MonadError String m) =>
+  Text ->
+  AccountStore ->
+  m ()
 insertAccountStore key store =
-    void $ alterAccountStore key $ \case
-        Nothing -> return $ Just store
-        _ -> Left "The account name already exists"
+  void $ alterAccountStore key $ \case
+    Nothing -> return $ Just store
+    _ -> Left "The account name already exists"
 
 renameAccountStore ::
-       (MonadState AccountMap m, MonadError String m)
-    => Text
-    -> Text
-    -> m AccountStore
+  (MonadState AccountMap m, MonadError String m) =>
+  Text ->
+  Text ->
+  m AccountStore
 renameAccountStore oldName newName
-    | oldName == newName = throwError "Old and new names are the same"
-    | otherwise = do
-        accMap <- get
-        case Map.lookup oldName accMap of
-            Just store -> do
-                when (Map.member newName accMap) $
-                    throwError "New account name already exists"
-                put $ Map.insert newName store $ Map.delete oldName accMap
-                return store
-            _ -> throwError "Account does not exist"
+  | oldName == newName = throwError "Old and new names are the same"
+  | otherwise = do
+      accMap <- gets getAccountMap
+      case Map.lookup oldName accMap of
+        Just store -> do
+          when (Map.member newName accMap) $
+            throwError "New account name already exists"
+          put $
+            AccountMap $
+              Map.insert newName store $
+                Map.delete oldName accMap
+          return store
+        _ -> throwError "Account does not exist"
 
 -- AccountStore State --
 
 commitAccountStore ::
-       (MonadIO m, MonadError String m, MonadState AccountMap m)
-    => Text
-    -> Commit AccountStore
-    -> m AccountStore
+  (MonadIO m, MonadError String m, MonadState AccountMap m) =>
+  Text ->
+  Commit AccountStore ->
+  m AccountStore
 commitAccountStore _ (NoCommit val) = return val
 commitAccountStore key (Commit val) = do
-    _ <- alterAccountStore key $ const $ return (Just val)
-    return val
+  _ <- alterAccountStore key $ const $ return (Just val)
+  return val
 
 runAccountStoreT ::
-       Monad m
-    => StateT AccountStore m a
-    -> AccountStore
-    -> m (a, Commit AccountStore)
+  (Monad m) =>
+  StateT AccountStore m a ->
+  AccountStore ->
+  m (a, Commit AccountStore)
 runAccountStoreT m origStore = do
-    (a, newStore) <- runStateT m origStore
-    return (a, toCommit origStore newStore)
+  (a, newStore) <- runStateT m origStore
+  return (a, toCommit origStore newStore)
 
 execAccountStoreT ::
-       Monad m
-    => StateT AccountStore m a
-    -> AccountStore
-    -> m (Commit AccountStore)
+  (Monad m) =>
+  StateT AccountStore m a ->
+  AccountStore ->
+  m (Commit AccountStore)
 execAccountStoreT m origStore = do
-    newStore <- execStateT m origStore
-    return $ toCommit origStore newStore
+  newStore <- execStateT m origStore
+  return $ toCommit origStore newStore
 
 withAccountStore ::
-       (MonadIO m, MonadError String m)
-    => Maybe Text
-    -> (Text -> StateT AccountStore m a)
-    -> m a 
-withAccountStore accM m =
-    withAccountMap $ do
-        (key, store) <- getAccountStore accM
-        (res, c) <- lift $ runAccountStoreT (m key) store
-        _ <- commitAccountStore key c
-        return res
+  (MonadIO m, MonadError String m) =>
+  Ctx ->
+  Maybe Text ->
+  (Text -> StateT AccountStore m a) ->
+  m a
+withAccountStore ctx accM m =
+  withAccountMap ctx $ do
+    (key, store) <- getAccountStore accM
+    (res, c) <- lift $ runAccountStoreT (m key) store
+    _ <- commitAccountStore key c
+    return res
 
 -- AccountStore --
 
 accountStoreAccount :: AccountStore -> Either String Natural
 accountStoreAccount as =
-    case pathToList $ accountStoreDeriv as of
-        [] -> Left "Invalid account derivation"
-        xs -> return $ fromIntegral $ (`clearBit` 31) $ last xs
+  case pathToList $ accountStoreDeriv as of
+    [] -> Left "Invalid account derivation"
+    xs -> return $ fromIntegral $ (`clearBit` 31) $ last xs
 
 emptyAccountStore :: Network -> XPubKey -> AccountStore
 emptyAccountStore net xpub =
-    AccountStore
-        { accountStoreXPubKey = xpub
-        , accountStoreExternal = 0
-        , accountStoreInternal = 0
-        , accountStoreDeriv = bip44Deriv net $ fromIntegral $ xPubChild xpub
-        , accountStoreNetwork = net
-        }
+  AccountStore
+    { accountStoreXPubKey = xpub,
+      accountStoreExternal = 0,
+      accountStoreInternal = 0,
+      accountStoreDeriv = bip44Deriv net $ fromIntegral $ xPubChild xpub,
+      accountStoreNetwork = net
+    }
 
-genExtAddress :: MonadState AccountStore m => m (Address, SoftPath)
-genExtAddress =
-    genAddress_ accountStoreExternal extDeriv $ \f s ->
-        s {accountStoreExternal = f s}
+genExtAddress :: (MonadState AccountStore m) => Ctx -> m (Address, SoftPath)
+genExtAddress ctx =
+  genAddress_ ctx accountStoreExternal extDeriv $ \f s ->
+    s {accountStoreExternal = f s}
 
-genIntAddress :: MonadState AccountStore m => m (Address, SoftPath)
-genIntAddress =
-    genAddress_ accountStoreInternal intDeriv $ \f s ->
-        s {accountStoreInternal = f s}
+genIntAddress :: (MonadState AccountStore m) => Ctx -> m (Address, SoftPath)
+genIntAddress ctx =
+  genAddress_ ctx accountStoreInternal intDeriv $ \f s ->
+    s {accountStoreInternal = f s}
 
 genAddress_ ::
-       MonadState AccountStore m
-    => (AccountStore -> Natural)
-    -> SoftPath
-    -> ((AccountStore -> Natural) -> AccountStore -> AccountStore)
-    -> m (Address, SoftPath)
-genAddress_ getIdx deriv updAcc = do
-    store <- get
-    let idx = getIdx store
-        addr =
-            derivePathAddr (accountStoreXPubKey store) deriv $ fromIntegral idx
-        newStore = updAcc ((+ 1) . getIdx) store
-    put newStore
-    return (fst addr, deriv :/ fromIntegral idx)
+  (MonadState AccountStore m) =>
+  Ctx ->
+  (AccountStore -> Natural) ->
+  SoftPath ->
+  ((AccountStore -> Natural) -> AccountStore -> AccountStore) ->
+  m (Address, SoftPath)
+genAddress_ ctx getIdx deriv updAcc = do
+  store <- get
+  let idx = getIdx store
+      addr =
+        derivePathAddr ctx (accountStoreXPubKey store) deriv $
+          fromIntegral idx
+      newStore = updAcc ((+ 1) . getIdx) store
+  put newStore
+  return (fst addr, deriv :/ fromIntegral idx)
 
-extAddresses :: AccountStore -> [(Address, SoftPath)]
-extAddresses = addresses_ accountStoreExternal extDeriv
+extAddresses :: Ctx -> AccountStore -> [(Address, SoftPath)]
+extAddresses ctx = addresses_ ctx accountStoreExternal extDeriv
 
-intAddresses :: AccountStore -> [(Address, SoftPath)]
-intAddresses = addresses_ accountStoreInternal intDeriv
+intAddresses :: Ctx -> AccountStore -> [(Address, SoftPath)]
+intAddresses ctx = addresses_ ctx accountStoreInternal intDeriv
 
 addresses_ ::
-       (AccountStore -> Natural)
-    -> SoftPath
-    -> AccountStore
-    -> [(Address, SoftPath)]
-addresses_ getIdx deriv store =
-    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
+  Ctx ->
+  (AccountStore -> Natural) ->
+  SoftPath ->
+  AccountStore ->
+  [(Address, SoftPath)]
+addresses_ ctx getIdx deriv store =
+  fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
   where
     xpub = accountStoreXPubKey store
     idx = fromIntegral $ getIdx store
-    addrs = take idx $ derivePathAddrs xpub deriv 0
+    addrs = take idx $ derivePathAddrs ctx xpub deriv 0
 
-storeAddressMap :: AccountStore -> Map Address SoftPath
-storeAddressMap store = Map.fromList $ extAddresses store <> intAddresses store
+storeAddressMap :: Ctx -> AccountStore -> Map Address SoftPath
+storeAddressMap ctx store =
+  Map.fromList $ extAddresses ctx store <> intAddresses ctx store
 
 -- Helpers --
 
@@ -331,12 +415,12 @@ intDeriv :: SoftPath
 intDeriv = Deriv :/ 1
 
 bip44Deriv :: Network -> Natural -> HardPath
-bip44Deriv net a = Deriv :| 44 :| getBip44Coin net :| fromIntegral a
+bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
 
-addrsDerivPage :: SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
-addrsDerivPage deriv (Page lim off) xpub =
-    fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
+addrsDerivPage :: Ctx -> SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
+addrsDerivPage ctx deriv (Page lim off) xpub =
+  fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
   where
     addrs =
-        take (fromIntegral lim) $ derivePathAddrs xpub deriv (fromIntegral off)
-
+      take (fromIntegral lim) $
+        derivePathAddrs ctx xpub deriv (fromIntegral off)
