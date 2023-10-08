@@ -17,7 +17,7 @@ import Data.List (foldl')
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word8)
-import Haskoin.Crypto (Mnemonic, mnemonicToSeed, toMnemonic)
+import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
 import Haskoin.Util (bsToInteger)
 import Network.Haskoin.Wallet.Util (chunksOf)
 import Numeric (showIntAtBase)
@@ -139,7 +139,7 @@ mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
 mergeMnemonicParts mnems
   | length mnems < 2 = Left "Invalid call to mergeMnemonicParts"
   | otherwise = do
-      bs <- mapM (mnemonicToSeed "") mnems
+      bs <- mapM fromMnemonic mnems
       let ent = foldl' xorBytes (head bs) (tail bs)
       toMnemonic ent
 
@@ -204,6 +204,9 @@ genMnemonic reqEnt reqDice splitIn
           unless (ent == foldl' xorBytes (head ks) (tail ks)) $
             throwError "Something went wrong while splitting the keys"
           splitMnems <- liftEither $ mapM toMnemonic ks
+          unsplitMnem <- liftEither $ mergeMnemonicParts splitMnems
+          unless (mnem == unsplitMnem) $
+            throwError "Something went wrong while reconstructing the mnemonic"
           return (origEnt, mnem, splitMnems)
         else return (origEnt, mnem, [])
   | otherwise = throwError "The entropy value can only be in [16,20..32]"

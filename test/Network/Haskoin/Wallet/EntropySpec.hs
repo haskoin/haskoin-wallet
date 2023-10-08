@@ -28,7 +28,7 @@ import Network.Haskoin.Wallet.Entropy
   ( base6ToWord8,
     splitEntropyWith,
     word8ToBase6,
-    xorBytes,
+    xorBytes, mergeMnemonicParts,
   )
 import Network.Haskoin.Wallet.Signing (signingKey)
 import Network.Haskoin.Wallet.TestUtils (forceRight)
@@ -44,6 +44,7 @@ import Test.Hspec
   )
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (forAll)
+import Haskoin.Crypto (toMnemonic)
 
 spec :: Spec
 spec = prepareContext $ \ctx -> do
@@ -123,13 +124,23 @@ entropySpec = do
         forAll (arbitraryBSn 32) $ \k2 ->
           splitEntropyWith s [k1, k2]
             `shouldBe` [s `xorBytes` k1 `xorBytes` k2, k1, k2]
-  prop "prop: can reconstruct secret key" $
+  prop "prop: can reconstruct entropy" $
     forAll (arbitraryBSn 32) $ \s ->
       forAll (arbitraryBSn 32) $ \k1 ->
         forAll (arbitraryBSn 32) $ \k2 -> do
           case splitEntropyWith s [k1, k2] of
             [a, b, c] -> (a `xorBytes` b `xorBytes` c) `shouldBe` s
             _ -> expectationFailure "Invalid splitEntropyWith"
+  prop "prop: can reconstruct original mnemonic" $ 
+    forAll (arbitraryBSn 32) $ \s ->
+      forAll (arbitraryBSn 32) $ \k1 ->
+        case splitEntropyWith s [k1] of
+          [a, b] ->
+            let mnem = toMnemonic s
+                splitMnems = mapM toMnemonic [a, b]
+                unsplitMnem = mergeMnemonicParts $ forceRight splitMnems
+             in unsplitMnem `shouldBe` mnem
+          _ -> expectationFailure "Invalid splitEntropyWith"
 
 -- https://github.com/iancoleman/bip39/issues/58
 mnemonicSpec :: Ctx -> Spec
