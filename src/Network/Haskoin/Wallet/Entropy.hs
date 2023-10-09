@@ -13,7 +13,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (liftIO)
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
-import Data.List (foldl')
+import Data.List (foldl', nub)
 import Data.Text (Text)
 import qualified Data.Text as T
 import Data.Word (Word8)
@@ -137,7 +137,8 @@ splitEntropyWith secret ks = foldl' xorBytes secret ks : ks
 
 mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
 mergeMnemonicParts mnems
-  | length mnems < 2 = Left "Invalid call to mergeMnemonicParts"
+  | length mnems < 2 = Left "Only one mnemonic provided"
+  | length (nub mnems) /= length mnems = Left "Two mnemonics are identical"
   | otherwise = do
       bs <- mapM fromMnemonic mnems
       let ent = foldl' xorBytes (head bs) (tail bs)

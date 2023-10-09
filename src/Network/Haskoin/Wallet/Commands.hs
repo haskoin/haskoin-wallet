@@ -36,10 +36,11 @@ import Haskoin.Crypto
     SoftPath,
     XPrvKey,
     deriveXPubKey,
+    fromMnemonic,
     mnemonicToSeed,
     pathToList,
   )
-import Haskoin.Network (Network(name), netByName)
+import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
   ( GetAddrsBalance (GetAddrsBalance),
@@ -139,6 +140,7 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
+import System.IO (putStrLn)
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -900,8 +902,11 @@ askInputLine message = do
 askMnemonic :: String -> ExceptT String IO Mnemonic
 askMnemonic txt = do
   mnm <- liftIO $ askInputLineHidden txt
-  _ <- liftEither $ mnemonicToSeed "" (cs mnm) -- validate the mnemonic
-  return $ cs mnm
+  case fromMnemonic (cs mnm) of -- validate the mnemonic
+    Right _ -> return $ cs mnm
+    Left _ -> do
+      liftIO $ putStrLn "Invalid mnemonic"
+      askMnemonic txt
 
 askSigningKey ::
   Ctx -> Network -> Natural -> Natural -> ExceptT String IO XPrvKey
@@ -919,12 +924,14 @@ askSigningKey ctx net acc splitIn = do
 
 askPassword :: ExceptT String IO String
 askPassword = do
-  pass <- liftIO $ askInputLineHidden "Mnemonic password or leave empty: "
+  pass <- liftIO $ askInputLineHidden "Mnemonic passphrase or leave empty: "
   if null pass
     then return pass
     else do
       pass2 <-
-        liftIO $ askInputLineHidden "Repeat your mnemonic password: "
+        liftIO $ askInputLineHidden "Repeat your mnemonic passphrase: "
       if pass == pass2
         then return pass
-        else throwError "The passwords did not match"
+        else do
+          liftIO $ putStrLn "The passphrases did not match"
+          askPassword
