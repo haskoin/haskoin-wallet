@@ -491,7 +491,7 @@ diceOption =
 
 splitInOption :: Parser Natural
 splitInOption =
-  option (maybeReader $ readNatural . cs) $
+  option (eitherReader $ f . cs) $
     mconcat
       [ short 's',
         long "split",
@@ -501,6 +501,14 @@ splitInOption =
         metavar "INT",
         value 1
       ]
+  where
+    f s =
+      case readNatural s of
+        Just n ->
+          if n >= 2 && n <= 12
+            then Right n
+            else Left "Split value has to be in the range [2-12]"
+        Nothing -> Left "Could not parse the split option"
 
 entropyOption :: Parser Natural
 entropyOption =

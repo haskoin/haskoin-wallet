@@ -663,6 +663,8 @@ balance ctx accM =
     withAccountStore ctx accM $ \storeName -> do
       net <- gets accountStoreNetwork
       addrMap <- gets (storeAddressMap ctx)
+      when (Map.null addrMap) $
+        throwError "The account has no addresses yet"
       checkHealth ctx net
       let req = GetAddrsBalance (Map.keys addrMap)
       Store.SerialList bals <-
