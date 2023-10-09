@@ -80,6 +80,10 @@ data Command
         commandDerivation :: !(Maybe Natural),
         commandSplitIn :: !Natural
       }
+  | CommandTestAcc
+      { commandMaybeAcc :: !(Maybe Data.Text.Text),
+        commandSplitIn :: !Natural
+      }
   | CommandImportAcc
       { commandFilePath :: !FilePath
       }
@@ -163,6 +167,7 @@ commandParser ctx =
           [ commandGroup "Mnemonic and account management",
             command "mnemonic" mnemonicParser,
             command "createacc" createAccParser,
+            command "testacc" (testAccParser ctx),
             command "importacc" importAccParser,
             command "renameacc" (renameAccParser ctx),
             command "accounts" accountsParser,
@@ -242,6 +247,17 @@ createAccParser =
           \ sign transactions. The public key file for the account will be\
           \ stored in ~/.hw/pubkeys which can be imported on an online\
           \ computer."
+      ]
+
+testAccParser :: Ctx -> ParserInfo Command
+testAccParser ctx =
+  info (CommandTestAcc <$> accountOption ctx <*> splitInOption) $
+    mconcat
+      [ progDescDoc $ offline "Test your mnemonic and passphrase",
+        footer
+          "You should test regularly the mnemonic and passphrase of your account.\
+          \ This command will derive the public key associated with the account\
+          \ and make sure that it matches the account on file."
       ]
 
 importAccParser :: ParserInfo Command

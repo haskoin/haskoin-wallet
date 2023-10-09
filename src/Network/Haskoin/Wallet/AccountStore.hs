@@ -224,7 +224,7 @@ getAccountStore keyM = do
     Just key ->
       case key `Map.lookup` accMap of
         Just val -> return (key, val)
-        _ -> throwError $ "The account " <> cs key <> "does not exist"
+        _ -> throwError $ "The account " <> cs key <> " does not exist"
 
 getAccountStoreByDeriv ::
   (MonadState AccountMap m, MonadError String m) =>
