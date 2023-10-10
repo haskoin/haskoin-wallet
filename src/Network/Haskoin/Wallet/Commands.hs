@@ -37,8 +37,7 @@ import Haskoin.Crypto
     XPrvKey,
     deriveXPubKey,
     fromMnemonic,
-    mnemonicToSeed,
-    pathToList,
+    pathToList, HardPath,
   )
 import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
@@ -64,7 +63,7 @@ import Network.Haskoin.Wallet.AccountStore
       ( accountStoreExternal,
         accountStoreInternal,
         accountStoreNetwork,
-        accountStoreXPubKey
+        accountStoreXPubKey, accountStoreDeriv
       ),
     accountStoreAccount,
     addrsDerivPage,
@@ -140,7 +139,7 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
-import System.IO (putStrLn)
+import Data.Bits (clearBit)
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -185,6 +184,12 @@ data Response
       { responseAccountName :: !Text,
         responseAccount :: !AccountStore,
         responsePubKeyFile :: !Text
+      }
+  | ResponseTestAcc
+      { responseAccountName :: !Text,
+        responseAccount :: !AccountStore,
+        responseResult :: !Bool,
+        responseText :: !Text
       }
   | ResponseImportAcc
       { responseAccountName :: !Text,
@@ -285,6 +290,14 @@ instance MarshalJSON Ctx Response where
             "accountname" .= n,
             "account" .= marshalValue ctx a,
             "pubkeyfile" .= f
+          ]
+      ResponseTestAcc n a b t ->
+        object
+          [ "type" .= Json.String "testacc",
+            "accountname" .= n,
+            "account" .= marshalValue ctx a,
+            "result" .= b,
+            "text" .= t
           ]
       ResponseImportAcc n a ->
         object
@@ -412,6 +425,12 @@ instance MarshalJSON Ctx Response where
           a <- unmarshalValue ctx =<< o .: "account"
           f <- o .: "pubkeyfile"
           return $ ResponseCreateAcc n a f
+        "testacc" -> do
+          n <- o .: "accountname"
+          a <- unmarshalValue ctx =<< o .: "account"
+          b <- o .: "result"
+          t <- o .: "text"
+          return $ ResponseTestAcc n a b t
         "importacc" -> do
           n <- o .: "accountname"
           a <- unmarshalValue ctx =<< o .: "account"
@@ -548,6 +567,7 @@ commandResponse ctx =
   \case
     CommandMnemonic e d s -> mnemonic e d s
     CommandCreateAcc t n dM s -> createAcc ctx t n dM s
+    CommandTestAcc accM s -> testAcc ctx accM s
     CommandImportAcc f -> importAcc ctx f
     CommandRenameAcc old new -> renameAcc ctx old new
     CommandAccounts -> accounts ctx
@@ -590,6 +610,31 @@ createAcc ctx name net derivM splitIn =
             responsePubKeyFile = cs path
           }
 
+testAcc :: Ctx -> Maybe Text -> Natural -> IO Response
+testAcc ctx accM splitIn =
+  catchResponseError $
+  withAccountStore ctx accM $ \storeName -> do
+    store <- get
+    net <- gets accountStoreNetwork
+    d <- gets accountStoreDeriv
+    pubKey <- gets accountStoreXPubKey
+    prvKey <- lift $ askSigningKey ctx net (pathToAccount d) splitIn
+    return $
+      if deriveXPubKey ctx prvKey == pubKey
+        then ResponseTestAcc
+               storeName
+               store
+               True
+               "The mnemonic and passphrase matched the account"
+        else ResponseTestAcc
+               storeName
+               store
+               False
+               "The mnemonic and passphrase did not match the account"
+
+pathToAccount :: HardPath -> Natural
+pathToAccount = fromIntegral . (`clearBit` 31) . last . pathToList
+
 importAcc :: Ctx -> FilePath -> IO Response
 importAcc ctx fp =
   catchResponseError $ do
@@ -618,6 +663,8 @@ balance ctx accM =
     withAccountStore ctx accM $ \storeName -> do
       net <- gets accountStoreNetwork
       addrMap <- gets (storeAddressMap ctx)
+      when (Map.null addrMap) $
+        throwError "The account has no addresses yet"
       checkHealth ctx net
       let req = GetAddrsBalance (Map.keys addrMap)
       Store.SerialList bals <-

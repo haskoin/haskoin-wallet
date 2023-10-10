@@ -188,6 +188,7 @@ genMnemonic ::
   Natural ->
   ExceptT String IO (Text, Mnemonic, [Mnemonic])
 genMnemonic reqEnt reqDice splitIn
+  | splitIn == 0 = throwError "Invalid split option"
   | reqEnt `elem` [16, 20 .. 32] = do
       (origEnt, sysEnt) <- liftIO $ systemEntropy reqEnt
       ent <-
