@@ -8,6 +8,7 @@ extra-deps:
   - git: https://github.com/haskoin/haskoin-core.git
     commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
   - git: https://github.com/haskoin/haskoin-store.git
-    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
+    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
     subdirs:
     - data
+  - scotty-0.20@sha256:f9b3f21773f813e92e41a6b5eee1fbefbbe0c695ac5259413500270ec0847151,5292

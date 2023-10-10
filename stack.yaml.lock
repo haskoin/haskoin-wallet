@@ -16,18 +16,25 @@ packages:
     commit: 520b0b241f7e108771b0b0fd274a7c329f65ce1c
     git: https://github.com/haskoin/haskoin-core.git
 - completed:
-    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
+    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
     git: https://github.com/haskoin/haskoin-store.git
     name: haskoin-store-data
     pantry-tree:
-      sha256: 358864bbacdb6db4a777d74042dce0e2157b0a719b96c56fc5218fda10361573
+      sha256: fa2a2cdca5a3d0531d81269eee4fa1e8e318e86e519a64673da9915579c37f59
       size: 624
     subdir: data
-    version: 1.1.0
+    version: 1.2.0
   original:
-    commit: ec282a95bdb4f4900da540c5d777c328e378ce36
+    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
     git: https://github.com/haskoin/haskoin-store.git
     subdir: data
+- completed:
+    hackage: scotty-0.20@sha256:f9b3f21773f813e92e41a6b5eee1fbefbbe0c695ac5259413500270ec0847151,5292
+    pantry-tree:
+      sha256: 4666d49e36443b9ec6d16257fe5ed971e3fdf7111b5996a316372729523038c9
+      size: 1945
+  original:
+    hackage: scotty-0.20@sha256:f9b3f21773f813e92e41a6b5eee1fbefbbe0c695ac5259413500270ec0847151,5292
 snapshots:
 - completed:
     sha256: d4a54df12888fc5d1ef2d4ff987225fa7bedb2cff74385b33fbec4a384ebd619
