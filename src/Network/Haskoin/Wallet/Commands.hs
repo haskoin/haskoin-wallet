@@ -20,6 +20,7 @@ import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Control.Monad.State (MonadState (get), gets, modify)
 import Data.Aeson (object, (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
+import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
@@ -32,12 +33,13 @@ import qualified Data.Text as T
 import Haskoin.Address (Address, addrToText, textToAddr)
 import Haskoin.Crypto
   ( Ctx,
+    HardPath,
     Mnemonic,
     SoftPath,
     XPrvKey,
     deriveXPubKey,
     fromMnemonic,
-    pathToList, HardPath,
+    pathToList,
   )
 import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
@@ -60,10 +62,11 @@ import Haskoin.Util
 import Network.Haskoin.Wallet.AccountStore
   ( AccountMap,
     AccountStore
-      ( accountStoreExternal,
+      ( accountStoreDeriv,
+        accountStoreExternal,
         accountStoreInternal,
         accountStoreNetwork,
-        accountStoreXPubKey, accountStoreDeriv
+        accountStoreXPubKey
       ),
     accountStoreAccount,
     addrsDerivPage,
@@ -74,7 +77,6 @@ import Network.Haskoin.Wallet.AccountStore
     getAccountStoreByDeriv,
     insertAccountStore,
     intDeriv,
-    nextAccountDeriv,
     readAccountLabels,
     readAccountMap,
     renameAccountStore,
@@ -88,6 +90,7 @@ import Network.Haskoin.Wallet.Amounts
     readAmount,
     showUnit,
   )
+import Network.Haskoin.Wallet.Database
 import Network.Haskoin.Wallet.Entropy
   ( genMnemonic,
     mergeMnemonicParts,
@@ -139,7 +142,6 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
-import Data.Bits (clearBit)
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -182,7 +184,7 @@ data Response
       }
   | ResponseCreateAcc
       { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+        responseDBAccount :: !DBAccount,
         responsePubKeyFile :: !Text
       }
   | ResponseTestAcc
@@ -268,7 +270,7 @@ data Response
       { responseRollDice :: ![Natural],
         responseEntropySource :: !Text
       }
-  deriving (Eq, Show)
+  deriving (Show)
 
 jsonError :: String -> Json.Value
 jsonError err = object ["type" .= Json.String "error", "error" .= err]
@@ -288,7 +290,7 @@ instance MarshalJSON Ctx Response where
         object
           [ "type" .= Json.String "createacc",
             "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "pubkeyfile" .= f
           ]
       ResponseTestAcc n a b t ->
@@ -422,7 +424,7 @@ instance MarshalJSON Ctx Response where
           return $ ResponseMnemonic e m ms
         "createacc" -> do
           n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           f <- o .: "pubkeyfile"
           return $ ResponseCreateAcc n a f
         "testacc" -> do
@@ -555,7 +557,7 @@ addrsToAccBalance xs =
       balanceUTXO = fromIntegral $ sum $ (.utxo) <$> xs
     }
 
-catchResponseError :: ExceptT String IO Response -> IO Response
+catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
 catchResponseError m = do
   resE <- runExceptT m
   case resE of
@@ -595,42 +597,42 @@ mnemonic ent useDice splitIn =
 
 createAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
 createAcc ctx name net derivM splitIn =
-  catchResponseError $
-    withAccountMap ctx $ do
-      d <- maybe nextAccountDeriv return derivM
-      prvKey <- lift $ askSigningKey ctx net d splitIn
-      let xpub = deriveXPubKey ctx prvKey
-          store = emptyAccountStore net xpub
-      path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net name
-      insertAccountStore name store
-      return $
-        ResponseCreateAcc
-          { responseAccountName = name,
-            responseAccount = store,
-            responsePubKeyFile = cs path
-          }
+  runDB $ catchResponseError $ do
+    d <- maybe (lift $ nextAccountDeriv net) return derivM
+    prvKey <- askSigningKey ctx net d splitIn
+    let xpub = deriveXPubKey ctx prvKey
+    path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net name
+    account <- lift $ newAccount net ctx name d xpub
+    return $
+      ResponseCreateAcc
+        { responseAccountName = name,
+          responseDBAccount = account,
+          responsePubKeyFile = cs path
+        }
 
 testAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 testAcc ctx accM splitIn =
   catchResponseError $
-  withAccountStore ctx accM $ \storeName -> do
-    store <- get
-    net <- gets accountStoreNetwork
-    d <- gets accountStoreDeriv
-    pubKey <- gets accountStoreXPubKey
-    prvKey <- lift $ askSigningKey ctx net (pathToAccount d) splitIn
-    return $
-      if deriveXPubKey ctx prvKey == pubKey
-        then ResponseTestAcc
-               storeName
-               store
-               True
-               "The mnemonic and passphrase matched the account"
-        else ResponseTestAcc
-               storeName
-               store
-               False
-               "The mnemonic and passphrase did not match the account"
+    withAccountStore ctx accM $ \storeName -> do
+      store <- get
+      net <- gets accountStoreNetwork
+      d <- gets accountStoreDeriv
+      pubKey <- gets accountStoreXPubKey
+      prvKey <- lift $ askSigningKey ctx net (pathToAccount d) splitIn
+      return $
+        if deriveXPubKey ctx prvKey == pubKey
+          then
+            ResponseTestAcc
+              storeName
+              store
+              True
+              "The mnemonic and passphrase matched the account"
+          else
+            ResponseTestAcc
+              storeName
+              store
+              False
+              "The mnemonic and passphrase did not match the account"
 
 pathToAccount :: HardPath -> Natural
 pathToAccount = fromIntegral . (`clearBit` 31) . last . pathToList
@@ -946,39 +948,37 @@ askInputLine message = do
     return
     inputM
 
-askMnemonic :: String -> ExceptT String IO Mnemonic
+askMnemonic :: String -> IO Mnemonic
 askMnemonic txt = do
-  mnm <- liftIO $ askInputLineHidden txt
+  mnm <- askInputLineHidden txt
   case fromMnemonic (cs mnm) of -- validate the mnemonic
     Right _ -> return $ cs mnm
     Left _ -> do
       liftIO $ putStrLn "Invalid mnemonic"
       askMnemonic txt
 
-askSigningKey ::
-  Ctx -> Network -> Natural -> Natural -> ExceptT String IO XPrvKey
+askSigningKey :: (MonadIO m) => Ctx -> Network -> Natural -> Natural -> ExceptT String m XPrvKey
 askSigningKey _ _ _ 0 = throwError "Mnemonic split can not be 0"
 askSigningKey ctx net acc splitIn = do
   mnm <-
     if splitIn == 1
-      then askMnemonic "Enter your mnemonic: "
+      then liftIO $ askMnemonic "Enter your mnemonic: "
       else do
         ms <- forM [1 .. splitIn] $ \n ->
-          askMnemonic $ "Split mnemonic part #" <> show n <> ": "
+          liftIO $ askMnemonic $ "Split mnemonic part #" <> show n <> ": "
         liftEither $ mergeMnemonicParts ms
-  passStr <- askPassword
+  passStr <- liftIO $ askPassword
   liftEither $ signingKey net ctx (cs passStr) (cs mnm) acc
 
-askPassword :: ExceptT String IO String
+askPassword :: IO String
 askPassword = do
-  pass <- liftIO $ askInputLineHidden "Mnemonic passphrase or leave empty: "
+  pass <- askInputLineHidden "Mnemonic passphrase or leave empty: "
   if null pass
     then return pass
     else do
-      pass2 <-
-        liftIO $ askInputLineHidden "Repeat your mnemonic passphrase: "
+      pass2 <- askInputLineHidden "Repeat your mnemonic passphrase: "
       if pass == pass2
         then return pass
         else do
-          liftIO $ putStrLn "The passphrases did not match"
+          putStrLn "The passphrases did not match"
           askPassword

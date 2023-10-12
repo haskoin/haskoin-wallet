@@ -53,6 +53,7 @@ import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.Util (Page (Page), (</>))
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
+import Conduit (MonadUnliftIO)
 
 newtype AccountMap = AccountMap {getAccountMap :: Map Text AccountStore}
   deriving (Eq, Show)
@@ -163,7 +164,7 @@ commitAccountMap ctx (Commit val) = do
   return val
 
 runAccountMapT ::
-  (Monad m) =>
+  Monad m =>
   StateT AccountMap m a ->
   AccountMap ->
   m (a, Commit AccountMap)
@@ -172,7 +173,7 @@ runAccountMapT m origMap = do
   return (a, toCommit origMap newMap)
 
 execAccountMapT ::
-  (Monad m) => StateT AccountMap m a -> AccountMap -> m (Commit AccountMap)
+  Monad m => StateT AccountMap m a -> AccountMap -> m (Commit AccountMap)
 execAccountMapT m origMap = do
   newMap <- execStateT m origMap
   return $ toCommit origMap newMap
@@ -239,12 +240,6 @@ getAccountStoreByDeriv net acc = do
   where
     path = bip44Deriv net acc
 
-nextAccountDeriv :: (MonadState AccountMap m, MonadError String m) => m Natural
-nextAccountDeriv = do
-  accMap <- gets getAccountMap
-  ds <- mapM (liftEither . accountStoreAccount) $ Map.elems accMap
-  return $ if null ds then 0 else maximum ds + 1
-
 alterAccountStore ::
   (MonadState AccountMap m, MonadError String m) =>
   Text ->
@@ -298,7 +293,7 @@ renameAccountStore oldName newName
 -- AccountStore State --
 
 commitAccountStore ::
-  (MonadIO m, MonadError String m, MonadState AccountMap m) =>
+  (MonadError String m, MonadState AccountMap m) =>
   Text ->
   Commit AccountStore ->
   m AccountStore
