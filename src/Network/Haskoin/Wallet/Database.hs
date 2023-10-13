@@ -18,16 +18,16 @@
 
 module Network.Haskoin.Wallet.Database where
 
-import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-    runExceptT,
-  )
-import Control.Monad
-    ( MonadPlus(mzero), unless, void, when, unless )
 import Conduit (MonadUnliftIO, ResourceT)
-import Control.Monad.Except (ExceptT, MonadError (throwError))
+import Control.Exception (try)
+import Control.Monad
+  ( MonadPlus (mzero),
+    unless,
+    void,
+    when,
+    (<=<),
+  )
+import Control.Monad.Except (ExceptT, MonadError (throwError), liftEither, runExceptT)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT)
 import Control.Monad.Reader (MonadTrans (lift), ReaderT)
@@ -40,11 +40,14 @@ import Data.Aeson.Types
     withObject,
     (.:),
   )
-import Data.ByteString
+import Data.Bits (Bits (clearBit))
+import qualified Data.ByteString as BS
 import qualified Data.Map as M
+import Data.Maybe (fromJust, fromMaybe, isJust)
 import Data.Serialize (decode, encode)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
+import Data.Time
 import Data.Word (Word64)
 import Database.Esqueleto
 import qualified Database.Persist as P
@@ -77,13 +80,14 @@ DBAccount
   internal Int
   xpubkey Text
   balance Word64
+  created UTCTime default=CURRENT_TIME
   Primary index network
   UniqueName name
   deriving Show
 
 DBTx
   txid Text
-  value ByteString
+  value BS.ByteString
   Primary txid
   deriving Show
 
@@ -96,13 +100,14 @@ DBAddress
   received Word64
   txcount Int
   archived Bool
+  created UTCTime default=CURRENT_TIME
   Primary index account
   UniqueAddress addr
   deriving Show
 |]
 
 instance ToJSON DBAccount where
-  toJSON (DBAccount idx net name deriv e i xpub b) =
+  toJSON (DBAccount idx net name deriv e i xpub b t) =
     object
       [ "index" .= idx,
         "network" .= net,
@@ -111,7 +116,8 @@ instance ToJSON DBAccount where
         "external" .= e,
         "internal" .= i,
         "xpubkey" .= xpub,
-        "balance" .= b
+        "balance" .= b,
+        "created" .= t
       ]
 
 instance FromJSON DBAccount where
@@ -126,13 +132,29 @@ instance FromJSON DBAccount where
         <*> o .: "internal"
         <*> o .: "xpubkey"
         <*> o .: "balance"
+        <*> o .: "created"
+
+accountIndex :: DBAccount -> Natural
+accountIndex = fromIntegral . dBAccountIndex
+
+accountNetwork :: DBAccount -> Network
+accountNetwork =
+  fromMaybe (error "Invalid Network in database")
+    . netByName
+    . cs
+    . dBAccountNetwork
+
+accountPubKey :: Ctx -> DBAccount -> XPubKey
+accountPubKey ctx acc =
+  fromMaybe (error "Invalid XPubKey in database") $
+    xPubImport (accountNetwork acc) ctx (dBAccountXpubkey acc)
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
-liftDB :: Monad m => m a -> DB m a
-liftDB = lift . lift . lift
+liftDB :: (Monad m) => DB m (Either String a) -> ExceptT String (DB m) a
+liftDB = liftEither <=< lift
 
-runDB :: MonadUnliftIO m => DB m a -> m a
+runDB :: (MonadUnliftIO m) => DB m a -> m a
 runDB action = do
   dir <- liftIO $ hwDataDirectory Nothing
   let dbFile = dir </> "accounts.sqlite"
@@ -140,35 +162,85 @@ runDB action = do
     _ <- runMigrationQuiet migrateAll
     action
 
-nextAccountDeriv :: MonadUnliftIO m => Network -> DB m Natural
+nextAccountDeriv :: (MonadUnliftIO m) => Network -> DB m Natural
 nextAccountDeriv net = do
-  ds <-
-    select $
+  dM <-
+    selectOne $
       from $ \a -> do
         where_ (a ^. DBAccountNetwork ==. val (cs net.name))
         orderBy [desc (a ^. DBAccountIndex)]
-        limit 1
         return $ a ^. DBAccountIndex
-  case ds of
-    [d] -> return $ fromIntegral (unValue d) + 1
-    _ -> return 0
+  return $ maybe 0 ((+ 1) . fromIntegral . unValue) dM
 
-newAccount :: MonadUnliftIO m => Network -> Ctx -> Text -> Natural -> XPubKey -> DB m DBAccount
-newAccount net ctx name deriv xpub = do
-  let account =
+existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
+existsAccount name = do
+  aM <- P.getBy $ UniqueName name
+  return $ isJust aM
+
+newAccount ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Ctx ->
+  Text ->
+  XPubKey ->
+  DB m DBAccount
+newAccount net ctx name xpub = do
+  time <- liftIO getCurrentTime
+  let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
+      idx = fromIntegral $ xPubIndex xpub
+      account =
         DBAccount
-          { dBAccountIndex = fromIntegral deriv,
+          { dBAccountIndex = idx,
             dBAccountNetwork = cs net.name,
             dBAccountName = name,
-            dBAccountDerivation =
-              cs $ pathToStr $ bip44Deriv net $ fromIntegral $ xPubChild xpub,
+            dBAccountDerivation = cs $ pathToStr path,
             dBAccountExternal = 0,
             dBAccountInternal = 0,
             dBAccountXpubkey = xPubExport net ctx xpub,
-            dBAccountBalance = 0
+            dBAccountBalance = 0,
+            dBAccountCreated = time
           }
   _ <- P.insert account
   return account
+
+-- When a name is provided, get that account or throw an error if it doesn't
+-- exist. When no name is provided, return the account only if there is one
+-- account.
+getAccount ::
+  (MonadUnliftIO m) => Maybe Text -> DB m (Either String DBAccount)
+getAccount (Just name) = do
+  aM <- P.getBy $ UniqueName name
+  return $
+    case aM of
+      Just a -> Right $ entityVal a
+      _ -> Left $ "The account " <> cs name <> " does not exist"
+getAccount Nothing = do
+  as <- getAccounts
+  return $
+    case as of
+      [a] -> Right a
+      [] -> Left "There are no accounts in the wallet"
+      _ -> Left "Specify which account to use"
+
+getAccounts :: (MonadUnliftIO m) => DB m [DBAccount]
+getAccounts = (entityVal <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+
+renameAccount ::
+  (MonadUnliftIO m) => Text -> Text -> DB m (Either String DBAccount)
+renameAccount oldName newName
+  | oldName == newName = return $ Left "Old and new names are the same"
+  | otherwise = do
+      e <- existsAccount newName
+      if e
+        then return $ Left $ "The account " <> cs newName <> " already exists"
+        else do
+          c <-
+            updateCount $ \a -> do
+              set a [DBAccountName =. val newName]
+              where_ (a ^. DBAccountName ==. val oldName)
+          if c == 0
+            then return $ Left $ "The account " <> cs oldName <> " does not exist"
+            else getAccount $ Just newName
 
 {- SQL Data Type Marshalling
 

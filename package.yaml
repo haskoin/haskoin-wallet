@@ -53,6 +53,7 @@ dependencies:
   secp256k1-haskell: ">= 1.0.0"
   string-conversions: ">= 0.4.0.1"
   text: ">= 1.2.4.0"
+  time: ">= 1.12.2"
   tostring: ">= 0.2.1.1"
   transformers: ">= 0.5.6.2"
   unordered-containers: ">= 0.2.10.0"

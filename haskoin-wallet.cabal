@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 307d84689c5f65b8cfa0b7597256a2215f88a22240217a0a0acfd37d0bbef974
+-- hash: 42e7e8f00920014ce2ac4511b42981451dc4f7a21e5d2edc0f9ff59559e22570
 
 name:           haskoin-wallet
 version:        0.8.0
@@ -64,6 +64,7 @@ library
     , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
+    , time >=1.12.2
     , tostring >=0.2.1.1
     , transformers >=0.5.6.2
     , unordered-containers >=0.2.10.0
@@ -122,6 +123,7 @@ executable hw
     , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
+    , time >=1.12.2
     , tostring >=0.2.1.1
     , transformers >=0.5.6.2
     , unordered-containers >=0.2.10.0
@@ -179,6 +181,7 @@ test-suite spec
     , secp256k1-haskell >=1.0.0
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
+    , time >=1.12.2
     , tostring >=0.2.1.1
     , transformers >=0.5.6.2
     , unordered-containers >=0.2.10.0

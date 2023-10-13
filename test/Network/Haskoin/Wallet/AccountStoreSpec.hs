@@ -26,7 +26,7 @@ import Haskoin.Util.Arbitrary
     arbitraryHardPath,
     arbitraryNetwork,
     arbitraryXPubKey,
-    testIdentity,
+    testIdentity, JsonBox (JsonBox),
   )
 import Network.Haskoin.Wallet.AccountStore
   ( AccountMap (AccountMap),

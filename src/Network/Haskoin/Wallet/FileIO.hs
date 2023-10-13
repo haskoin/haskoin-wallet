@@ -60,7 +60,7 @@ import qualified System.Directory as D
 import qualified System.IO as IO
 
 class HasFilePath a where
-  getFilePath :: Ctx -> a -> String
+  getFilePath :: a -> String
 
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
@@ -86,8 +86,8 @@ instance MarshalJSON Ctx PubKeyDoc where
       ]
 
 instance HasFilePath PubKeyDoc where
-  getFilePath ctx (PubKeyDoc xpub net _) =
-    net.name <> "-account-" <> cs (xPubChecksum ctx xpub) <> ".json"
+  getFilePath (PubKeyDoc _ net name) =
+    net.name <> "-account-" <> cs name <> ".json"
 
 data TxSignData = TxSignData
   { txSignDataTx :: !Tx,
@@ -125,7 +125,7 @@ instance MarshalJSON Ctx TxSignData where
       ]
 
 instance HasFilePath TxSignData where
-  getFilePath _ (TxSignData tx _ _ _ _ s net) =
+  getFilePath (TxSignData tx _ _ _ _ s net) =
     net.name <> heading <> cs (txChecksum tx) <> ".json"
     where
       heading = if s then "-signedtx-" else "-unsignedtx-"
@@ -154,7 +154,7 @@ writeDoc :: (MarshalJSON Ctx a, HasFilePath a) => HWFolder -> a -> IO FilePath
 writeDoc folder doc =
   withContext $ \ctx -> do
     dir <- hwDataDirectory $ Just $ toFolder folder
-    let path = dir </> getFilePath ctx doc
+    let path = dir </> getFilePath doc
     writeJsonFile path $ marshalValue ctx doc
     return path
 

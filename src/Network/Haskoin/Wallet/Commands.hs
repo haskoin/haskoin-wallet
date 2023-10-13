@@ -61,13 +61,6 @@ import Haskoin.Util
   )
 import Network.Haskoin.Wallet.AccountStore
   ( AccountMap,
-    AccountStore
-      ( accountStoreDeriv,
-        accountStoreExternal,
-        accountStoreInternal,
-        accountStoreNetwork,
-        accountStoreXPubKey
-      ),
     accountStoreAccount,
     addrsDerivPage,
     emptyAccountStore,
@@ -183,61 +176,51 @@ data Response
         responseSplitMnemonic :: ![[Text]]
       }
   | ResponseCreateAcc
-      { responseAccountName :: !Text,
-        responseDBAccount :: !DBAccount,
+      { responseAccount :: !DBAccount,
         responsePubKeyFile :: !Text
       }
   | ResponseTestAcc
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseResult :: !Bool,
         responseText :: !Text
       }
   | ResponseImportAcc
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore
+      { responseAccount :: !DBAccount
       }
   | ResponseRenameAcc
       { responseOldName :: !Text,
         responseNewName :: !Text,
-        responseAccount :: !AccountStore
+        responseAccount :: !DBAccount
       }
   | ResponseAccounts
-      { responseAccounts :: !AccountMap
+      { responseAccounts :: ![DBAccount]
       }
   | ResponseBalance
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseBalance :: !AccountBalance
       }
   | ResponseResetAcc
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore
+      { responseAccount :: !DBAccount
       }
   | ResponseAddresses
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseAddresses :: ![AddressResponse]
       }
   | ResponseReceive
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseAddress :: !(Address, SoftPath, Text)
       }
   | ResponseTransactions
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTransactions :: ![TxInfo]
       }
   | ResponsePrepareTx
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTxFile :: !Text,
         responseUnsignedTx :: !UnsignedTxInfo
       }
   | ResponseReview
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTransactionM :: !(Maybe TxInfo),
         responseUnsignedTxM :: !(Maybe UnsignedTxInfo)
       }
@@ -247,22 +230,19 @@ data Response
         responseNetwork :: !Network
       }
   | ResponseSendTx
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTransaction :: !TxInfo,
         responseNetworkTxId :: !TxHash
       }
   | ResponseVersion
       {responseVersion :: !Text}
   | ResponsePrepareSweep
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTxFiles :: ![Text],
         responseUnsignedTxs :: ![UnsignedTxInfo]
       }
   | ResponseSignSweep
-      { responseAccountName :: !Text,
-        responseAccount :: !AccountStore,
+      { responseAccount :: !DBAccount,
         responseTxFiles :: ![Text],
         responseTransactions :: ![TxInfo]
       }
@@ -286,91 +266,83 @@ instance MarshalJSON Ctx Response where
             "mnemonic" .= w,
             "splitmnemonic" .= ws
           ]
-      ResponseCreateAcc n a f ->
+      ResponseCreateAcc a f ->
         object
           [ "type" .= Json.String "createacc",
-            "accountname" .= n,
             "account" .= a,
             "pubkeyfile" .= f
           ]
-      ResponseTestAcc n a b t ->
+      ResponseTestAcc a b t ->
         object
           [ "type" .= Json.String "testacc",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "result" .= b,
             "text" .= t
           ]
-      ResponseImportAcc n a ->
+      ResponseImportAcc a ->
         object
           [ "type" .= Json.String "importacc",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a
+            "account" .= a
           ]
       ResponseRenameAcc o n a ->
         object
           [ "type" .= Json.String "renameacc",
             "oldname" .= o,
             "newname" .= n,
-            "account" .= marshalValue ctx a
+            "account" .= a
           ]
       ResponseAccounts a ->
         object
-          ["type" .= Json.String "accounts", "accounts" .= marshalValue ctx a]
-      ResponseBalance n a b ->
+          [ "type" .= Json.String "accounts",
+            "accounts" .= a
+          ]
+      ResponseBalance a b ->
         object
           [ "type" .= Json.String "balance",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "balance" .= b
           ]
-      ResponseResetAcc n a ->
+      ResponseResetAcc a ->
         object
           [ "type" .= Json.String "resetacc",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a
+            "account" .= a
           ]
-      ResponseAddresses n a addrs ->
+      ResponseAddresses a addrs ->
         object
           [ "type" .= Json.String "addresses",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
-            "addresses" .= (marshalValue (accountStoreNetwork a) <$> addrs)
+            "account" .= a,
+            "addresses" .= (marshalValue (accountNetwork a) <$> addrs)
           ]
-      ResponseReceive n a addr ->
-        case addrToText3 (accountStoreNetwork a) addr of
+      ResponseReceive a addr ->
+        case addrToText3 (accountNetwork a) addr of
           Right x ->
             object
               [ "type" .= Json.String "receive",
-                "accountname" .= n,
-                "account" .= marshalValue ctx a,
+                "account" .= a,
                 "address" .= x
               ]
           Left err -> jsonError err
-      ResponseTransactions n a txs ->
+      ResponseTransactions a txs ->
         object
           [ "type" .= Json.String "transactions",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "transactions"
-              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> txs)
+              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> txs)
           ]
-      ResponsePrepareTx n a f t ->
+      ResponsePrepareTx a f t ->
         object
           [ "type" .= Json.String "preparetx",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "txfile" .= f,
-            "unsignedtx" .= marshalValue (accountStoreNetwork a, ctx) t
+            "unsignedtx" .= marshalValue (accountNetwork a, ctx) t
           ]
-      ResponseReview n a wTxM uTxM -> do
-        let net = accountStoreNetwork a
+      ResponseReview a wTxM uTxM -> do
+        let net = accountNetwork a
             wTx = marshalValue (net, ctx) <$> wTxM
             uTx = marshalValue (net, ctx) <$> uTxM
          in object
               [ "type" .= Json.String "review",
-                "accountname" .= n,
-                "account" .= marshalValue ctx a,
+                "account" .= a,
                 "transaction" .= fromMaybe Json.Null wTx,
                 "unsignedtx" .= fromMaybe Json.Null uTx
               ]
@@ -381,33 +353,30 @@ instance MarshalJSON Ctx Response where
             "transaction" .= marshalValue (net, ctx) t,
             "network" .= net.name
           ]
-      ResponseSendTx n a t h ->
+      ResponseSendTx a t h ->
         object
           [ "type" .= Json.String "sendtx",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
-            "transaction" .= marshalValue (accountStoreNetwork a, ctx) t,
+            "account" .= a,
+            "transaction" .= marshalValue (accountNetwork a, ctx) t,
             "networktxid" .= h
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
-      ResponsePrepareSweep n a fs ts ->
+      ResponsePrepareSweep a fs ts ->
         object
           [ "type" .= Json.String "preparesweep",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "txfiles" .= fs,
             "unsignedtxs"
-              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> ts)
+              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> ts)
           ]
-      ResponseSignSweep n a fs ts ->
+      ResponseSignSweep a fs ts ->
         object
           [ "type" .= Json.String "signsweep",
-            "accountname" .= n,
-            "account" .= marshalValue ctx a,
+            "account" .= a,
             "txfiles" .= fs,
             "transactions"
-              .= Json.toJSON (marshalValue (accountStoreNetwork a, ctx) <$> ts)
+              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> ts)
           ]
       ResponseRollDice ns e ->
         object
@@ -423,100 +392,87 @@ instance MarshalJSON Ctx Response where
           ms <- o .: "splitmnemonic"
           return $ ResponseMnemonic e m ms
         "createacc" -> do
-          n <- o .: "accountname"
           a <- o .: "account"
           f <- o .: "pubkeyfile"
-          return $ ResponseCreateAcc n a f
+          return $ ResponseCreateAcc a f
         "testacc" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           b <- o .: "result"
           t <- o .: "text"
-          return $ ResponseTestAcc n a b t
+          return $ ResponseTestAcc a b t
         "importacc" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          return $ ResponseImportAcc n a
+          a <- o .: "account"
+          return $ ResponseImportAcc a
         "renameacc" -> do
           old <- o .: "oldname"
           new <- o .: "newname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           return $ ResponseRenameAcc old new a
         "accounts" -> do
-          as <- unmarshalValue ctx =<< o .: "accounts"
+          as <- o .: "accounts"
           return $ ResponseAccounts as
         "balance" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           b <- o .: "balance"
-          return $ ResponseBalance n a b
+          return $ ResponseBalance a b
         "resetacc" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          return $ ResponseResetAcc n a
+          a <- o .: "account"
+          return $ ResponseResetAcc a
         "addresses" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           addrs <-
-            mapM (unmarshalValue (accountStoreNetwork a)) =<< o .: "addresses"
-          return $ ResponseAddresses n a addrs
+            mapM (unmarshalValue (accountNetwork a)) =<< o .: "addresses"
+          return $ ResponseAddresses a addrs
         "receive" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          let f = textToAddr3 (accountStoreNetwork a)
+          a <- o .: "account"
+          let f = textToAddr3 (accountNetwork a)
           x <- either fail return . f =<< o .: "address"
-          return $ ResponseReceive n a x
+          return $ ResponseReceive a x
         "transactions" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          let f = unmarshalValue (accountStoreNetwork a, ctx)
+          a <- o .: "account"
+          let f = unmarshalValue (accountNetwork a, ctx)
           txs <- mapM f =<< o .: "transactions"
-          return $ ResponseTransactions n a txs
+          return $ ResponseTransactions a txs
         "preparetx" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           f <- o .: "txfile"
-          let g = unmarshalValue (accountStoreNetwork a, ctx)
+          let g = unmarshalValue (accountNetwork a, ctx)
           t <- g =<< o .: "unsignedtx"
-          return $ ResponsePrepareTx n a f t
+          return $ ResponsePrepareTx a f t
         "review" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          let f = unmarshalValue (accountStoreNetwork a, ctx)
-              g = unmarshalValue (accountStoreNetwork a, ctx)
+          a <- o .: "account"
+          let f = unmarshalValue (accountNetwork a, ctx)
+              g = unmarshalValue (accountNetwork a, ctx)
           wTxM <-
             maybe (return Nothing) ((Just <$>) . f) =<< o .:? "transaction"
           uTxM <- maybe (return Nothing) ((Just <$>) . g) =<< o .:? "unsignedtx"
-          return $ ResponseReview n a wTxM uTxM
+          return $ ResponseReview a wTxM uTxM
         "signtx" -> do
           net <- maybe mzero return . netByName =<< o .: "network"
           f <- o .: "txfile"
           t <- unmarshalValue (net, ctx) =<< o .: "transaction"
           return $ ResponseSignTx f t net
         "sendtx" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
-          let f = unmarshalValue (accountStoreNetwork a, ctx)
+          a <- o .: "account"
+          let f = unmarshalValue (accountNetwork a, ctx)
           t <- f =<< o .: "transaction"
           h <- o .: "networktxid"
-          return $ ResponseSendTx n a t h
+          return $ ResponseSendTx a t h
         "version" -> do
           v <- o .: "version"
           return $ ResponseVersion v
         "preparesweep" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           fs <- o .: "txfiles"
-          let g = unmarshalValue (accountStoreNetwork a, ctx)
+          let g = unmarshalValue (accountNetwork a, ctx)
           ts <- mapM g =<< o .: "unsignedtxs"
-          return $ ResponsePrepareSweep n a fs ts
+          return $ ResponsePrepareSweep a fs ts
         "signsweep" -> do
-          n <- o .: "accountname"
-          a <- unmarshalValue ctx =<< o .: "account"
+          a <- o .: "account"
           fs <- o .: "txfiles"
-          let f = unmarshalValue (accountStoreNetwork a, ctx)
+          let f = unmarshalValue (accountNetwork a, ctx)
           ts <- mapM f =<< o .: "transactions"
-          return $ ResponseSignSweep n a fs ts
+          return $ ResponseSignSweep a fs ts
         "rolldice" -> do
           ns <- o .: "dice"
           e <- o .: "entropysource"
@@ -571,23 +527,26 @@ commandResponse ctx =
     CommandCreateAcc t n dM s -> createAcc ctx t n dM s
     CommandTestAcc accM s -> testAcc ctx accM s
     CommandImportAcc f -> importAcc ctx f
-    CommandRenameAcc old new -> renameAcc ctx old new
-    CommandAccounts -> accounts ctx
-    CommandBalance accM -> balance ctx accM
-    CommandResetAcc accM -> resetAccount ctx accM
-    CommandAddresses accM p -> addresses ctx accM p
-    CommandReceive l accM -> receive ctx l accM
-    CommandTransactions accM p -> transactions ctx accM p
-    CommandPrepareTx rcpts accM unit fee dust rcptPay ->
-      prepareTx ctx rcpts accM unit fee dust rcptPay
-    CommandReview file -> cmdReview ctx file
-    CommandSignTx file s -> cmdSignTx ctx file s
-    CommandSendTx file -> cmdSendTx ctx file
-    CommandVersion -> cmdVersion
-    CommandPrepareSweep as fileM accM fee dust ->
-      prepareSweep ctx as fileM accM fee dust
-    CommandSignSweep dir keyFile accM -> signSweep ctx dir keyFile accM
-    CommandRollDice n -> rollDice n
+    CommandRenameAcc old new -> renameAcc old new
+    CommandAccounts -> accounts
+--  CommandBalance accM -> balance ctx accM
+--  CommandResetAcc accM -> resetAccount ctx accM
+--  CommandAddresses accM p -> addresses ctx accM p
+--  CommandReceive l accM -> receive ctx l accM
+--  CommandTransactions accM p -> transactions ctx accM p
+--  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
+--    prepareTx ctx rcpts accM unit fee dust rcptPay
+--  CommandReview file -> cmdReview ctx file
+--  CommandSignTx file s -> cmdSignTx ctx file s
+--  CommandSendTx file -> cmdSendTx ctx file
+--  CommandVersion -> cmdVersion
+--  CommandPrepareSweep as fileM accM fee dust ->
+--    prepareSweep ctx as fileM accM fee dust
+--  CommandSignSweep dir keyFile accM -> signSweep ctx dir keyFile accM
+--  CommandRollDice n -> rollDice n
+
+-- runDB . catchResponseError Monad Stack:
+-- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT IO)))
 
 mnemonic :: Natural -> Bool -> Natural -> IO Response
 mnemonic ent useDice splitIn =
@@ -602,68 +561,61 @@ createAcc ctx name net derivM splitIn =
     prvKey <- askSigningKey ctx net d splitIn
     let xpub = deriveXPubKey ctx prvKey
     path <- liftIO $ writeDoc PubKeyFolder $ PubKeyDoc xpub net name
-    account <- lift $ newAccount net ctx name d xpub
+    account <- lift $ newAccount net ctx name xpub
     return $
       ResponseCreateAcc
-        { responseAccountName = name,
-          responseDBAccount = account,
+        { responseAccount = account,
           responsePubKeyFile = cs path
         }
 
 testAcc :: Ctx -> Maybe Text -> Natural -> IO Response
-testAcc ctx accM splitIn =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      store <- get
-      net <- gets accountStoreNetwork
-      d <- gets accountStoreDeriv
-      pubKey <- gets accountStoreXPubKey
-      prvKey <- lift $ askSigningKey ctx net (pathToAccount d) splitIn
+testAcc ctx nameM splitIn =
+  runDB $ catchResponseError $ do
+      acc <- liftDB $ getAccount nameM
+      let net = accountNetwork acc
+          xPubKey = accountPubKey ctx acc
+          d = accountIndex acc
+      xPrvKey <- askSigningKey ctx net d splitIn
       return $
-        if deriveXPubKey ctx prvKey == pubKey
+        if deriveXPubKey ctx xPrvKey == xPubKey
           then
             ResponseTestAcc
-              storeName
-              store
-              True
-              "The mnemonic and passphrase matched the account"
+              { responseAccount = acc,
+                responseResult = True,
+                responseText =
+                  "The mnemonic and passphrase matched the account"
+              }
           else
             ResponseTestAcc
-              storeName
-              store
-              False
-              "The mnemonic and passphrase did not match the account"
-
-pathToAccount :: HardPath -> Natural
-pathToAccount = fromIntegral . (`clearBit` 31) . last . pathToList
+              { responseAccount = acc,
+                responseResult = False,
+                responseText =
+                  "The mnemonic and passphrase did not match the account"
+              }
 
 importAcc :: Ctx -> FilePath -> IO Response
 importAcc ctx fp =
-  catchResponseError $ do
+  runDB $ catchResponseError $ do
     PubKeyDoc xpub net name <- liftEither =<< liftIO (readMarshalFile ctx fp)
-    let store = emptyAccountStore net xpub
-    withAccountMap ctx $ do
-      insertAccountStore name store
-      return $ ResponseImportAcc name store
+    acc <- lift $ newAccount net ctx name xpub
+    return $ ResponseImportAcc acc
 
-renameAcc :: Ctx -> Text -> Text -> IO Response
-renameAcc ctx oldName newName =
-  catchResponseError $
-    withAccountMap ctx $ do
-      store <- renameAccountStore oldName newName
-      return $ ResponseRenameAcc oldName newName store
+renameAcc :: Text -> Text -> IO Response
+renameAcc oldName newName =
+  runDB $ catchResponseError $ do
+    acc <- liftDB $ renameAccount oldName newName
+    return $ ResponseRenameAcc oldName newName acc
 
-accounts :: Ctx -> IO Response
-accounts ctx =
-  catchResponseError $ do
-    accMap <- liftEither =<< liftIO (readAccountMap ctx)
-    return $ ResponseAccounts accMap
+accounts :: IO Response
+accounts = runDB $ catchResponseError $ ResponseAccounts <$> lift getAccounts
+
+{-
 
 balance :: Ctx -> Maybe Text -> IO Response
 balance ctx accM =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountStoreNetwork
+      net <- gets accountNetwork
       addrMap <- gets (storeAddressMap ctx)
       when (Map.null addrMap) $
         throwError "The account has no addresses yet"
@@ -707,7 +659,7 @@ transactions :: Ctx -> Maybe Text -> Page -> IO Response
 transactions ctx accM page =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountStoreNetwork
+      net <- gets accountNetwork
       addrMap <- gets (storeAddressMap ctx)
       let allAddrs = Map.keys addrMap
       checkHealth ctx net
@@ -742,7 +694,7 @@ prepareTx ::
 prepareTx ctx rcpTxt accM unit feeByte dust rcptPay =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountStoreNetwork
+      net <- gets accountNetwork
       pub <- gets accountStoreXPubKey
       rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
       checkHealth ctx net
@@ -821,7 +773,7 @@ prepareSweep ::
 prepareSweep ctx addrsTxt fileM accM feeByte dust =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountStoreNetwork
+      net <- gets accountNetwork
       pub <- gets accountStoreXPubKey
       addrsArg <- liftEither $ mapM (textToAddrE net) addrsTxt
       addrsFile <-
@@ -842,7 +794,7 @@ signSweep ctx sweepDir keyFile accM =
   catchResponseError $
     withAccountStore ctx accM $ \storeName -> do
       publicKey <- gets accountStoreXPubKey
-      net <- gets accountStoreNetwork
+      net <- gets accountNetwork
       acc <- liftEither =<< gets accountStoreAccount
       sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
       tsds <- mapM (liftEither <=< liftIO . readMarshalFile ctx) sweepFiles
@@ -882,7 +834,7 @@ updateAccountIndices ::
   Text ->
   m ()
 updateAccountIndices ctx storeName = do
-  net <- gets accountStoreNetwork
+  net <- gets accountNetwork
   pub <- gets accountStoreXPubKey
   checkHealth ctx net
   e <- go net pub extDeriv 0 (Page 20 0)
@@ -926,6 +878,8 @@ checkHealth ctx net = do
   unless (Store.isOK health) $
     throwError "The indexer health check has failed"
 
+-}
+
 -- Haskeline Helpers --
 
 askInputLineHidden :: String -> IO String
@@ -957,7 +911,13 @@ askMnemonic txt = do
       liftIO $ putStrLn "Invalid mnemonic"
       askMnemonic txt
 
-askSigningKey :: (MonadIO m) => Ctx -> Network -> Natural -> Natural -> ExceptT String m XPrvKey
+askSigningKey ::
+  (MonadError String m, MonadIO m) =>
+  Ctx ->
+  Network ->
+  Natural ->
+  Natural ->
+  m XPrvKey
 askSigningKey _ _ _ 0 = throwError "Mnemonic split can not be 0"
 askSigningKey ctx net acc splitIn = do
   mnm <-
