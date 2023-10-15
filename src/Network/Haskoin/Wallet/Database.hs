@@ -48,7 +48,7 @@ import Data.Serialize (decode, encode)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Time
-import Data.Word (Word64)
+import Data.Word (Word32, Word64)
 import Database.Esqueleto
 import qualified Database.Persist as P
 import Database.Persist.Sqlite (runSqlite)
@@ -62,7 +62,7 @@ import Haskoin.Util (maybeToEither)
 import Network.Haskoin.Wallet.AccountStore
 import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.Signing (conf)
-import Network.Haskoin.Wallet.Util (liftExcept, (</>))
+import Network.Haskoin.Wallet.Util (Page (..), liftExcept, (</>))
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 
@@ -84,15 +84,10 @@ DBAccount
   balanceUnconfirmed Word64
   balanceCoins Word64
   created UTCTime default=CURRENT_TIME
-  Primary index network
+  Primary derivation
   UniqueName name
   UniqueXPubKey xPubKey
-  deriving Show
-
-DBTx
-  txid Text
-  value BS.ByteString
-  Primary txid
+  UniqueNetworkId network index
   deriving Show
 
 DBAddress
@@ -108,7 +103,28 @@ DBAddress
   Primary index account
   UniqueAddress address
   deriving Show
+
+DBTx
+  txid Text
+  value BS.ByteString
+  Primary txid
+  deriving Show
 |]
+
+type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
+
+liftDB :: (Monad m) => DB m (Either String a) -> ExceptT String (DB m) a
+liftDB = liftEither <=< lift
+
+runDB :: (MonadUnliftIO m) => DB m a -> m a
+runDB action = do
+  dir <- liftIO $ hwDataDirectory Nothing
+  let dbFile = dir </> "accounts.sqlite"
+  runSqlite (cs dbFile) $ do
+    _ <- runMigrationQuiet migrateAll
+    action
+
+{- Accounts -}
 
 instance ToJSON DBAccount where
   toJSON (DBAccount idx net name deriv e i xpub keyfile bc bu bo t) =
@@ -127,7 +143,7 @@ instance ToJSON DBAccount where
 
 instance FromJSON DBAccount where
   parseJSON =
-    withObject "accountstore" $ \o -> do
+    withObject "DBAccount" $ \o -> do
       bal <- o .: "balance"
       DBAccount
         <$> o .: "index"
@@ -179,23 +195,10 @@ accountNetwork =
     . cs
     . dBAccountNetwork
 
-accountPubKey :: Ctx -> DBAccount -> XPubKey
-accountPubKey ctx acc =
+accountXPubKey :: Ctx -> DBAccount -> XPubKey
+accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
-
-type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
-
-liftDB :: (Monad m) => DB m (Either String a) -> ExceptT String (DB m) a
-liftDB = liftEither <=< lift
-
-runDB :: (MonadUnliftIO m) => DB m a -> m a
-runDB action = do
-  dir <- liftIO $ hwDataDirectory Nothing
-  let dbFile = dir </> "accounts.sqlite"
-  runSqlite (cs dbFile) $ do
-    _ <- runMigrationQuiet migrateAll
-    action
 
 nextAccountDeriv :: (MonadUnliftIO m) => Network -> DB m Natural
 nextAccountDeriv net = do
@@ -208,16 +211,12 @@ nextAccountDeriv net = do
   return $ maybe 0 ((+ 1) . fromIntegral . unValue) dM
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
-existsAccount name = do
-  aM <- P.getBy $ UniqueName name
-  return $ isJust aM
+existsAccount name = P.existsBy $ UniqueName name
 
 existsXPubKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m Bool
-existsXPubKey net ctx key = do
-  kM <- P.getBy $ UniqueXPubKey $ xPubExport net ctx key
-  return $ isJust kM
+existsXPubKey net ctx key = P.existsBy $ UniqueXPubKey $ xPubExport net ctx key
 
-newAccount ::
+insertAccount ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
@@ -225,7 +224,7 @@ newAccount ::
   XPubKey ->
   Text ->
   DB m (Either String DBAccount)
-newAccount net ctx name xpub keyfile = do
+insertAccount net ctx name xpub keyfile = do
   existsName <- existsAccount name
   if existsName
     then return $ Left $ "Account " <> cs name <> " already exists"
@@ -259,12 +258,14 @@ newAccount net ctx name xpub keyfile = do
 -- exist. When no name is provided, return the account only if there is one
 -- account.
 getAccount ::
-  (MonadUnliftIO m) => Maybe Text -> DB m (Either String DBAccount)
+  (MonadUnliftIO m) =>
+  Maybe Text ->
+  DB m (Either String (DBAccountId, DBAccount))
 getAccount (Just name) = do
   aM <- P.getBy $ UniqueName name
   return $
     case aM of
-      Just a -> Right $ entityVal a
+      Just a -> Right (entityKey a, entityVal a)
       _ -> Left $ "The account " <> cs name <> " does not exist"
 getAccount Nothing = do
   as <- getAccounts
@@ -274,8 +275,20 @@ getAccount Nothing = do
       [] -> Left "There are no accounts in the wallet"
       _ -> Left "Specify which account to use"
 
-getAccounts :: (MonadUnliftIO m) => DB m [DBAccount]
-getAccounts = (entityVal <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+getAccountVal ::
+  (MonadUnliftIO m) => Maybe Text -> DB m (Either String DBAccount)
+getAccountVal nameM =
+  runExceptT $ do
+    (_, acc) <- liftEither =<< lift (getAccount nameM)
+    return acc
+
+getAccounts :: (MonadUnliftIO m) => DB m [(DBAccountId, DBAccount)]
+getAccounts = (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+  where
+    go a = (entityKey a, entityVal a)
+
+getAccountsVal :: (MonadUnliftIO m) => DB m [DBAccount]
+getAccountsVal = (entityVal <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
 
 renameAccount ::
   (MonadUnliftIO m) => Text -> Text -> DB m (Either String DBAccount)
@@ -292,26 +305,99 @@ renameAccount oldName newName
               where_ (a ^. DBAccountName ==. val oldName)
           if c == 0
             then return $ Left $ "The account " <> cs oldName <> " does not exist"
-            else getAccount $ Just newName
+            else getAccountVal (Just newName)
 
-{- SQL Data Type Marshalling
+{- Addresses -}
 
-instance PersistFieldSql TxHash where
-  sqlType _ = SqlString
+instance ToJSON DBAddress where
+  toJSON (DBAddress idx acc d addr l r t arch c) =
+    object
+      [ "index" .= idx,
+        "account" .= acc,
+        "derivation" .= d,
+        "address" .= addr,
+        "label" .= l,
+        "received" .= r,
+        "txCount" .= t,
+        "archived" .= arch,
+        "created" .= c
+      ]
 
-instance PersistField TxHash where
-  toPersistValue = PersistText . txHashToHex
-  fromPersistValue (PersistText h) = maybeToEither "Invalid hexToTxHash" $ hexToTxHash h
-  fromPersistValue _ = Left "Invalid PersistField TxHash"
+instance FromJSON DBAddress where
+  parseJSON =
+    withObject "DBAddress" $ \o ->
+      DBAddress
+        <$> o .: "index"
+        <*> o .: "account"
+        <*> o .: "derivation"
+        <*> o .: "address"
+        <*> o .: "label"
+        <*> o .: "received"
+        <*> o .: "txCount"
+        <*> o .: "archived"
+        <*> o .: "created"
 
-instance PersistFieldSql Tx where
-  sqlType _ = SqlBlob
+insertAddress ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Word32 ->
+  DBAccountId ->
+  SoftPath ->
+  Address ->
+  Text ->
+  DB m (Either String DBAddress)
+insertAddress net idx accId deriv addr label =
+  runExceptT $ do
+    time <- liftIO getCurrentTime
+    addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
+    let dbAddr =
+          DBAddress
+            (fromIntegral idx)
+            accId
+            (cs $ pathToStr deriv)
+            addrT
+            label
+            0
+            0
+            False
+            time
+    lift $ P.insert_ dbAddr
+    return dbAddr
 
-instance PersistField Tx where
-  toPersistValue = PersistByteString . encode
-  fromPersistValue (PersistByteString bs) =
-    case decode bs of
-      Right tx -> return tx
-      Left err -> Left $ "Invalid PersistField Tx: " <> cs err
-  fromPersistValue _ = Left "Invalid PersistField Tx"
- -}
+receiveAddress ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  Maybe Text ->
+  Text ->
+  DB m (Either String (DBAccount, DBAddress))
+receiveAddress ctx nameM label = do
+  runExceptT $ do
+    (accId, acc) <- liftEither <=< lift $ getAccount nameM
+    let net = accountNetwork acc
+        xpub = accountXPubKey ctx acc
+        ext = fromIntegral $ dBAccountExternal acc
+        (addr, _) = derivePathAddr ctx xpub extDeriv ext
+    dbAddr <-
+      liftEither <=< lift $
+        insertAddress net ext accId (extDeriv :/ ext) addr label
+    newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
+    return (newAcc, dbAddr)
+
+getAddresses ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Page ->
+  DB m (Either String [DBAddress])
+getAddresses accId (Page lim off) = do
+  as <-
+    select $
+      from $ \a -> do
+        where_ (a ^. DBAddressAccount ==. val accId)
+        orderBy [asc (a ^. DBAddressIndex)]
+        limit $ fromIntegral lim
+        offset $ fromIntegral off
+        return a
+  return $
+    if null as
+      then Left "There are no addresses in this account"
+      else Right $ entityVal <$> as

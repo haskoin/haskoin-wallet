@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe)
+import Data.Maybe (fromMaybe, fromJust)
 import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -130,7 +130,8 @@ import Network.Haskoin.Wallet.Util
     addrToText3,
     liftExcept,
     sortDesc,
-    textToAddr3,
+    textToAddr3
+  ,
     textToAddrE,
     toPage,
     (</>),
@@ -147,27 +148,6 @@ versionString = CURRENT_PACKAGE_VERSION
 #else
 versionString = "Unavailable"
 #endif
-
-data AddressResponse = AddressResponse
-  { addressResponseAddr :: !Address,
-    addressResponseSoftPath :: !SoftPath,
-    addressResponseLabel :: !Text
-  }
-  deriving (Eq, Show)
-
-instance MarshalJSON Network AddressResponse where
-  marshalValue net (AddressResponse a d l) =
-    case addrToText net a of
-      Just t -> object ["address" .= t, "derivation" .= d, "label" .= l]
-      _ -> jsonError "Invalid address"
-  unmarshalValue net =
-    Json.withObject "response" $ \o -> do
-      t <- o .: "address"
-      d <- o .: "derivation"
-      l <- o .: "label"
-      case textToAddr net t of
-        Just a -> return $ AddressResponse a d l
-        _ -> fail "Invalid address"
 
 data Response
   = ResponseError
@@ -197,18 +177,15 @@ data Response
   | ResponseAccounts
       { responseAccounts :: ![DBAccount]
       }
-  | ResponseScanAcc
-      { responseAccount :: !DBAccount
+  | ResponseReceive
+      { responseAccount :: !DBAccount,
+        responseAddress :: !DBAddress
       }
   | ResponseAddresses
       { responseAccount :: !DBAccount,
-        responseAddresses :: ![AddressResponse]
+        responseAddresses :: ![DBAddress]
       }
-  | ResponseReceive
-      { responseAccount :: !DBAccount,
-        responseAddress :: !(Address, SoftPath, Text)
-      }
-  | ResponseTransactions
+  | ResponseTxs
       { responseAccount :: !DBAccount,
         responseTransactions :: ![TxInfo]
       }
@@ -231,6 +208,9 @@ data Response
       { responseAccount :: !DBAccount,
         responseTransaction :: !TxInfo,
         responseNetworkTxId :: !TxHash
+      }
+  | ResponseScanAcc
+      { responseAccount :: !DBAccount
       }
   | ResponseVersion
       {responseVersion :: !Text}
@@ -293,29 +273,21 @@ instance MarshalJSON Ctx Response where
           [ "type" .= Json.String "accounts",
             "accounts" .= a
           ]
-      ResponseScanAcc a ->
+      ResponseReceive a addr ->
         object
-          [ "type" .= Json.String "scanacc",
-            "account" .= a
+          [ "type" .= Json.String "receive",
+            "account" .= a,
+            "address" .= addr
           ]
       ResponseAddresses a addrs ->
         object
           [ "type" .= Json.String "addresses",
             "account" .= a,
-            "addresses" .= (marshalValue (accountNetwork a) <$> addrs)
+            "addresses" .= addrs
           ]
-      ResponseReceive a addr ->
-        case addrToText3 (accountNetwork a) addr of
-          Right x ->
-            object
-              [ "type" .= Json.String "receive",
-                "account" .= a,
-                "address" .= x
-              ]
-          Left err -> jsonError err
-      ResponseTransactions a txs ->
+      ResponseTxs a txs ->
         object
-          [ "type" .= Json.String "transactions",
+          [ "type" .= Json.String "txs",
             "account" .= a,
             "transactions"
               .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> txs)
@@ -350,6 +322,11 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "transaction" .= marshalValue (accountNetwork a, ctx) t,
             "networktxid" .= h
+          ]
+      ResponseScanAcc a ->
+        object
+          [ "type" .= Json.String "scanacc",
+            "account" .= a
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
@@ -401,24 +378,19 @@ instance MarshalJSON Ctx Response where
         "accounts" -> do
           as <- o .: "accounts"
           return $ ResponseAccounts as
-        "scanacc" -> do
-          a <- o .: "account"
-          return $ ResponseScanAcc a
-        "addresses" -> do
-          a <- o .: "account"
-          addrs <-
-            mapM (unmarshalValue (accountNetwork a)) =<< o .: "addresses"
-          return $ ResponseAddresses a addrs
         "receive" -> do
           a <- o .: "account"
-          let f = textToAddr3 (accountNetwork a)
-          x <- either fail return . f =<< o .: "address"
+          x <- o .: "address"
           return $ ResponseReceive a x
-        "transactions" -> do
+        "addresses" -> do
+          a <- o .: "account"
+          addrs <- o .: "addresses"
+          return $ ResponseAddresses a addrs
+        "txs" -> do
           a <- o .: "account"
           let f = unmarshalValue (accountNetwork a, ctx)
           txs <- mapM f =<< o .: "transactions"
-          return $ ResponseTransactions a txs
+          return $ ResponseTxs a txs
         "preparetx" -> do
           a <- o .: "account"
           f <- o .: "txfile"
@@ -444,6 +416,9 @@ instance MarshalJSON Ctx Response where
           t <- f =<< o .: "transaction"
           h <- o .: "networktxid"
           return $ ResponseSendTx a t h
+        "scanacc" -> do
+          a <- o .: "account"
+          return $ ResponseScanAcc a
         "version" -> do
           v <- o .: "version"
           return $ ResponseVersion v
@@ -489,16 +464,15 @@ commandResponse ctx =
     CommandImportAcc f -> importAcc ctx f
     CommandRenameAcc old new -> renameAcc ctx old new
     CommandAccounts accM -> accounts accM
-
---  CommandScanAcc accM -> scanAccount ctx accM
---  CommandAddresses accM p -> addresses ctx accM p
---  CommandReceive l accM -> receive ctx l accM
---  CommandTransactions accM p -> transactions ctx accM p
+    CommandReceive accM labM -> receive ctx accM labM
+    CommandAddrs accM p -> addrs accM p
+--  CommandTxs accM p -> txs ctx accM p
 --  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
 --    prepareTx ctx rcpts accM unit fee dust rcptPay
 --  CommandReview file -> cmdReview ctx file
 --  CommandSignTx file s -> cmdSignTx ctx file s
 --  CommandSendTx file -> cmdSendTx ctx file
+--  CommandScanAcc accM -> scanAccount ctx accM
 --  CommandVersion -> cmdVersion
 --  CommandPrepareSweep as fileM accM fee dust ->
 --    prepareSweep ctx as fileM accM fee dust
@@ -526,7 +500,7 @@ createAcc ctx name net derivM splitIn =
       let xpub = deriveXPubKey ctx prvKey
           doc = PubKeyDoc xpub net name
       path <- liftIO $ docFilePath ctx PubKeyFolder doc
-      account <- liftDB $ newAccount net ctx name xpub (cs path)
+      account <- liftDB $ insertAccount net ctx name xpub (cs path)
       _ <- writeDoc ctx PubKeyFolder (PubKeyDoc xpub net name)
       return $ ResponseCreateAcc account
 
@@ -534,9 +508,9 @@ testAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 testAcc ctx nameM splitIn =
   runDB $
     catchResponseError $ do
-      acc <- liftDB $ getAccount nameM
+      acc <- liftDB $ getAccountVal nameM
       let net = accountNetwork acc
-          xPubKey = accountPubKey ctx acc
+          xPubKey = accountXPubKey ctx acc
           d = accountIndex acc
       xPrvKey <- askSigningKey ctx net d splitIn
       return $
@@ -562,7 +536,7 @@ importAcc ctx fp =
     catchResponseError $ do
       doc@(PubKeyDoc xpub net name) <- liftEitherIO $ readMarshalFile ctx fp
       path <- liftIO $ docFilePath ctx PubKeyFolder doc
-      acc <- liftDB $ newAccount net ctx name xpub (cs path)
+      acc <- liftDB $ insertAccount net ctx name xpub (cs path)
       _ <- writeDoc ctx PubKeyFolder doc
       return $ ResponseImportAcc acc
 
@@ -571,7 +545,7 @@ renameAcc ctx oldName newName =
   runDB $
     catchResponseError $ do
       acc <- liftDB $ renameAccount oldName newName
-      let xpub = accountPubKey ctx acc
+      let xpub = accountXPubKey ctx acc
           net = accountNetwork acc
       _ <- writeDoc ctx PubKeyFolder $ PubKeyDoc xpub net newName
       return $ ResponseRenameAcc oldName newName acc
@@ -582,20 +556,26 @@ accounts nameM =
     catchResponseError $ do
       case nameM of
         Just _ -> do
-          acc <- liftDB $ getAccount nameM
+          acc <- liftDB $ getAccountVal nameM
           return $ ResponseAccounts [acc]
-        _ -> ResponseAccounts <$> lift getAccounts
+        _ -> ResponseAccounts <$> lift getAccountsVal
+
+receive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
+receive ctx nameM labelM =
+  runDB $
+    catchResponseError $ do
+      (acc, addr) <- liftDB $ receiveAddress ctx nameM $ fromMaybe "" labelM
+      return $ ResponseReceive acc addr
+
+addrs :: Maybe Text -> Page -> IO Response
+addrs nameM page =
+  runDB $
+    catchResponseError $ do
+      (accId, acc) <- liftDB $ getAccount nameM
+      as <- liftDB $ getAddresses accId page
+      return $ ResponseAddresses acc as
 
 {-
-
-addresses :: Ctx -> Maybe Text -> Page -> IO Response
-addresses ctx accM page =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      store <- get
-      labels <- readAccountLabels storeName
-      let addrs = toPage page $ reverse $ extAddresses ctx store
-      return $ ResponseAddresses storeName store $ zipLabels addrs labels
 
 zipLabels ::
   [(Address, SoftPath)] -> Map Natural Text -> [AddressResponse]
@@ -606,16 +586,6 @@ zipLabels addrs m =
       AddressResponse a p $
         fromMaybe "No Label" $
           Map.lookup (fromIntegral $ last $ pathToList p) m
-
-receive :: Ctx -> Text -> Maybe Text -> IO Response
-receive ctx label accM =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      (addr, path) <- genExtAddress ctx
-      store <- get
-      let d = last $ pathToList path
-      writeAccountLabel storeName (fromIntegral d) label
-      return $ ResponseReceive storeName store (addr, path, label)
 
 transactions :: Ctx -> Maybe Text -> Page -> IO Response
 transactions ctx accM page =
@@ -721,6 +691,44 @@ cmdSendTx ctx fp =
         liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
       return $ ResponseSendTx storeName store txInfo netTxId
 
+scanAccount :: Ctx -> Maybe Text -> IO Response
+scanAccount ctx accM =
+  catchResponseError $
+    withAccountStore ctx accM $ \storeName -> do
+      updateAccountIndices ctx storeName
+      gets (ResponseScanAcc storeName)
+
+updateAccountIndices ::
+  (MonadError String m, MonadIO m, MonadState AccountStore m) =>
+  Ctx ->
+  Text ->
+  m ()
+updateAccountIndices ctx storeName = do
+  net <- gets accountNetwork
+  pub <- gets accountStoreXPubKey
+  checkHealth ctx net
+  e <- go net pub extDeriv 0 (Page 20 0)
+  i <- go net pub intDeriv 0 (Page 20 0)
+  m <- readAccountLabels storeName
+  let eMax = maximum $ e : ((+ 1) <$> Map.keys m)
+  modify $ \s -> s {accountStoreExternal = eMax, accountStoreInternal = i}
+  where
+    go net pub deriv d page@(Page lim off) = do
+      let addrs = addrsDerivPage ctx deriv page pub
+          req = GetAddrsBalance $ fst <$> addrs
+      Store.SerialList bals <-
+        liftExcept $ apiCall ctx (conf net) req
+      let vBals = filter ((/= 0) . (.txs)) bals
+      if null vBals
+        then return d
+        else do
+          let d' = findMax addrs $ (.address) <$> vBals
+          go net pub deriv (d' + 1) (Page lim (off + lim))
+    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
+    findMax addrs balAddrs =
+      let fAddrs = filter ((`elem` balAddrs) . fst) addrs
+       in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
+
 cmdVersion :: IO Response
 cmdVersion = return $ ResponseVersion versionString
 
@@ -782,44 +790,6 @@ signSweep ctx sweepDir keyFile accM =
   where
     valid acc net tsd =
       txSignDataAccount tsd == acc && txSignDataNetwork tsd == net
-
-scanAccount :: Ctx -> Maybe Text -> IO Response
-scanAccount ctx accM =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      updateAccountIndices ctx storeName
-      gets (ResponseScanAcc storeName)
-
-updateAccountIndices ::
-  (MonadError String m, MonadIO m, MonadState AccountStore m) =>
-  Ctx ->
-  Text ->
-  m ()
-updateAccountIndices ctx storeName = do
-  net <- gets accountNetwork
-  pub <- gets accountStoreXPubKey
-  checkHealth ctx net
-  e <- go net pub extDeriv 0 (Page 20 0)
-  i <- go net pub intDeriv 0 (Page 20 0)
-  m <- readAccountLabels storeName
-  let eMax = maximum $ e : ((+ 1) <$> Map.keys m)
-  modify $ \s -> s {accountStoreExternal = eMax, accountStoreInternal = i}
-  where
-    go net pub deriv d page@(Page lim off) = do
-      let addrs = addrsDerivPage ctx deriv page pub
-          req = GetAddrsBalance $ fst <$> addrs
-      Store.SerialList bals <-
-        liftExcept $ apiCall ctx (conf net) req
-      let vBals = filter ((/= 0) . (.txs)) bals
-      if null vBals
-        then return d
-        else do
-          let d' = findMax addrs $ (.address) <$> vBals
-          go net pub deriv (d' + 1) (Page lim (off + lim))
-    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
-    findMax addrs balAddrs =
-      let fAddrs = filter ((`elem` balAddrs) . fst) addrs
-       in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
 
 rollDice :: Natural -> IO Response
 rollDice n = do
