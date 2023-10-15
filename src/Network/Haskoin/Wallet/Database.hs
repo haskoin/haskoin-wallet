@@ -78,11 +78,15 @@ DBAccount
   derivation Text
   external Int
   internal Int
-  xpubkey Text
-  balance Word64
+  xPubKey Text
+  pubKeyFile Text
+  balanceConfirmed Word64
+  balanceUnconfirmed Word64
+  balanceCoins Word64
   created UTCTime default=CURRENT_TIME
   Primary index network
   UniqueName name
+  UniqueXPubKey xPubKey
   deriving Show
 
 DBTx
@@ -95,19 +99,19 @@ DBAddress
   index Int
   account DBAccountId
   derivation Text
-  addr Text
+  address Text
   label Text
   received Word64
   txcount Int
   archived Bool
   created UTCTime default=CURRENT_TIME
   Primary index account
-  UniqueAddress addr
+  UniqueAddress address
   deriving Show
 |]
 
 instance ToJSON DBAccount where
-  toJSON (DBAccount idx net name deriv e i xpub b t) =
+  toJSON (DBAccount idx net name deriv e i xpub keyfile bc bu bo t) =
     object
       [ "index" .= idx,
         "network" .= net,
@@ -115,14 +119,16 @@ instance ToJSON DBAccount where
         "derivation" .= deriv,
         "external" .= e,
         "internal" .= i,
-        "xpubkey" .= xpub,
-        "balance" .= b,
+        "xPubKey" .= xpub,
+        "pubKeyFile" .= keyfile,
+        "balance" .= toJSON (AccountBalance bc bu bo),
         "created" .= t
       ]
 
 instance FromJSON DBAccount where
   parseJSON =
     withObject "accountstore" $ \o -> do
+      bal <- o .: "balance"
       DBAccount
         <$> o .: "index"
         <*> o .: "network"
@@ -130,9 +136,38 @@ instance FromJSON DBAccount where
         <*> o .: "derivation"
         <*> o .: "external"
         <*> o .: "internal"
-        <*> o .: "xpubkey"
-        <*> o .: "balance"
+        <*> o .: "xPubKey"
+        <*> o .: "pubKeyFile"
+        <*> (bal .: "confirmed")
+        <*> (bal .: "unconfirmed")
+        <*> (bal .: "coins")
         <*> o .: "created"
+
+data AccountBalance = AccountBalance
+  { -- | confirmed balance
+    balanceConfirmed :: !Word64,
+    -- | unconfirmed balance
+    balanceUnconfirmed :: !Word64,
+    -- | number of unspent outputs
+    balanceCoins :: !Word64
+  }
+  deriving (Show, Read, Eq, Ord)
+
+instance ToJSON AccountBalance where
+  toJSON b =
+    object
+      [ "confirmed" .= balanceConfirmed b,
+        "unconfirmed" .= balanceUnconfirmed b,
+        "coins" .= balanceCoins b
+      ]
+
+instance FromJSON AccountBalance where
+  parseJSON =
+    withObject "accountbalance" $ \o ->
+      AccountBalance
+        <$> o .: "confirmed"
+        <*> o .: "unconfirmed"
+        <*> o .: "coins"
 
 accountIndex :: DBAccount -> Natural
 accountIndex = fromIntegral . dBAccountIndex
@@ -147,7 +182,7 @@ accountNetwork =
 accountPubKey :: Ctx -> DBAccount -> XPubKey
 accountPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
-    xPubImport (accountNetwork acc) ctx (dBAccountXpubkey acc)
+    xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
@@ -177,31 +212,48 @@ existsAccount name = do
   aM <- P.getBy $ UniqueName name
   return $ isJust aM
 
+existsXPubKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m Bool
+existsXPubKey net ctx key = do
+  kM <- P.getBy $ UniqueXPubKey $ xPubExport net ctx key
+  return $ isJust kM
+
 newAccount ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   Text ->
   XPubKey ->
-  DB m DBAccount
-newAccount net ctx name xpub = do
-  time <- liftIO getCurrentTime
-  let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
-      idx = fromIntegral $ xPubIndex xpub
-      account =
-        DBAccount
-          { dBAccountIndex = idx,
-            dBAccountNetwork = cs net.name,
-            dBAccountName = name,
-            dBAccountDerivation = cs $ pathToStr path,
-            dBAccountExternal = 0,
-            dBAccountInternal = 0,
-            dBAccountXpubkey = xPubExport net ctx xpub,
-            dBAccountBalance = 0,
-            dBAccountCreated = time
-          }
-  _ <- P.insert account
-  return account
+  Text ->
+  DB m (Either String DBAccount)
+newAccount net ctx name xpub keyfile = do
+  existsName <- existsAccount name
+  if existsName
+    then return $ Left $ "Account " <> cs name <> " already exists"
+    else do
+      existsKey <- existsXPubKey net ctx xpub
+      if existsKey
+        then return $ Left "The XPubKey already exists"
+        else do
+          time <- liftIO getCurrentTime
+          let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
+              idx = fromIntegral $ xPubIndex xpub
+              account =
+                DBAccount
+                  { dBAccountIndex = idx,
+                    dBAccountNetwork = cs net.name,
+                    dBAccountName = name,
+                    dBAccountDerivation = cs $ pathToStr path,
+                    dBAccountExternal = 0,
+                    dBAccountInternal = 0,
+                    dBAccountXPubKey = xPubExport net ctx xpub,
+                    dBAccountPubKeyFile = keyfile,
+                    dBAccountBalanceConfirmed = 0,
+                    dBAccountBalanceUnconfirmed = 0,
+                    dBAccountBalanceCoins = 0,
+                    dBAccountCreated = time
+                  }
+          P.insert_ account
+          return $ Right account
 
 -- When a name is provided, get that account or throw an error if it doesn't
 -- exist. When no name is provided, return the account only if there is one

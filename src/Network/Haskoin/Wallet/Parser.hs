@@ -92,10 +92,9 @@ data Command
         commandNewName :: !Data.Text.Text
       }
   | CommandAccounts
-  | CommandResetAcc
       { commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
-  | CommandBalance
+  | CommandScanAcc
       { commandMaybeAcc :: !(Maybe Data.Text.Text)
       }
   | CommandAddresses
@@ -170,9 +169,8 @@ commandParser ctx =
             command "testacc" (testAccParser ctx),
             command "importacc" importAccParser,
             command "renameacc" (renameAccParser ctx),
-            command "accounts" accountsParser,
-            command "balance" (balanceParser ctx),
-            command "resetacc" (resetAccParser ctx),
+            command "accounts" (accountsParser ctx),
+            command "scanacc" (scanAccParser ctx),
             metavar "COMMAND",
             style (const "COMMAND --help")
           ],
@@ -281,23 +279,19 @@ renameAccParser ctx =
     )
     $ mconcat [progDesc "Rename an account"]
 
-accountsParser :: ParserInfo Command
-accountsParser =
-  info (pure CommandAccounts) $ mconcat [progDesc "Display all accounts"]
+accountsParser :: Ctx -> ParserInfo Command
+accountsParser ctx =
+  info (CommandAccounts <$> accountOption ctx) $
+  mconcat [progDesc "Display account information"]
 
-balanceParser :: Ctx -> ParserInfo Command
-balanceParser ctx =
-  info (CommandBalance <$> accountOption ctx) $
-    mconcat [progDesc "Get the account balance"]
-
-resetAccParser :: Ctx -> ParserInfo Command
-resetAccParser ctx =
-  info (CommandResetAcc <$> accountOption ctx) $
+scanAccParser :: Ctx -> ParserInfo Command
+scanAccParser ctx =
+  info (CommandScanAcc <$> accountOption ctx) $
     mconcat
-      [ progDesc "Reset the external and internal derivation indices",
+      [ progDesc "Scan the addresses of an account on the blockchain",
         footer
           "If your account is somehow out of sync with the blockchain, you can\
-          \ call resetacc to scan the blockchain and reset the indices for your\
+          \ call scanacc to scan the blockchain and reset the indices for your\
           \ internal and external addresses."
       ]
 
@@ -570,7 +564,7 @@ accountOption ctx =
       mconcat
         [ short 'a',
           long "account",
-          help "Specify the account to use for this command",
+          help "Specify an account to use for this command",
           metavar "TEXT",
           completer (mkCompleter $ accountCompleter ctx)
         ]

@@ -6,8 +6,15 @@
 
 module Network.Haskoin.Wallet.FileIO where
 
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.Except
+  ( ExceptT,
+    MonadError (throwError),
+    liftEither,
+    runExceptT,
+  )
 import Control.Applicative ((<|>))
-import Control.Monad (MonadPlus (mzero), (<=<))
+import Control.Monad (MonadPlus (mzero), (<=<), unless, when)
 import Data.Aeson
   ( object,
     withObject,
@@ -35,6 +42,7 @@ import Haskoin.Crypto
     fromWif,
     sha256,
     withContext,
+    xPubExport,
   )
 import Haskoin.Network (Network (name), netByName)
 import Haskoin.Transaction
@@ -59,8 +67,28 @@ import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import qualified System.IO as IO
 
+data HWFolder
+  = TxFolder
+  | PubKeyFolder
+  | SweepFolder !String
+  deriving (Eq, Show)
+
+toFolder :: HWFolder -> String
+toFolder =
+  \case
+    TxFolder -> "transactions"
+    PubKeyFolder -> "pubkeys"
+    SweepFolder chksum -> "sweep-" <> chksum
+
+hwDataDirectory :: Maybe HWFolder -> IO FilePath
+hwDataDirectory subDirM = do
+  appDir <- D.getAppUserDataDirectory "hw"
+  let dir = maybe appDir ((appDir </>) . toFolder) subDirM
+  D.createDirectoryIfMissing True dir
+  return dir
+
 class HasFilePath a where
-  getFilePath :: a -> String
+  getFilePath :: Ctx -> a -> String
 
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
@@ -85,9 +113,13 @@ instance MarshalJSON Ctx PubKeyDoc where
         "name" .= name
       ]
 
+-- This is only to avoid file clashes in ~/.hw/pubkeys
+pubKeyFP :: Network -> Ctx -> XPubKey -> String
+pubKeyFP net ctx = cs . Text.take 16 . xPubExport net ctx
+
 instance HasFilePath PubKeyDoc where
-  getFilePath (PubKeyDoc _ net name) =
-    net.name <> "-account-" <> cs name <> ".json"
+  getFilePath ctx (PubKeyDoc key net _) =
+    net.name <> "-account-" <> pubKeyFP net ctx key <> ".json"
 
 data TxSignData = TxSignData
   { txSignDataTx :: !Tx,
@@ -125,38 +157,31 @@ instance MarshalJSON Ctx TxSignData where
       ]
 
 instance HasFilePath TxSignData where
-  getFilePath (TxSignData tx _ _ _ _ s net) =
+  getFilePath _ (TxSignData tx _ _ _ _ s net) =
     net.name <> heading <> cs (txChecksum tx) <> ".json"
     where
       heading = if s then "-signedtx-" else "-unsignedtx-"
 
-hwDataDirectory :: Maybe FilePath -> IO FilePath
-hwDataDirectory subDirM = do
-  appDir <- D.getAppUserDataDirectory "hw"
-  let dir = maybe appDir (appDir </>) subDirM
-  D.createDirectoryIfMissing True dir
-  return dir
+docFilePath :: (HasFilePath a) => Ctx -> HWFolder -> a -> IO FilePath
+docFilePath ctx folder doc = do
+  dir <- hwDataDirectory $ Just folder
+  return $ dir </> getFilePath ctx doc
 
-data HWFolder
-  = TxFolder
-  | PubKeyFolder
-  | SweepFolder !String
-  deriving (Eq, Show)
+checkFileExists :: MonadIO m => FilePath -> ExceptT String m ()
+checkFileExists path = do
+  exist <- liftIO $ D.doesFileExist path
+  when exist $ throwError $ "File " <> path <> " already exists"
 
-toFolder :: HWFolder -> String
-toFolder =
-  \case
-    TxFolder -> "transactions"
-    PubKeyFolder -> "pubkeys"
-    SweepFolder chksum -> "sweep-" <> chksum
-
-writeDoc :: (MarshalJSON Ctx a, HasFilePath a) => HWFolder -> a -> IO FilePath
-writeDoc folder doc =
-  withContext $ \ctx -> do
-    dir <- hwDataDirectory $ Just $ toFolder folder
-    let path = dir </> getFilePath doc
-    writeJsonFile path $ marshalValue ctx doc
-    return path
+writeDoc ::
+  (MarshalJSON Ctx a, HasFilePath a, MonadIO m) =>
+  Ctx ->
+  HWFolder ->
+  a ->
+  ExceptT String m FilePath
+writeDoc ctx folder doc = do
+  path <- liftIO $ docFilePath ctx folder doc
+  liftIO $ writeJsonFile path $ marshalValue ctx doc
+  return path
 
 txChecksum :: Tx -> Text
 txChecksum = Text.take 8 . txHashToHex . nosigTxHash
