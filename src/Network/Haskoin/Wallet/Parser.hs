@@ -129,6 +129,10 @@ data Command
   | CommandSendTx
       { commandFilePath :: !FilePath
       }
+  | CommandSync
+      { commandMaybeAcc :: !(Maybe Text),
+        commandSyncFull :: !Bool
+      }
   | CommandScanAcc
       { commandMaybeAcc :: !(Maybe Text)
       }
@@ -199,6 +203,7 @@ commandParser ctx =
         mconcat
           [ commandGroup "Online (Blockchain) commands",
             command "sendtx" sendTxParser,
+            command "sync" (syncParser ctx),
             command "scanacc" (scanAccParser ctx),
             hidden
           ],
@@ -418,19 +423,6 @@ accountsParser :: Ctx -> ParserInfo Command
 accountsParser ctx =
   info (CommandAccounts <$> accountOption ctx) $
     mconcat [progDesc "Display account information"]
-
-{- ScanAcc Parser -}
-
-scanAccParser :: Ctx -> ParserInfo Command
-scanAccParser ctx =
-  info (CommandScanAcc <$> accountOption ctx) $
-    mconcat
-      [ progDesc "Scan the addresses of an account on the blockchain",
-        footer
-          "If your account is somehow out of sync with the blockchain, you can\
-          \ call scanacc to scan the blockchain and reset the indices for your\
-          \ internal and external addresses."
-      ]
 
 {- Receive Parser -}
 
@@ -669,6 +661,45 @@ sendTxParser =
   info (CommandSendTx <$> fileArgument "Path of the transaction file") $
     mconcat [progDesc "Broadcast a signed transaction file to the network"]
 
+{- Sync Parser -}
+
+syncParser :: Ctx -> ParserInfo Command
+syncParser ctx =
+  info (CommandSync <$> accountOption ctx <*> fullOption) $
+    mconcat
+      [ progDesc "Sync transactions and balances from the blockchain",
+        footer
+          "Sync will download the latest transactions from the blockchain and\
+          \ store them in a local database. It will start syncing from the\
+          \ previously stored best block. To sync everything again from the\
+          \ beginning, call sync with the --full option. You can sync only\
+          \ an individual account by specifying the --account option."
+      ]
+
+fullOption :: Parser Bool
+fullOption =
+  switch $
+    mconcat
+      [ long "full",
+        help
+          "Reset the best block and sync from the start of the blockchain",
+        showDefault
+      ]
+
+{- ScanAcc Parser -}
+
+scanAccParser :: Ctx -> ParserInfo Command
+scanAccParser ctx =
+  info (CommandScanAcc <$> accountOption ctx) $
+    mconcat
+      [ progDesc "Scan the blockchain to generate missing addresses",
+        footer
+          "If you are recovering an account or there are addresses missing in\
+          \ your account, you can call scanacc to search the blockchain for\
+          \ missing addresses. Addresses will be scanned and generated until\
+          \ a gap (default = 20) of unused addresses is found."
+      ]
+
 {- Version Parser -}
 
 versionParser :: ParserInfo Command
@@ -769,4 +800,3 @@ dirArgument desc =
         metavar "DIRNAME",
         action "file"
       ]
-

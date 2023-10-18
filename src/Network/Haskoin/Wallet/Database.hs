@@ -45,6 +45,8 @@ import Data.Aeson.Types
 import Data.Bits (Bits (clearBit))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
+import Data.Char (GeneralCategory (OtherNumber))
+import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, fromMaybe, isJust)
@@ -70,7 +72,7 @@ import Network.Haskoin.Wallet.TxInfo
 import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
-import Data.Char (GeneralCategory(OtherNumber))
+import System.IO.Error (alreadyExistsErrorType)
 
 {- SQL Table Definitions -}
 
@@ -121,9 +123,11 @@ DBTxInfo
   Primary txid account
   deriving Show
 
-DBMeta
+DBBest
+  account DBAccountId
   bestBlock Text
   bestHeight Int
+  Primary account
   deriving Show
 
 DBRawTx
@@ -132,6 +136,9 @@ DBRawTx
   Primary txid
   deriving Show
 |]
+
+gap :: Int64
+gap = 20
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
@@ -148,14 +155,24 @@ runDB action = do
 
 {- Meta -}
 
-metaKey :: DBMetaId
-metaKey = DBMetaKey 0
+updateBest ::
+  (MonadUnliftIO m) => DBAccountId -> BlockHash -> BlockHeight -> DB m ()
+updateBest accId hash height = do
+  let key = DBBestKey accId
+  P.repsert key $ DBBest accId (blockHashToHex hash) (fromIntegral height)
 
-updateMeta :: (MonadUnliftIO m) => DBMeta -> DB m ()
-updateMeta = P.repsert metaKey
+deleteBest ::
+  (MonadUnliftIO m) => DBAccountId -> DB m ()
+deleteBest accId = P.delete $ DBBestKey accId
 
-getMeta :: (MonadUnliftIO m) => DB m (Maybe DBMeta)
-getMeta = P.get metaKey
+getBest ::
+     (MonadUnliftIO m) => DBAccountId -> DB m (Maybe (BlockHash, BlockHeight))
+getBest accId = do
+  resM <- P.get $ DBBestKey accId
+  return $ do
+    DBBest _ a b <- resM
+    hash <- hexToBlockHash a
+    return (hash, fromIntegral b)
 
 {- Accounts -}
 
@@ -308,6 +325,10 @@ getAccount Nothing = do
       [] -> Left "There are no accounts in the wallet"
       _ -> Left "Specify which account to use"
 
+getAccountId ::
+     (MonadUnliftIO m) => DBAccountId -> DB m (Either String DBAccount)
+getAccountId accId = maybeToEither "Invalid account" <$> P.get accId
+
 getAccountVal ::
   (MonadUnliftIO m) => Maybe Text -> DB m (Either String DBAccount)
 getAccountVal nameM =
@@ -370,6 +391,7 @@ instance FromJSON DBAddress where
         <*> o .: "internal"
         <*> o .: "created"
 
+-- Insert an address into the database. Does nothing if it already exists.
 insertAddress ::
   (MonadUnliftIO m) =>
   Network ->
@@ -383,25 +405,64 @@ insertAddress net accId deriv addr label =
     time <- liftIO getCurrentTime
     addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
     (isInternal, idx) <- parseDeriv
-    let dbAddr =
+    let label' = if isInternal then "Internal Address" else label
+        derivS = cs $ pathToStr deriv
+        dbAddr =
           DBAddress
             (fromIntegral idx)
             accId
-            (cs $ pathToStr deriv)
+            derivS
             addrT
-            label
+            label'
             0
             0
             isInternal
             time
-    lift $ P.insert_ dbAddr
-    return dbAddr
+    addrM <- lift $ P.get (DBAddressKey accId derivS)
+    case addrM of
+      Just a -> return a
+      Nothing -> do
+        lift $ P.insert_ dbAddr
+        return dbAddr
   where
     parseDeriv =
       case pathToList deriv of
         [0, x] -> return (False, x) -- Not an internal address
         [1, x] -> return (True, x) -- Internal address
         _ -> throwError "Invalid address SoftPath"
+
+-- Set external or internal account derivation
+-- Will also generate and insert the relevant addresses
+updateDeriv ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  SoftPath ->
+  Natural ->
+  DB m (Either String DBAccount)
+updateDeriv net ctx accId path deriv =
+  runExceptT $ do
+    acc <- liftEither <=< lift $ getAccountId accId
+    internal <-
+      case pathToList path of
+        [0] -> return False
+        [1] -> return True
+        _ -> throwError "Invalid updateDeriv SoftPath"
+    let xPubKey = accountXPubKey ctx acc
+        label | internal = DBAccountInternal
+              | otherwise = DBAccountExternal
+        accDeriv | internal = dBAccountInternal
+                | otherwise = dBAccountExternal
+    if accDeriv acc >= fromIntegral deriv
+      then return acc --Nothing to do
+      else do
+        let addrs = addrsDerivPage ctx path (Page deriv 0) xPubKey
+        forM_ addrs $ \(a,p) -> lift $ insertAddress net accId p a ""
+        lift $ update $ \a -> do
+          set a [label =. val (fromIntegral deriv)]
+          where_ (a ^. DBAccountId ==. val accId)
+        liftEither <=< lift $ getAccountId accId
 
 receiveAddress ::
   (MonadUnliftIO m) =>
@@ -422,12 +483,8 @@ receiveAddress ctx nameM label =
     newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
     return (newAcc, dbAddr)
 
-getAddresses ::
-  (MonadUnliftIO m) =>
-  DBAccountId ->
-  Page ->
-  DB m (Either String [DBAddress])
-getAddresses accId (Page lim off) = do
+addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
+addressPage accId (Page lim off) = do
   as <-
     select $
       from $ \a -> do
@@ -439,17 +496,14 @@ getAddresses accId (Page lim off) = do
         limit $ fromIntegral lim
         offset $ fromIntegral off
         return a
-  return $
-    if null as
-      then Left "There are no addresses in this account"
-      else Right $ entityVal <$> as
+  return $ entityVal <$> as
 
 allAddressesMap ::
   (MonadUnliftIO m) =>
-  DBAccountId ->
   Network ->
+  DBAccountId ->
   DB m (Either String (Map Address SoftPath))
-allAddressesMap accId net =
+allAddressesMap net accId =
   runExceptT $ do
     dbRes <-
       lift $
@@ -483,6 +537,7 @@ updateLabel nameM idx label = do
 
 {- Transactions -}
 
+-- Insert a new transaction or replace if it already exists
 repsertTxInfo ::
   (MonadUnliftIO m) =>
   Network ->
@@ -499,7 +554,7 @@ repsertTxInfo net ctx accId tif = do
       tid = txHashToHex $ txInfoId tif
       bRef = encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
-      blob = BS.toStrict $ marshalJSON (net, ctx) tif{txInfoConfirmations = 0}
+      blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
       key = DBTxInfoKey tid accId
       txInfo =
         DBTxInfo
@@ -515,10 +570,10 @@ repsertTxInfo net ctx accId tif = do
     Just res -> do
       let newTxInfo =
             res
-            { dBTxInfoBlockRef = bRef,
-              dBTxInfoConfirmed = confirmed,
-              dBTxInfoBlob = blob
-            }
+              { dBTxInfoBlockRef = bRef,
+                dBTxInfoConfirmed = confirmed,
+                dBTxInfoBlob = blob
+              }
       P.replace key newTxInfo
       return newTxInfo
     Nothing -> do
@@ -550,13 +605,13 @@ getTxs ctx nameM (Page lim off) =
           maybeToEither "TxInfo unmarshalJSON Failed" $
             unmarshalJSON (net, ctx) $
               BS.fromStrict dbTx
-    metaM <- lift getMeta
-    case metaM of
-      Just (DBMeta _ h) ->
+    bestM <- lift $ getBest accId
+    case bestM of
+      Just (_, h) ->
         return (acc, updateConfirmations h <$> res)
       _ -> return (acc, res)
 
-updateConfirmations :: Int -> TxInfo -> TxInfo
+updateConfirmations :: BlockHeight -> TxInfo -> TxInfo
 updateConfirmations best tif =
   case txInfoBlockRef tif of
     Store.BlockRef h _ ->

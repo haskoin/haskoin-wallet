@@ -9,7 +9,8 @@
 
 module Network.Haskoin.Wallet.Commands where
 
-import Control.Monad (forM, mzero, unless, when, (<=<))
+import Conduit (MonadUnliftIO, ResourceT)
+import Control.Monad (forM, forM_, mzero, unless, when, (<=<))
 import Control.Monad.Except
   ( ExceptT,
     MonadError (throwError),
@@ -23,6 +24,7 @@ import qualified Data.Aeson as Json
 import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
+import Data.List (nub)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, fromMaybe)
@@ -30,10 +32,13 @@ import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Word (Word32)
 import Haskoin.Address (Address, addrToText, textToAddr)
+import Haskoin.Block (BlockHash (..), headerHash)
 import Haskoin.Crypto
   ( Ctx,
     HardPath,
+    Hash256,
     Mnemonic,
     SoftPath,
     XPrvKey,
@@ -44,17 +49,19 @@ import Haskoin.Crypto
 import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-  ( GetAddrsBalance (GetAddrsBalance),
+  ( GetAddrTxs (GetAddrTxs),
+    GetAddrsBalance (GetAddrsBalance),
     GetAddrsTxs (GetAddrsTxs),
     GetBlockBest (GetBlockBest),
     GetHealth (GetHealth),
     GetTxs (GetTxs),
-    LimitsParam (limit),
+    LimitsParam (..),
     PostTx (PostTx),
+    StartParam (StartParamHash),
     apiBatch,
     apiCall,
   )
-import Haskoin.Transaction (TxHash)
+import Haskoin.Transaction (TxHash (..))
 import Haskoin.Util
   ( MarshalJSON (marshalValue, unmarshalValue),
     maybeToEither,
@@ -128,6 +135,7 @@ import Network.Haskoin.Wallet.TxInfo
 import Network.Haskoin.Wallet.Util
   ( Page (Page),
     addrToText3,
+    chunksOf,
     liftExcept,
     sortDesc,
     textToAddr3,
@@ -212,6 +220,12 @@ data Response
         responseTransaction :: !TxInfo,
         responseNetworkTxId :: !TxHash
       }
+  | ResponseSync
+      { responseAccount :: !DBAccount,
+        responseBestBlock :: !BlockHash,
+        responseBestHeight :: !Natural,
+        responseTxCount :: !Natural
+      }
   | ResponseScanAcc
       { responseAccount :: !DBAccount
       }
@@ -271,10 +285,10 @@ instance MarshalJSON Ctx Response where
             "newname" .= n,
             "account" .= a
           ]
-      ResponseAccounts a ->
+      ResponseAccounts as ->
         object
           [ "type" .= Json.String "accounts",
-            "accounts" .= a
+            "accounts" .= as
           ]
       ResponseReceive a addr ->
         object
@@ -330,6 +344,14 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "transaction" .= marshalValue (accountNetwork a, ctx) t,
             "networktxid" .= h
+          ]
+      ResponseSync as bb bh tc ->
+        object
+          [ "type" .= Json.String "sync",
+            "account" .= as,
+            "bestblock" .= bb,
+            "bestheight" .= bh,
+            "importedtxcount" .= tc
           ]
       ResponseScanAcc a ->
         object
@@ -428,6 +450,12 @@ instance MarshalJSON Ctx Response where
           t <- f =<< o .: "transaction"
           h <- o .: "networktxid"
           return $ ResponseSendTx a t h
+        "sync" ->
+          ResponseSync
+            <$> o .: "account"
+            <*> o .: "bestblock"
+            <*> o .: "bestheight"
+            <*> o .: "importedtxcount"
         "scanacc" -> do
           a <- o .: "account"
           return $ ResponseScanAcc a
@@ -470,22 +498,24 @@ catchResponseError m = do
 commandResponse :: Ctx -> Command -> IO Response
 commandResponse ctx =
   \case
-    CommandMnemonic e d s -> mnemonic e d s
-    CommandCreateAcc t n dM s -> createAcc ctx t n dM s
-    CommandTestAcc accM s -> testAcc ctx accM s
-    CommandImportAcc f -> importAcc ctx f
-    CommandRenameAcc old new -> renameAcc ctx old new
-    CommandAccounts accM -> accounts accM
-    CommandReceive accM labM -> receive ctx accM labM
-    CommandAddrs accM p -> addrs accM p
-    CommandLabel accM i l -> label accM i l
-    CommandTxs accM p -> txs ctx accM p
+    CommandMnemonic e d s -> cmdMnemonic e d s
+    CommandCreateAcc t n dM s -> cmdCreateAcc ctx t n dM s
+    CommandTestAcc accM s -> cmdTestAcc ctx accM s
+    CommandImportAcc f -> cmdImportAcc ctx f
+    CommandRenameAcc old new -> cmdRenameAcc ctx old new
+    CommandAccounts accM -> cmdAccounts accM
+    CommandReceive accM labM -> cmdReceive ctx accM labM
+    CommandAddrs accM p -> cmdAddrs accM p
+    CommandLabel accM i l -> cmdLabel accM i l
+    CommandTxs accM p -> cmdTxs ctx accM p
+    CommandSync accM b -> cmdSync ctx accM b
+    CommandScanAcc accM -> cmdScanAccount ctx accM
+
 --  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
 --    prepareTx ctx rcpts accM unit fee dust rcptPay
 --  CommandReview file -> cmdReview ctx file
 --  CommandSignTx file s -> cmdSignTx ctx file s
 --  CommandSendTx file -> cmdSendTx ctx file
---  CommandScanAcc accM -> scanAccount ctx accM
 --  CommandVersion -> cmdVersion
 --  CommandPrepareSweep as fileM accM fee dust ->
 --    prepareSweep ctx as fileM accM fee dust
@@ -498,14 +528,14 @@ commandResponse ctx =
 liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
 liftEitherIO = liftEither <=< liftIO
 
-mnemonic :: Natural -> Bool -> Natural -> IO Response
-mnemonic ent useDice splitIn =
+cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
+cmdMnemonic ent useDice splitIn =
   catchResponseError $ do
     (orig, ms, splitMs) <- genMnemonic ent useDice splitIn
     return $ ResponseMnemonic orig (T.words ms) (T.words <$> splitMs)
 
-createAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
-createAcc ctx name net derivM splitIn =
+cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
+cmdCreateAcc ctx name net derivM splitIn =
   runDB $
     catchResponseError $ do
       d <- maybe (lift $ nextAccountDeriv net) return derivM
@@ -517,8 +547,8 @@ createAcc ctx name net derivM splitIn =
       _ <- writeDoc ctx PubKeyFolder (PubKeyDoc xpub net name)
       return $ ResponseCreateAcc account
 
-testAcc :: Ctx -> Maybe Text -> Natural -> IO Response
-testAcc ctx nameM splitIn =
+cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
+cmdTestAcc ctx nameM splitIn =
   runDB $
     catchResponseError $ do
       acc <- liftDB $ getAccountVal nameM
@@ -543,8 +573,8 @@ testAcc ctx nameM splitIn =
                   "The mnemonic and passphrase did not match the account"
               }
 
-importAcc :: Ctx -> FilePath -> IO Response
-importAcc ctx fp =
+cmdImportAcc :: Ctx -> FilePath -> IO Response
+cmdImportAcc ctx fp =
   runDB $
     catchResponseError $ do
       doc@(PubKeyDoc xpub net name) <- liftEitherIO $ readMarshalFile ctx fp
@@ -553,8 +583,8 @@ importAcc ctx fp =
       _ <- writeDoc ctx PubKeyFolder doc
       return $ ResponseImportAcc acc
 
-renameAcc :: Ctx -> Text -> Text -> IO Response
-renameAcc ctx oldName newName =
+cmdRenameAcc :: Ctx -> Text -> Text -> IO Response
+cmdRenameAcc ctx oldName newName =
   runDB $
     catchResponseError $ do
       acc <- liftDB $ renameAccount oldName newName
@@ -563,8 +593,8 @@ renameAcc ctx oldName newName =
       _ <- writeDoc ctx PubKeyFolder $ PubKeyDoc xpub net newName
       return $ ResponseRenameAcc oldName newName acc
 
-accounts :: Maybe Text -> IO Response
-accounts nameM =
+cmdAccounts :: Maybe Text -> IO Response
+cmdAccounts nameM =
   runDB $
     catchResponseError $ do
       case nameM of
@@ -573,37 +603,152 @@ accounts nameM =
           return $ ResponseAccounts [acc]
         _ -> do
           accs <- lift getAccountsVal
-          when (null accs) $ throwError $ "There are no accounts in the wallet"
           return $ ResponseAccounts accs
 
-receive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
-receive ctx nameM labelM =
+cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
+cmdReceive ctx nameM labelM =
   runDB $
     catchResponseError $ do
       (acc, addr) <- liftDB $ receiveAddress ctx nameM $ fromMaybe "" labelM
       return $ ResponseReceive acc addr
 
-addrs :: Maybe Text -> Page -> IO Response
-addrs nameM page =
+cmdAddrs :: Maybe Text -> Page -> IO Response
+cmdAddrs nameM page =
   runDB $
     catchResponseError $ do
       (accId, acc) <- liftDB $ getAccount nameM
-      as <- liftDB $ getAddresses accId page
+      as <- lift $ addressPage accId page
       return $ ResponseAddresses acc as
 
-label :: Maybe Text -> Natural -> Text -> IO Response
-label nameM idx lab =
+cmdLabel :: Maybe Text -> Natural -> Text -> IO Response
+cmdLabel nameM idx lab =
   runDB $
     catchResponseError $ do
       (acc, adr) <- liftDB $ updateLabel nameM (fromIntegral idx) lab
       return $ ResponseLabel acc adr
 
-txs :: Ctx -> Maybe Text -> Page -> IO Response
-txs ctx nameM page =
+cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
+cmdTxs ctx nameM page =
   runDB $
     catchResponseError $ do
       (acc, txInfos) <- liftDB $ getTxs ctx nameM page
       return $ ResponseTxs acc txInfos
+
+cmdSync :: Ctx -> Maybe Text -> Bool -> IO Response
+cmdSync ctx nameM full = do
+  runDB $
+    catchResponseError $ do
+      (accId, acc) <- liftDB $ getAccount nameM
+      let net = accountNetwork acc
+      (newAcc, block, txcount) <-
+        liftEither <=< liftIO $ syncAccount net ctx accId full
+      return $
+        ResponseSync
+          newAcc
+          (headerHash block.header)
+          (fromIntegral block.height)
+          txcount
+
+syncAccount ::
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  Bool ->
+  IO (Either String (DBAccount, Store.BlockData, Natural))
+syncAccount net ctx accId full = do
+  runDB $ do
+    runExceptT $ do
+      checkHealth ctx net
+      -- Reset the best block in case of full sync
+      when full $ lift $ deleteBest accId
+      -- Get the new best block before starting the sync
+      newBest <- liftExcept $ apiCall ctx (conf net) (GetBlockBest def)
+      -- Get a list of addresses to sync
+      addrMap <- liftDB $ allAddressesMap net accId
+      let as = Map.keys addrMap
+      -- Fetch all the new txids of those addresses
+      -- We start searching at the best block stored in the local database
+      oldBestM <- lift $ getBest accId
+      let startM = (.get) . fst <$> oldBestM
+      tids <- searchAddrTxs net ctx startM 100 100 as
+      -- Fetch the full transactions
+      Store.SerialList txs <-
+        liftExcept $ apiBatch ctx 100 (conf net) (GetTxs tids)
+      -- Convert them to TxInfo and store them in the local database
+      let txInfos = toTxInfo addrMap (fromIntegral newBest.height) <$> txs
+      lift $ forM_ txInfos $ repsertTxInfo net ctx accId
+      -- Update the best block for this network
+      lift $ updateBest accId (headerHash newBest.header) newBest.height
+      newAcc <- liftDB $ getAccountId accId
+      return (newAcc, newBest, fromIntegral $ length txInfos)
+
+searchAddrTxs ::
+  (MonadIO m) =>
+  Network ->
+  Ctx ->
+  Maybe Hash256 ->
+  Natural ->
+  Natural ->
+  [Address] ->
+  ExceptT String m [TxHash]
+searchAddrTxs _ _ _ _ _ [] = return []
+searchAddrTxs net ctx startM aBatch tBatch as
+  | length as > fromIntegral aBatch =
+      nub . concat <$> mapM (go startM 0) (chunksOf aBatch as)
+  | otherwise = 
+      nub <$> go startM 0 as
+  where
+    go hashM offset xs = do
+      Store.SerialList txRefs <-
+        liftExcept $
+          apiCall
+            ctx
+            (conf net)
+            ( GetAddrsTxs
+                xs
+                def
+                  { limit = Just $ fromIntegral tBatch,
+                    start = StartParamHash <$> hashM,
+                    offset = offset
+                  }
+            )
+      let tids = (.txid) <$> txRefs
+      if length tids < fromIntegral tBatch
+        then return tids
+        else do
+          let lastId = (last tids).get
+          rest <- go (Just lastId) 1 xs
+          return $ tids <> rest
+
+cmdScanAccount :: Ctx -> Maybe Text -> IO Response
+cmdScanAccount ctx nameM =
+  runDB $
+    catchResponseError $ do
+      (accId, acc) <- liftDB $ getAccount nameM
+      let net = accountNetwork acc
+          pub = accountXPubKey ctx acc
+      checkHealth ctx net
+      e <- go net pub extDeriv 0 (Page (fromIntegral gap) 0)
+      i <- go net pub intDeriv 0 (Page (fromIntegral gap) 0)
+      _ <- liftDB $ updateDeriv net ctx accId extDeriv e
+      newAcc <- liftDB $ updateDeriv net ctx accId intDeriv i
+      return $ ResponseScanAcc newAcc
+  where
+    go net pub path d page@(Page lim off) = do
+      let addrs = addrsDerivPage ctx path page pub
+          req = GetAddrsBalance $ fst <$> addrs
+      Store.SerialList bals <- liftExcept $ apiCall ctx (conf net) req
+      let vBals = filter ((/= 0) . (.txs)) bals
+      if null vBals
+        then return d
+        else do
+          let d' = findMax addrs $ (.address) <$> vBals
+          go net pub path (d' + 1) (Page lim (off + lim))
+    -- Find the largest ID amongst the addresses that have a positive balance
+    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
+    findMax addrs balAddrs =
+      let fAddrs = filter ((`elem` balAddrs) . fst) addrs
+       in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
 
 {-
 
@@ -684,44 +829,6 @@ cmdSendTx ctx fp =
         liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
       return $ ResponseSendTx storeName store txInfo netTxId
 
-scanAccount :: Ctx -> Maybe Text -> IO Response
-scanAccount ctx accM =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      updateAccountIndices ctx storeName
-      gets (ResponseScanAcc storeName)
-
-updateAccountIndices ::
-  (MonadError String m, MonadIO m, MonadState AccountStore m) =>
-  Ctx ->
-  Text ->
-  m ()
-updateAccountIndices ctx storeName = do
-  net <- gets accountNetwork
-  pub <- gets accountStoreXPubKey
-  checkHealth ctx net
-  e <- go net pub extDeriv 0 (Page 20 0)
-  i <- go net pub intDeriv 0 (Page 20 0)
-  m <- readAccountLabels storeName
-  let eMax = maximum $ e : ((+ 1) <$> Map.keys m)
-  modify $ \s -> s {accountStoreExternal = eMax, accountStoreInternal = i}
-  where
-    go net pub deriv d page@(Page lim off) = do
-      let addrs = addrsDerivPage ctx deriv page pub
-          req = GetAddrsBalance $ fst <$> addrs
-      Store.SerialList bals <-
-        liftExcept $ apiCall ctx (conf net) req
-      let vBals = filter ((/= 0) . (.txs)) bals
-      if null vBals
-        then return d
-        else do
-          let d' = findMax addrs $ (.address) <$> vBals
-          go net pub deriv (d' + 1) (Page lim (off + lim))
-    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
-    findMax addrs balAddrs =
-      let fAddrs = filter ((`elem` balAddrs) . fst) addrs
-       in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
-
 cmdVersion :: IO Response
 cmdVersion = return $ ResponseVersion versionString
 
@@ -795,6 +902,8 @@ rollDice n = do
           (origEnt, sysEnt) <- systemEntropy 1
           go (word8ToBase6 (head $ BS.unpack sysEnt) <> acc) origEnt
 
+-}
+
 -- Utilities --
 
 checkHealth :: (MonadIO m, MonadError String m) => Ctx -> Network -> m ()
@@ -802,8 +911,6 @@ checkHealth ctx net = do
   health <- liftExcept $ apiCall ctx (conf net) GetHealth
   unless (Store.isOK health) $
     throwError "The indexer health check has failed"
-
--}
 
 -- Haskeline Helpers --
 
