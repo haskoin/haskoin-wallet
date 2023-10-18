@@ -25,7 +25,7 @@ import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromMaybe, fromJust)
+import Data.Maybe (fromJust, fromMaybe)
 import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -130,8 +130,7 @@ import Network.Haskoin.Wallet.Util
     addrToText3,
     liftExcept,
     sortDesc,
-    textToAddr3
-  ,
+    textToAddr3,
     textToAddrE,
     toPage,
     (</>),
@@ -185,9 +184,13 @@ data Response
       { responseAccount :: !DBAccount,
         responseAddresses :: ![DBAddress]
       }
+  | ResponseLabel
+      { responseAccount :: !DBAccount,
+        responseAddress :: !DBAddress
+      }
   | ResponseTxs
       { responseAccount :: !DBAccount,
-        responseTransactions :: ![TxInfo]
+        responseTxs :: ![TxInfo]
       }
   | ResponsePrepareTx
       { responseAccount :: !DBAccount,
@@ -279,18 +282,23 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "address" .= addr
           ]
-      ResponseAddresses a addrs ->
+      ResponseAddresses a adrs ->
         object
           [ "type" .= Json.String "addresses",
             "account" .= a,
-            "addresses" .= addrs
+            "addresses" .= adrs
+          ]
+      ResponseLabel a adr ->
+        object
+          [ "type" .= Json.String "label",
+            "account" .= a,
+            "address" .= adr
           ]
       ResponseTxs a txs ->
         object
           [ "type" .= Json.String "txs",
             "account" .= a,
-            "transactions"
-              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> txs)
+            "txs" .= (marshalValue (accountNetwork a, ctx) <$> txs)
           ]
       ResponsePrepareTx a f t ->
         object
@@ -354,42 +362,46 @@ instance MarshalJSON Ctx Response where
       Json.String resType <- o .: "type"
       case resType of
         "error" -> ResponseError <$> o .: "error"
-        "mnemonic" -> do
-          e <- o .: "entropysource"
-          m <- o .: "mnemonic"
-          ms <- o .: "splitmnemonic"
-          return $ ResponseMnemonic e m ms
-        "createacc" -> do
-          a <- o .: "account"
-          return $ ResponseCreateAcc a
-        "testacc" -> do
-          a <- o .: "account"
-          b <- o .: "result"
-          t <- o .: "text"
-          return $ ResponseTestAcc a b t
-        "importacc" -> do
-          a <- o .: "account"
-          return $ ResponseImportAcc a
-        "renameacc" -> do
-          old <- o .: "oldname"
-          new <- o .: "newname"
-          a <- o .: "account"
-          return $ ResponseRenameAcc old new a
-        "accounts" -> do
-          as <- o .: "accounts"
-          return $ ResponseAccounts as
-        "receive" -> do
-          a <- o .: "account"
-          x <- o .: "address"
-          return $ ResponseReceive a x
-        "addresses" -> do
-          a <- o .: "account"
-          addrs <- o .: "addresses"
-          return $ ResponseAddresses a addrs
+        "mnemonic" ->
+          ResponseMnemonic
+            <$> o .: "entropysource"
+            <*> o .: "mnemonic"
+            <*> o .: "splitmnemonic"
+        "createacc" ->
+          ResponseCreateAcc
+            <$> o .: "account"
+        "testacc" ->
+          ResponseTestAcc
+            <$> o .: "account"
+            <*> o .: "result"
+            <*> o .: "text"
+        "importacc" ->
+          ResponseImportAcc
+            <$> o .: "account"
+        "renameacc" ->
+          ResponseRenameAcc
+            <$> o .: "oldname"
+            <*> o .: "newname"
+            <*> o .: "account"
+        "accounts" ->
+          ResponseAccounts
+            <$> o .: "accounts"
+        "receive" ->
+          ResponseReceive
+            <$> o .: "account"
+            <*> o .: "address"
+        "addresses" ->
+          ResponseAddresses
+            <$> o .: "account"
+            <*> o .: "addresses"
+        "label" ->
+          ResponseLabel
+            <$> o .: "account"
+            <*> o .: "address"
         "txs" -> do
           a <- o .: "account"
           let f = unmarshalValue (accountNetwork a, ctx)
-          txs <- mapM f =<< o .: "transactions"
+          txs <- mapM f =<< o .: "txs"
           return $ ResponseTxs a txs
         "preparetx" -> do
           a <- o .: "account"
@@ -466,7 +478,8 @@ commandResponse ctx =
     CommandAccounts accM -> accounts accM
     CommandReceive accM labM -> receive ctx accM labM
     CommandAddrs accM p -> addrs accM p
---  CommandTxs accM p -> txs ctx accM p
+    CommandLabel accM i l -> label accM i l
+    CommandTxs accM p -> txs ctx accM p
 --  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
 --    prepareTx ctx rcpts accM unit fee dust rcptPay
 --  CommandReview file -> cmdReview ctx file
@@ -558,7 +571,10 @@ accounts nameM =
         Just _ -> do
           acc <- liftDB $ getAccountVal nameM
           return $ ResponseAccounts [acc]
-        _ -> ResponseAccounts <$> lift getAccountsVal
+        _ -> do
+          accs <- lift getAccountsVal
+          when (null accs) $ throwError $ "There are no accounts in the wallet"
+          return $ ResponseAccounts accs
 
 receive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
 receive ctx nameM labelM =
@@ -575,44 +591,21 @@ addrs nameM page =
       as <- liftDB $ getAddresses accId page
       return $ ResponseAddresses acc as
 
+label :: Maybe Text -> Natural -> Text -> IO Response
+label nameM idx lab =
+  runDB $
+    catchResponseError $ do
+      (acc, adr) <- liftDB $ updateLabel nameM (fromIntegral idx) lab
+      return $ ResponseLabel acc adr
+
+txs :: Ctx -> Maybe Text -> Page -> IO Response
+txs ctx nameM page =
+  runDB $
+    catchResponseError $ do
+      (acc, txInfos) <- liftDB $ getTxs ctx nameM page
+      return $ ResponseTxs acc txInfos
+
 {-
-
-zipLabels ::
-  [(Address, SoftPath)] -> Map Natural Text -> [AddressResponse]
-zipLabels addrs m =
-  f <$> addrs
-  where
-    f (a, p) =
-      AddressResponse a p $
-        fromMaybe "No Label" $
-          Map.lookup (fromIntegral $ last $ pathToList p) m
-
-transactions :: Ctx -> Maybe Text -> Page -> IO Response
-transactions ctx accM page =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountNetwork
-      addrMap <- gets (storeAddressMap ctx)
-      let allAddrs = Map.keys addrMap
-      checkHealth ctx net
-      best <-
-        (.height)
-          <$> liftExcept (apiCall ctx (conf net) (GetBlockBest def))
-      -- TODO: This only works for small wallets.
-      Store.SerialList txRefs <-
-        liftExcept $
-          apiBatch
-            ctx
-            20
-            (conf net)
-            (GetAddrsTxs allAddrs def {limit = Just 100})
-      let sortedRefs = (.txid) <$> sortDesc txRefs
-      Store.SerialList txs <-
-        liftExcept $
-          apiBatch ctx 20 (conf net) (GetTxs (toPage page sortedRefs))
-      let txInfos = toTxInfo addrMap (fromIntegral best) <$> txs
-      store <- get
-      return $ ResponseTransactions storeName store txInfos
 
 prepareTx ::
   Ctx ->

@@ -94,13 +94,18 @@ data Command
   | CommandAccounts
       { commandMaybeAcc :: !(Maybe Text)
       }
+  | CommandReceive
+      { commandMaybeAcc :: !(Maybe Text),
+        commandMaybeLabel :: !(Maybe Text)
+      }
   | CommandAddrs
       { commandMaybeAcc :: !(Maybe Text),
         commandPage :: !Page
       }
-  | CommandReceive
+  | CommandLabel
       { commandMaybeAcc :: !(Maybe Text),
-        commandMaybeLabel :: !(Maybe Text)
+        commandAddrIndex :: !Natural,
+        commandLabel :: !Text
       }
   | CommandTxs
       { commandMaybeAcc :: !(Maybe Text),
@@ -178,6 +183,7 @@ commandParser ctx =
           [ commandGroup "Address management",
             command "receive" (receiveParser ctx),
             command "addrs" (addrsParser ctx),
+            command "label" (labelParser ctx),
             hidden
           ],
       hsubparser $
@@ -481,6 +487,26 @@ limitOption =
         metavar "INT",
         value 5,
         showDefault
+      ]
+
+{- Label Parser-}
+
+labelParser :: Ctx -> ParserInfo Command
+labelParser ctx =
+  info
+    ( CommandLabel
+        <$> accountOption ctx
+        <*> addrIndexArg
+        <*> textArg "The new address label"
+    )
+    $ mconcat [progDesc "List the latest receiving addresses in the account"]
+
+addrIndexArg :: Parser Natural
+addrIndexArg =
+  argument (maybeReader $ readNatural . cs) $
+    mconcat
+      [ help "The index of the address to update",
+        metavar "INT"
       ]
 
 {- Txs Parser -}

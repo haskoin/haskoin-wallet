@@ -14,7 +14,6 @@ import Data.Aeson (object, withObject, (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
 import Data.Aeson.Types (Parser)
 import qualified Data.ByteString as BS
-import Data.Decimal as Decimal (Decimal, roundTo)
 import Data.Either (partitionEithers)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -95,7 +94,7 @@ data TxInfo = TxInfo
     txInfoNonStdInputs :: ![Store.StoreInput],
     txInfoSize :: !Natural,
     txInfoFee :: !Natural,
-    txInfoFeeByte :: !Decimal,
+    txInfoFeeByte :: !Natural,
     txInfoBlockRef :: !Store.BlockRef,
     txInfoConfirmations :: !Natural
   }
@@ -249,7 +248,7 @@ toTxInfo walletAddrs currHeight sTx =
   where
     size = fromIntegral sTx.size :: Natural
     fee = fromIntegral sTx.fee :: Natural
-    feeByte = Decimal.roundTo 2 $ fromIntegral fee / fromIntegral size
+    feeByte = fee `div` size
     (outputMap, nonStdOut) = outputAddressMap sTx.outputs
     myOutputsMap = Map.intersectionWith (,) outputMap walletAddrs
     othOutputsMap = Map.difference outputMap walletAddrs
@@ -333,7 +332,7 @@ data UnsignedTxInfo = UnsignedTxInfo
     unsignedTxInfoOtherInputs :: !(Map Address OtherInputs),
     unsignedTxInfoSize :: !Natural,
     unsignedTxInfoFee :: !Natural,
-    unsignedTxInfoFeeByte :: !Decimal
+    unsignedTxInfoFeeByte :: !Natural
   }
   deriving (Eq, Show)
 
@@ -357,9 +356,7 @@ unsignedToTxInfo tx uTx =
     }
   where
     size = BS.length $ S.encode tx
-    feeByte =
-      Decimal.roundTo 2 $
-        fromIntegral (unsignedTxInfoFee uTx) / fromIntegral size
+    feeByte = unsignedTxInfoFee uTx `div` fromIntegral size
 
 instance MarshalJSON (Network, Ctx) UnsignedTxInfo where
   marshalValue (net, ctx) tx =
@@ -400,7 +397,7 @@ parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
   let outSum = fromIntegral $ sum $ (.value) <$> tx.outputs :: Natural
       inSum = fromIntegral $ sum $ (.value) . snd <$> coins :: Natural
   fee <- maybeToEither "Fee is negative" $ inSum `safeSubtract` outSum
-  let feeByte = Decimal.roundTo 2 $ fromIntegral fee / fromIntegral size
+  let feeByte = fee `div` fromIntegral size
       -- Outputs
       (outputMap, nonStdOut) = txOutAddressMap ctx tx.outputs
       myOutputsMap = Map.intersectionWith (,) outputMap outPathAddrs

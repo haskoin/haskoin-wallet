@@ -22,6 +22,8 @@ import Conduit (MonadUnliftIO, ResourceT)
 import Control.Exception (try)
 import Control.Monad
   ( MonadPlus (mzero),
+    forM,
+    forM_,
     unless,
     void,
     when,
@@ -31,7 +33,7 @@ import Control.Monad.Except (ExceptT, MonadError (throwError), liftEither, runEx
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT)
 import Control.Monad.Reader (MonadTrans (lift), ReaderT)
-import Data.Aeson (Value (Bool))
+import qualified Data.Aeson as Json
 import Data.Aeson.Types
   ( FromJSON (parseJSON),
     KeyValue ((.=)),
@@ -41,8 +43,10 @@ import Data.Aeson.Types
     (.:),
   )
 import Data.Bits (Bits (clearBit))
+import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import qualified Data.Map as M
+import Data.Map.Strict (Map)
+import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, fromMaybe, isJust)
 import Data.Serialize (decode, encode)
 import Data.String.Conversions (cs)
@@ -55,16 +59,18 @@ import Database.Persist.Sqlite (runSqlite)
 import Database.Persist.TH
 import Haskoin
 import Haskoin.Crypto (xPubChild)
-import Haskoin.Store.Data (SerialList (..), Unspent, XPubSpec (deriv))
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
 import Haskoin.Transaction
 import Haskoin.Util (maybeToEither)
 import Network.Haskoin.Wallet.AccountStore
 import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.Signing (conf)
-import Network.Haskoin.Wallet.Util (Page (..), liftExcept, (</>))
+import Network.Haskoin.Wallet.TxInfo
+import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
+import Data.Char (GeneralCategory(OtherNumber))
 
 {- SQL Table Definitions -}
 
@@ -98,15 +104,31 @@ DBAddress
   label Text
   received Word64
   txcount Int
-  archived Bool
+  internal Bool
   created UTCTime default=CURRENT_TIME
-  Primary index account
+  Primary account derivation
   UniqueAddress address
+  UniqueAccountDeriv account derivation
   deriving Show
 
-DBTx
+DBTxInfo
   txid Text
-  value BS.ByteString
+  account DBAccountId
+  blockRef ByteString
+  confirmed Bool
+  blob ByteString
+  created UTCTime default=CURRENT_TIME
+  Primary txid account
+  deriving Show
+
+DBMeta
+  bestBlock Text
+  bestHeight Int
+  deriving Show
+
+DBRawTx
+  txid Text
+  value ByteString
   Primary txid
   deriving Show
 |]
@@ -123,6 +145,17 @@ runDB action = do
   runSqlite (cs dbFile) $ do
     _ <- runMigrationQuiet migrateAll
     action
+
+{- Meta -}
+
+metaKey :: DBMetaId
+metaKey = DBMetaKey 0
+
+updateMeta :: (MonadUnliftIO m) => DBMeta -> DB m ()
+updateMeta = P.repsert metaKey
+
+getMeta :: (MonadUnliftIO m) => DB m (Maybe DBMeta)
+getMeta = P.get metaKey
 
 {- Accounts -}
 
@@ -310,7 +343,7 @@ renameAccount oldName newName
 {- Addresses -}
 
 instance ToJSON DBAddress where
-  toJSON (DBAddress idx acc d addr l r t arch c) =
+  toJSON (DBAddress idx acc d addr l r t i c) =
     object
       [ "index" .= idx,
         "account" .= acc,
@@ -319,7 +352,7 @@ instance ToJSON DBAddress where
         "label" .= l,
         "received" .= r,
         "txCount" .= t,
-        "archived" .= arch,
+        "internal" .= i,
         "created" .= c
       ]
 
@@ -334,22 +367,22 @@ instance FromJSON DBAddress where
         <*> o .: "label"
         <*> o .: "received"
         <*> o .: "txCount"
-        <*> o .: "archived"
+        <*> o .: "internal"
         <*> o .: "created"
 
 insertAddress ::
   (MonadUnliftIO m) =>
   Network ->
-  Word32 ->
   DBAccountId ->
   SoftPath ->
   Address ->
   Text ->
   DB m (Either String DBAddress)
-insertAddress net idx accId deriv addr label =
+insertAddress net accId deriv addr label =
   runExceptT $ do
     time <- liftIO getCurrentTime
     addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
+    (isInternal, idx) <- parseDeriv
     let dbAddr =
           DBAddress
             (fromIntegral idx)
@@ -359,10 +392,16 @@ insertAddress net idx accId deriv addr label =
             label
             0
             0
-            False
+            isInternal
             time
     lift $ P.insert_ dbAddr
     return dbAddr
+  where
+    parseDeriv =
+      case pathToList deriv of
+        [0, x] -> return (False, x) -- Not an internal address
+        [1, x] -> return (True, x) -- Internal address
+        _ -> throwError "Invalid address SoftPath"
 
 receiveAddress ::
   (MonadUnliftIO m) =>
@@ -370,7 +409,7 @@ receiveAddress ::
   Maybe Text ->
   Text ->
   DB m (Either String (DBAccount, DBAddress))
-receiveAddress ctx nameM label = do
+receiveAddress ctx nameM label =
   runExceptT $ do
     (accId, acc) <- liftEither <=< lift $ getAccount nameM
     let net = accountNetwork acc
@@ -379,7 +418,7 @@ receiveAddress ctx nameM label = do
         (addr, _) = derivePathAddr ctx xpub extDeriv ext
     dbAddr <-
       liftEither <=< lift $
-        insertAddress net ext accId (extDeriv :/ ext) addr label
+        insertAddress net accId (extDeriv :/ ext) addr label
     newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
     return (newAcc, dbAddr)
 
@@ -392,8 +431,11 @@ getAddresses accId (Page lim off) = do
   as <-
     select $
       from $ \a -> do
-        where_ (a ^. DBAddressAccount ==. val accId)
-        orderBy [asc (a ^. DBAddressIndex)]
+        where_
+          ( a ^. DBAddressAccount ==. val accId
+              &&. a ^. DBAddressInternal ==. val False
+          )
+        orderBy [desc (a ^. DBAddressIndex)]
         limit $ fromIntegral lim
         offset $ fromIntegral off
         return a
@@ -401,3 +443,126 @@ getAddresses accId (Page lim off) = do
     if null as
       then Left "There are no addresses in this account"
       else Right $ entityVal <$> as
+
+allAddressesMap ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Network ->
+  DB m (Either String (Map Address SoftPath))
+allAddressesMap accId net =
+  runExceptT $ do
+    dbRes <-
+      lift $
+        select $
+          from $ \a -> do
+            where_ (a ^. DBAddressAccount ==. val accId)
+            return (a ^. DBAddressAddress, a ^. DBAddressDerivation)
+    res <-
+      forM dbRes $ \(Value at, Value dt) -> do
+        a <- liftEither $ textToAddrE net at
+        d <- liftEither $ maybeToEither "parsePath failed" $ parseSoft $ cs dt
+        return (a, d)
+    return $ Map.fromList res
+
+updateLabel ::
+  (MonadUnliftIO m) =>
+  Maybe Text ->
+  Word32 ->
+  Text ->
+  DB m (Either String (DBAccount, DBAddress))
+updateLabel nameM idx label = do
+  runExceptT $ do
+    (accId, acc) <- liftEither <=< lift $ getAccount nameM
+    let path = cs $ pathToStr $ extDeriv :/ idx
+        aKey = DBAddressKey accId path
+    unless (fromIntegral idx < dBAccountExternal acc) $
+      throwError $
+        "Address " <> show idx <> " does not exist"
+    adr <- lift $ P.updateGet aKey [DBAddressLabel P.=. label]
+    return (acc, adr)
+
+{- Transactions -}
+
+repsertTxInfo ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  TxInfo ->
+  DB m DBTxInfo
+repsertTxInfo net ctx accId tif = do
+  time <- liftIO getCurrentTime
+  let confirmed =
+        case txInfoBlockRef tif of
+          Store.BlockRef _ _ -> True
+          Store.MemRef _ -> False
+      tid = txHashToHex $ txInfoId tif
+      bRef = encode $ txInfoBlockRef tif
+      -- Confirmations will get updated when retrieving them
+      blob = BS.toStrict $ marshalJSON (net, ctx) tif{txInfoConfirmations = 0}
+      key = DBTxInfoKey tid accId
+      txInfo =
+        DBTxInfo
+          { dBTxInfoTxid = tid,
+            dBTxInfoAccount = accId,
+            dBTxInfoBlockRef = bRef,
+            dBTxInfoConfirmed = confirmed,
+            dBTxInfoBlob = blob,
+            dBTxInfoCreated = time
+          }
+  resM <- P.get key
+  case resM of
+    Just res -> do
+      let newTxInfo =
+            res
+            { dBTxInfoBlockRef = bRef,
+              dBTxInfoConfirmed = confirmed,
+              dBTxInfoBlob = blob
+            }
+      P.replace key newTxInfo
+      return newTxInfo
+    Nothing -> do
+      P.insert_ txInfo
+      return txInfo
+
+getTxs ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  Maybe Text ->
+  Page ->
+  DB m (Either String (DBAccount, [TxInfo]))
+getTxs ctx nameM (Page lim off) =
+  runExceptT $ do
+    (accId, acc) <- liftEither <=< lift $ getAccount nameM
+    let net = accountNetwork acc
+    dbTxs <-
+      lift $
+        select $
+          from $ \t -> do
+            where_ $ t ^. DBTxInfoAccount ==. val accId
+            orderBy [asc (t ^. DBTxInfoBlockRef)]
+            limit $ fromIntegral lim
+            offset $ fromIntegral off
+            return $ t ^. DBTxInfoBlob
+    res <-
+      forM dbTxs $ \(Value dbTx) -> do
+        liftEither $
+          maybeToEither "TxInfo unmarshalJSON Failed" $
+            unmarshalJSON (net, ctx) $
+              BS.fromStrict dbTx
+    metaM <- lift getMeta
+    case metaM of
+      Just (DBMeta _ h) ->
+        return (acc, updateConfirmations h <$> res)
+      _ -> return (acc, res)
+
+updateConfirmations :: Int -> TxInfo -> TxInfo
+updateConfirmations best tif =
+  case txInfoBlockRef tif of
+    Store.BlockRef h _ ->
+      let bestI = toInteger best :: Integer
+          hI = toInteger h :: Integer
+          confI = bestI - hI + 1
+       in tif {txInfoConfirmations = fromIntegral $ max 0 confI}
+    Store.MemRef _ ->
+      tif {txInfoConfirmations = 0}
