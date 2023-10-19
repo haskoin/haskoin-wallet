@@ -24,7 +24,7 @@ import qualified Data.Aeson as Json
 import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.List (nub, sort)
+import Data.List (nub, sort, (\\))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, fromMaybe)
@@ -146,6 +146,7 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
+import Control.Applicative (Alternative(some))
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -627,13 +628,13 @@ cmdTxs ctx nameM page =
       return $ ResponseTxs acc txInfos
 
 addrBatch :: Natural
-addrBatch = 1
+addrBatch = 100
 
 txBatch :: Natural
-txBatch = 1
+txBatch = 100
 
 txFullBatch :: Natural
-txFullBatch = 1
+txFullBatch = 100
 
 cmdSync :: Ctx -> Maybe Text -> IO Response
 cmdSync ctx nameM = do
@@ -648,19 +649,18 @@ cmdSync ctx nameM = do
       -- Get the addresses from our local database
       (addrPathMap, addrBalMap) <- liftDB $ allAddressesMap net accId
       -- Fetch the address balances online
+      let req = GetAddrsBalance $ Map.keys addrBalMap
       Store.SerialList storeBals <-
-        liftExcept $
-        apiBatch
-          ctx
-          addrBatch
-          (conf net)
-          (GetAddrsBalance $ Map.keys addrBalMap)
+        liftExcept $ apiBatch ctx addrBatch (conf net) req
       -- Filter only those addresses whose balances have changed
       balsToUpdate <- liftEither $ filterAddresses storeBals addrBalMap
-      -- Update the balances locally
+      -- Update balances
       liftDB $ updateAddressBalances net balsToUpdate
+      newAcc <- lift $ updateAccountBalances accId
+      -- Get a list of our confirmed txs in the local database
+      confirmedTxs <- liftDB $ getConfirmedTxs accId True
       -- Fetch the txids of the addresses to update
-      tids <- searchAddrTxs net ctx $ (.address) <$> balsToUpdate
+      tids <- searchAddrTxs net ctx confirmedTxs $ (.address) <$> balsToUpdate
       -- Fetch the full transactions
       Store.SerialList txs <-
         liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
@@ -669,7 +669,6 @@ cmdSync ctx nameM = do
       lift $ forM_ txInfos $ repsertTxInfo net ctx accId
       -- Update the best block for this network
       lift $ updateBest net (headerHash best.header) best.height
-      newAcc <- liftDB $ getAccountId accId
       return $
         ResponseSync
           newAcc
@@ -698,10 +697,11 @@ searchAddrTxs ::
   (MonadIO m) =>
   Network ->
   Ctx ->
+  [TxHash] ->
   [Address] ->
   ExceptT String m [TxHash]
-searchAddrTxs _ _ [] = return []
-searchAddrTxs net ctx as
+searchAddrTxs _ _ _ [] = return []
+searchAddrTxs net ctx confirmedTxs as
   | length as > fromIntegral addrBatch =
       nub . concat <$> mapM (go Nothing 0) (chunksOf addrBatch as)
   | otherwise =
@@ -721,7 +721,10 @@ searchAddrTxs net ctx as
                     offset = offset
                   }
             )
-      let tids = (.txid) <$> txRefs
+          -- Remove txs that we already have
+      let tids = ((.txid) <$> txRefs) \\ confirmedTxs
+      -- Either we have reached the end of the stream, or we have hit some
+      -- txs in confirmedTxs. In both cases, we can stop the search.
       if length tids < fromIntegral txBatch
         then return tids
         else do

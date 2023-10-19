@@ -79,6 +79,9 @@ import System.IO.Error (alreadyExistsErrorType)
 share
   [mkPersist sqlSettings, mkMigrate "migrateAll"]
   [persistLowerCase|
+
+DBWallet
+
 DBAccount
   index Int
   network Text
@@ -113,7 +116,6 @@ DBAddress
   created UTCTime default=CURRENT_TIME
   Primary account derivation
   UniqueAddress address
-  UniqueAccountDeriv account derivation
   deriving Show
 
 DBTxInfo
@@ -161,14 +163,14 @@ runDB action = do
 updateBest ::
   (MonadUnliftIO m) => Network -> BlockHash -> BlockHeight -> DB m ()
 updateBest net hash height = do
-  let netT = cs $ net.name
+  let netT = cs net.name
       key = DBBestKey netT
   P.repsert key $ DBBest netT (blockHashToHex hash) (fromIntegral height)
 
 getBest ::
   (MonadUnliftIO m) => Network -> DB m (Maybe (BlockHash, BlockHeight))
 getBest net = do
-  let netT = cs $ net.name
+  let netT = cs net.name
   resM <- P.get $ DBBestKey netT
   return $ do
     DBBest _ a b <- resM
@@ -362,6 +364,27 @@ renameAccount oldName newName
             then return $ Left $ "The account " <> cs oldName <> " does not exist"
             else getAccountVal (Just newName)
 
+updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
+updateAccountBalances accId = do
+  confirmed <- selectSum DBAddressBalanceConfirmed
+  unconfirmed <- selectSum DBAddressBalanceUnconfirmed
+  coins <- selectSum DBAddressBalanceCoins
+  update $ \a -> do
+    set
+      a
+      [ DBAccountBalanceConfirmed =. val (unpack confirmed),
+        DBAccountBalanceUnconfirmed =. val (unpack unconfirmed),
+        DBAccountBalanceCoins =. val (unpack coins)
+      ]
+    where_ $ a ^. DBAccountId ==. val accId
+  fromJust <$> P.get accId
+  where
+    unpack m = fromMaybe 0 $ unValue $ fromMaybe (Value $ Just 0) m
+    selectSum field =
+      selectOne . from $ \a -> do
+        where_ (a ^. DBAddressAccount ==. val accId)
+        return $ sum_ $ a ^. field
+
 {- Addresses -}
 
 instance ToJSON DBAddress where
@@ -455,7 +478,7 @@ updateAddressBalances net storeBals =
               DBAddressBalanceTxs =. val s.txs,
               DBAddressBalanceReceived =. val s.received
             ]
-          where_ $ (a ^. DBAddressAddress ==. val addrT)
+          where_ (a ^. DBAddressAddress ==. val addrT)
 
 -- Insert an address into the database. Does nothing if it already exists.
 insertAddress ::
@@ -622,15 +645,15 @@ existsTx ::
   (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
 existsTx accId txid = isJust <$> P.get (DBTxInfoKey accId $ txHashToHex txid)
 
-getUnconfirmedTxs ::
-  (MonadUnliftIO m) => DBAccountId -> DB m (Either String [TxHash])
-getUnconfirmedTxs accId = do
+getConfirmedTxs ::
+  (MonadUnliftIO m) => DBAccountId -> Bool -> DB m (Either String [TxHash])
+getConfirmedTxs accId confirmed = do
   ts <-
     select $
       from $ \t -> do
         where_
           ( t ^. DBTxInfoAccount ==. val accId
-              &&. t ^. DBTxInfoConfirmed ==. val False
+              &&. t ^. DBTxInfoConfirmed ==. val confirmed
           )
         orderBy [asc (t ^. DBTxInfoBlockRef)]
         return $ t ^. DBTxInfoTxid
