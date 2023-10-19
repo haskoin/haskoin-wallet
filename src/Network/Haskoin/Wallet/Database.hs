@@ -49,7 +49,7 @@ import Data.Char (GeneralCategory (OtherNumber))
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromJust, fromMaybe, isJust)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
 import Data.Serialize (decode, encode)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -104,8 +104,11 @@ DBAddress
   derivation Text
   address Text
   label Text
-  received Word64
-  txcount Int
+  balanceConfirmed Word64
+  balanceUnconfirmed Word64
+  balanceCoins Word64
+  balanceTxs Word64
+  balanceReceived Word64
   internal Bool
   created UTCTime default=CURRENT_TIME
   Primary account derivation
@@ -114,20 +117,20 @@ DBAddress
   deriving Show
 
 DBTxInfo
-  txid Text
   account DBAccountId
+  txid Text
   blockRef ByteString
   confirmed Bool
   blob ByteString
   created UTCTime default=CURRENT_TIME
-  Primary txid account
+  Primary account txid
   deriving Show
 
 DBBest
-  account DBAccountId
+  network Text
   bestBlock Text
   bestHeight Int
-  Primary account
+  Primary network
   deriving Show
 
 DBRawTx
@@ -156,19 +159,17 @@ runDB action = do
 {- Meta -}
 
 updateBest ::
-  (MonadUnliftIO m) => DBAccountId -> BlockHash -> BlockHeight -> DB m ()
-updateBest accId hash height = do
-  let key = DBBestKey accId
-  P.repsert key $ DBBest accId (blockHashToHex hash) (fromIntegral height)
-
-deleteBest ::
-  (MonadUnliftIO m) => DBAccountId -> DB m ()
-deleteBest accId = P.delete $ DBBestKey accId
+  (MonadUnliftIO m) => Network -> BlockHash -> BlockHeight -> DB m ()
+updateBest net hash height = do
+  let netT = cs $ net.name
+      key = DBBestKey netT
+  P.repsert key $ DBBest netT (blockHashToHex hash) (fromIntegral height)
 
 getBest ::
-     (MonadUnliftIO m) => DBAccountId -> DB m (Maybe (BlockHash, BlockHeight))
-getBest accId = do
-  resM <- P.get $ DBBestKey accId
+  (MonadUnliftIO m) => Network -> DB m (Maybe (BlockHash, BlockHeight))
+getBest net = do
+  let netT = cs $ net.name
+  resM <- P.get $ DBBestKey netT
   return $ do
     DBBest _ a b <- resM
     hash <- hexToBlockHash a
@@ -211,20 +212,20 @@ instance FromJSON DBAccount where
 
 data AccountBalance = AccountBalance
   { -- | confirmed balance
-    balanceConfirmed :: !Word64,
+    accBalanceConfirmed :: !Word64,
     -- | unconfirmed balance
-    balanceUnconfirmed :: !Word64,
+    accBalanceUnconfirmed :: !Word64,
     -- | number of unspent outputs
-    balanceCoins :: !Word64
+    accBalanceCoins :: !Word64
   }
   deriving (Show, Read, Eq, Ord)
 
 instance ToJSON AccountBalance where
   toJSON b =
     object
-      [ "confirmed" .= balanceConfirmed b,
-        "unconfirmed" .= balanceUnconfirmed b,
-        "coins" .= balanceCoins b
+      [ "confirmed" .= accBalanceConfirmed b,
+        "unconfirmed" .= accBalanceUnconfirmed b,
+        "coins" .= accBalanceCoins b
       ]
 
 instance FromJSON AccountBalance where
@@ -326,7 +327,7 @@ getAccount Nothing = do
       _ -> Left "Specify which account to use"
 
 getAccountId ::
-     (MonadUnliftIO m) => DBAccountId -> DB m (Either String DBAccount)
+  (MonadUnliftIO m) => DBAccountId -> DB m (Either String DBAccount)
 getAccountId accId = maybeToEither "Invalid account" <$> P.get accId
 
 getAccountVal ::
@@ -364,32 +365,97 @@ renameAccount oldName newName
 {- Addresses -}
 
 instance ToJSON DBAddress where
-  toJSON (DBAddress idx acc d addr l r t i c) =
+  toJSON acc =
     object
-      [ "index" .= idx,
-        "account" .= acc,
-        "derivation" .= d,
-        "address" .= addr,
-        "label" .= l,
-        "received" .= r,
-        "txCount" .= t,
-        "internal" .= i,
-        "created" .= c
+      [ "index" .= dBAddressIndex acc,
+        "account" .= dBAddressAccount acc,
+        "derivation" .= dBAddressDerivation acc,
+        "address" .= dBAddressAddress acc,
+        "label" .= dBAddressLabel acc,
+        "balance"
+          .= AddressBalance
+            (dBAddressBalanceConfirmed acc)
+            (dBAddressBalanceUnconfirmed acc)
+            (dBAddressBalanceCoins acc)
+            (dBAddressBalanceTxs acc)
+            (dBAddressBalanceReceived acc),
+        "internal" .= dBAddressInternal acc,
+        "created" .= dBAddressCreated acc
       ]
 
 instance FromJSON DBAddress where
   parseJSON =
-    withObject "DBAddress" $ \o ->
+    withObject "DBAddress" $ \o -> do
+      bal <- o .: "balance"
       DBAddress
         <$> o .: "index"
         <*> o .: "account"
         <*> o .: "derivation"
         <*> o .: "address"
         <*> o .: "label"
-        <*> o .: "received"
-        <*> o .: "txCount"
+        <*> bal .: "confirmed"
+        <*> bal .: "unconfirmed"
+        <*> bal .: "coins"
+        <*> bal .: "txs"
+        <*> bal .: "received"
         <*> o .: "internal"
         <*> o .: "created"
+
+data AddressBalance = AddressBalance
+  { -- | confirmed balance
+    addrBalanceConfirmed :: !Word64,
+    -- | unconfirmed balance
+    addrBalanceUnconfirmed :: !Word64,
+    -- | number of unspent outputs
+    addrBalanceCoins :: !Word64,
+    -- | number of transactions
+    addrBalanceTxs :: !Word64,
+    -- | total amount from all outputs in this address
+    addrBalanceReceived :: !Word64
+  }
+  deriving (Show, Read, Eq, Ord)
+
+instance ToJSON AddressBalance where
+  toJSON b =
+    object
+      [ "confirmed" .= addrBalanceConfirmed b,
+        "unconfirmed" .= addrBalanceUnconfirmed b,
+        "coins" .= addrBalanceCoins b,
+        "txs" .= addrBalanceTxs b,
+        "received" .= addrBalanceReceived b
+      ]
+
+instance FromJSON AddressBalance where
+  parseJSON =
+    withObject "accountbalance" $ \o ->
+      AddressBalance
+        <$> o .: "confirmed"
+        <*> o .: "unconfirmed"
+        <*> o .: "coins"
+        <*> o .: "txs"
+        <*> o .: "received"
+
+updateAddressBalances ::
+  (MonadUnliftIO m) =>
+  Network ->
+  [Store.Balance] ->
+  DB m (Either String ())
+updateAddressBalances net storeBals =
+  runExceptT $
+    forM_ storeBals $ \s -> do
+      addrT <-
+        liftEither $ maybeToEither "Invalid Address" (addrToText net s.address)
+      lift $
+        update $ \a -> do
+          set
+            a
+            [ DBAddressBalanceConfirmed =. val s.confirmed,
+              DBAddressBalanceUnconfirmed =. val s.unconfirmed,
+              DBAddressBalanceCoins =. val s.utxo,
+              DBAddressBalanceTxs =. val s.txs,
+              DBAddressBalanceReceived =. val s.received
+            ]
+          where_ $ (a ^. DBAddressAddress ==. val addrT)
 
 -- Insert an address into the database. Does nothing if it already exists.
 insertAddress ::
@@ -414,6 +480,9 @@ insertAddress net accId deriv addr label =
             derivS
             addrT
             label'
+            0
+            0
+            0
             0
             0
             isInternal
@@ -450,18 +519,18 @@ updateDeriv net ctx accId path deriv =
         [1] -> return True
         _ -> throwError "Invalid updateDeriv SoftPath"
     let xPubKey = accountXPubKey ctx acc
-        label | internal = DBAccountInternal
-              | otherwise = DBAccountExternal
-        accDeriv | internal = dBAccountInternal
-                | otherwise = dBAccountExternal
+        label
+          | internal = DBAccountInternal
+          | otherwise = DBAccountExternal
+        accDeriv
+          | internal = dBAccountInternal
+          | otherwise = dBAccountExternal
     if accDeriv acc >= fromIntegral deriv
-      then return acc --Nothing to do
+      then return acc -- Nothing to do
       else do
         let addrs = addrsDerivPage ctx path (Page deriv 0) xPubKey
-        forM_ addrs $ \(a,p) -> lift $ insertAddress net accId p a ""
-        lift $ update $ \a -> do
-          set a [label =. val (fromIntegral deriv)]
-          where_ (a ^. DBAccountId ==. val accId)
+        forM_ addrs $ \(a, p) -> lift $ insertAddress net accId p a ""
+        lift $ P.update accId [label P.=. fromIntegral deriv]
         liftEither <=< lift $ getAccountId accId
 
 receiveAddress ::
@@ -502,7 +571,7 @@ allAddressesMap ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
-  DB m (Either String (Map Address SoftPath))
+  DB m (Either String (Map Address SoftPath, Map Address AddressBalance))
 allAddressesMap net accId =
   runExceptT $ do
     dbRes <-
@@ -510,13 +579,25 @@ allAddressesMap net accId =
         select $
           from $ \a -> do
             where_ (a ^. DBAddressAccount ==. val accId)
-            return (a ^. DBAddressAddress, a ^. DBAddressDerivation)
+            return a
     res <-
-      forM dbRes $ \(Value at, Value dt) -> do
-        a <- liftEither $ textToAddrE net at
-        d <- liftEither $ maybeToEither "parsePath failed" $ parseSoft $ cs dt
-        return (a, d)
-    return $ Map.fromList res
+      forM dbRes $ \(Entity _ dbAddr) -> do
+        a <- liftEither $ textToAddrE net $ dBAddressAddress dbAddr
+        d <-
+          liftEither $
+            maybeToEither "parsePath failed" $
+              parseSoft $
+                cs $
+                  dBAddressDerivation dbAddr
+        let b =
+              AddressBalance
+                (dBAddressBalanceConfirmed dbAddr)
+                (dBAddressBalanceUnconfirmed dbAddr)
+                (dBAddressBalanceCoins dbAddr)
+                (dBAddressBalanceTxs dbAddr)
+                (dBAddressBalanceReceived dbAddr)
+        return ((a, d), (a, b))
+    return (Map.fromList $ fst <$> res, Map.fromList $ snd <$> res)
 
 updateLabel ::
   (MonadUnliftIO m) =>
@@ -537,7 +618,27 @@ updateLabel nameM idx label = do
 
 {- Transactions -}
 
--- Insert a new transaction or replace if it already exists
+existsTx ::
+  (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
+existsTx accId txid = isJust <$> P.get (DBTxInfoKey accId $ txHashToHex txid)
+
+getUnconfirmedTxs ::
+  (MonadUnliftIO m) => DBAccountId -> DB m (Either String [TxHash])
+getUnconfirmedTxs accId = do
+  ts <-
+    select $
+      from $ \t -> do
+        where_
+          ( t ^. DBTxInfoAccount ==. val accId
+              &&. t ^. DBTxInfoConfirmed ==. val False
+          )
+        orderBy [asc (t ^. DBTxInfoBlockRef)]
+        return $ t ^. DBTxInfoTxid
+  return $
+    forM ts $ \(Value t) ->
+      maybeToEither "getUnconfirmedTxs invalid TxHash" $ hexToTxHash t
+
+-- Insert a new transaction or replace it, if it already exists
 repsertTxInfo ::
   (MonadUnliftIO m) =>
   Network ->
@@ -555,11 +656,11 @@ repsertTxInfo net ctx accId tif = do
       bRef = encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
       blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
-      key = DBTxInfoKey tid accId
+      key = DBTxInfoKey accId tid
       txInfo =
         DBTxInfo
-          { dBTxInfoTxid = tid,
-            dBTxInfoAccount = accId,
+          { dBTxInfoAccount = accId,
+            dBTxInfoTxid = tid,
             dBTxInfoBlockRef = bRef,
             dBTxInfoConfirmed = confirmed,
             dBTxInfoBlob = blob,
@@ -605,7 +706,7 @@ getTxs ctx nameM (Page lim off) =
           maybeToEither "TxInfo unmarshalJSON Failed" $
             unmarshalJSON (net, ctx) $
               BS.fromStrict dbTx
-    bestM <- lift $ getBest accId
+    bestM <- lift $ getBest net
     case bestM of
       Just (_, h) ->
         return (acc, updateConfirmations h <$> res)

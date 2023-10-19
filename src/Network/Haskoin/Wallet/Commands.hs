@@ -24,7 +24,7 @@ import qualified Data.Aeson as Json
 import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.List (nub)
+import Data.List (nub, sort)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromJust, fromMaybe)
@@ -351,7 +351,7 @@ instance MarshalJSON Ctx Response where
             "account" .= as,
             "bestblock" .= bb,
             "bestheight" .= bh,
-            "importedtxcount" .= tc
+            "newtxs" .= tc
           ]
       ResponseScanAcc a ->
         object
@@ -455,7 +455,7 @@ instance MarshalJSON Ctx Response where
             <$> o .: "account"
             <*> o .: "bestblock"
             <*> o .: "bestheight"
-            <*> o .: "importedtxcount"
+            <*> o .: "newtxs"
         "scanacc" -> do
           a <- o .: "account"
           return $ ResponseScanAcc a
@@ -480,14 +480,6 @@ instance MarshalJSON Ctx Response where
           return $ ResponseRollDice ns e
         _ -> fail "Invalid JSON response type"
 
-addrsToAccBalance :: [Store.Balance] -> AccountBalance
-addrsToAccBalance xs =
-  AccountBalance
-    { balanceConfirmed = fromIntegral $ sum $ (.confirmed) <$> xs,
-      balanceUnconfirmed = fromIntegral $ sum $ (.unconfirmed) <$> xs,
-      balanceCoins = fromIntegral $ sum $ (.utxo) <$> xs
-    }
-
 catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
 catchResponseError m = do
   resE <- runExceptT m
@@ -508,7 +500,7 @@ commandResponse ctx =
     CommandAddrs accM p -> cmdAddrs accM p
     CommandLabel accM i l -> cmdLabel accM i l
     CommandTxs accM p -> cmdTxs ctx accM p
-    CommandSync accM b -> cmdSync ctx accM b
+    CommandSync accM -> cmdSync ctx accM
     CommandScanAcc accM -> cmdScanAccount ctx accM
 
 --  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
@@ -634,69 +626,86 @@ cmdTxs ctx nameM page =
       (acc, txInfos) <- liftDB $ getTxs ctx nameM page
       return $ ResponseTxs acc txInfos
 
-cmdSync :: Ctx -> Maybe Text -> Bool -> IO Response
-cmdSync ctx nameM full = do
+addrBatch :: Natural
+addrBatch = 1
+
+txBatch :: Natural
+txBatch = 1
+
+txFullBatch :: Natural
+txFullBatch = 1
+
+cmdSync :: Ctx -> Maybe Text -> IO Response
+cmdSync ctx nameM = do
   runDB $
     catchResponseError $ do
       (accId, acc) <- liftDB $ getAccount nameM
       let net = accountNetwork acc
-      (newAcc, block, txcount) <-
-        liftEither <=< liftIO $ syncAccount net ctx accId full
+      -- Check API health
+      checkHealth ctx net
+      -- Get the new best block before starting the sync
+      best <- liftExcept $ apiCall ctx (conf net) (GetBlockBest def)
+      -- Get the addresses from our local database
+      (addrPathMap, addrBalMap) <- liftDB $ allAddressesMap net accId
+      -- Fetch the address balances online
+      Store.SerialList storeBals <-
+        liftExcept $
+        apiBatch
+          ctx
+          addrBatch
+          (conf net)
+          (GetAddrsBalance $ Map.keys addrBalMap)
+      -- Filter only those addresses whose balances have changed
+      balsToUpdate <- liftEither $ filterAddresses storeBals addrBalMap
+      -- Update the balances locally
+      liftDB $ updateAddressBalances net balsToUpdate
+      -- Fetch the txids of the addresses to update
+      tids <- searchAddrTxs net ctx $ (.address) <$> balsToUpdate
+      -- Fetch the full transactions
+      Store.SerialList txs <-
+        liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
+      -- Convert them to TxInfo and store them in the local database
+      let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
+      lift $ forM_ txInfos $ repsertTxInfo net ctx accId
+      -- Update the best block for this network
+      lift $ updateBest net (headerHash best.header) best.height
+      newAcc <- liftDB $ getAccountId accId
       return $
         ResponseSync
           newAcc
-          (headerHash block.header)
-          (fromIntegral block.height)
-          txcount
+          (headerHash best.header)
+          (fromIntegral best.height)
+          (fromIntegral $ length txInfos)
 
-syncAccount ::
-  Network ->
-  Ctx ->
-  DBAccountId ->
-  Bool ->
-  IO (Either String (DBAccount, Store.BlockData, Natural))
-syncAccount net ctx accId full = do
-  runDB $ do
-    runExceptT $ do
-      checkHealth ctx net
-      -- Reset the best block in case of full sync
-      when full $ lift $ deleteBest accId
-      -- Get the new best block before starting the sync
-      newBest <- liftExcept $ apiCall ctx (conf net) (GetBlockBest def)
-      -- Get a list of addresses to sync
-      addrMap <- liftDB $ allAddressesMap net accId
-      let as = Map.keys addrMap
-      -- Fetch all the new txids of those addresses
-      -- We start searching at the best block stored in the local database
-      oldBestM <- lift $ getBest accId
-      let startM = (.get) . fst <$> oldBestM
-      tids <- searchAddrTxs net ctx startM 100 100 as
-      -- Fetch the full transactions
-      Store.SerialList txs <-
-        liftExcept $ apiBatch ctx 100 (conf net) (GetTxs tids)
-      -- Convert them to TxInfo and store them in the local database
-      let txInfos = toTxInfo addrMap (fromIntegral newBest.height) <$> txs
-      lift $ forM_ txInfos $ repsertTxInfo net ctx accId
-      -- Update the best block for this network
-      lift $ updateBest accId (headerHash newBest.header) newBest.height
-      newAcc <- liftDB $ getAccountId accId
-      return (newAcc, newBest, fromIntegral $ length txInfos)
+-- Filter addresses that do not need to be updated
+filterAddresses ::
+  [Store.Balance] ->
+  Map Address AddressBalance ->
+  Either String [Store.Balance]
+filterAddresses sBals aMap
+  | sort ((.address) <$> sBals) /= sort (Map.keys aMap) =
+      Left "Sync: addresses do not match"
+  | otherwise =
+      Right $ filter f sBals
+  where
+    f s =
+      let b = fromJust $ s.address `Map.lookup` aMap
+       in s.txs /= addrBalanceTxs b
+            || s.confirmed /= addrBalanceConfirmed b
+            || s.unconfirmed /= addrBalanceUnconfirmed b
 
 searchAddrTxs ::
   (MonadIO m) =>
   Network ->
   Ctx ->
-  Maybe Hash256 ->
-  Natural ->
-  Natural ->
   [Address] ->
   ExceptT String m [TxHash]
-searchAddrTxs _ _ _ _ _ [] = return []
-searchAddrTxs net ctx startM aBatch tBatch as
-  | length as > fromIntegral aBatch =
-      nub . concat <$> mapM (go startM 0) (chunksOf aBatch as)
-  | otherwise = 
-      nub <$> go startM 0 as
+searchAddrTxs _ _ [] = return []
+searchAddrTxs net ctx as
+  | length as > fromIntegral addrBatch =
+      nub . concat <$> mapM (go Nothing 0) (chunksOf addrBatch as)
+  | otherwise =
+      nub <$> go Nothing 0 as
   where
     go hashM offset xs = do
       Store.SerialList txRefs <-
@@ -707,13 +716,13 @@ searchAddrTxs net ctx startM aBatch tBatch as
             ( GetAddrsTxs
                 xs
                 def
-                  { limit = Just $ fromIntegral tBatch,
+                  { limit = Just $ fromIntegral txBatch,
                     start = StartParamHash <$> hashM,
                     offset = offset
                   }
             )
       let tids = (.txid) <$> txRefs
-      if length tids < fromIntegral tBatch
+      if length tids < fromIntegral txBatch
         then return tids
         else do
           let lastId = (last tids).get

@@ -1,6 +1,12 @@
 # Haskoin Wallet
 
-Haskoin Wallet (`hw`) is a lightweight [BIP44] command line wallet for bitcoin and bitcoin-cash. It can be used to manage cold storage funds in an online/offline environment. It requires a haskoin-store server for querying addresses and transactions. It is currently not suitable for large wallets as the local database is a JSON file.
+Haskoin Wallet (`hw`) is a lightweight [BIP44] command line wallet for bitcoin and bitcoin-cash. It can be used to manage cold storage funds in an online/offline environment. It requires a haskoin-store server for querying addresses and transactions. It is suitable for small-ish wallets that are managed by hand although work is being done to improve performance.
+
+## Dependencies
+
+```console
+apt install libsecp256k1-dev
+```
 
 ## Build
 
@@ -15,7 +21,7 @@ stack install
 hw --help
 ```
 
-## Verify binaries
+## Verify release binaries
 
 ### Get the GPG key
 

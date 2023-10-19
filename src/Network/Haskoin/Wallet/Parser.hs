@@ -130,8 +130,7 @@ data Command
       { commandFilePath :: !FilePath
       }
   | CommandSync
-      { commandMaybeAcc :: !(Maybe Text),
-        commandSyncFull :: !Bool
+      { commandMaybeAcc :: !(Maybe Text)
       }
   | CommandScanAcc
       { commandMaybeAcc :: !(Maybe Text)
@@ -665,26 +664,9 @@ sendTxParser =
 
 syncParser :: Ctx -> ParserInfo Command
 syncParser ctx =
-  info (CommandSync <$> accountOption ctx <*> fullOption) $
+  info (CommandSync <$> accountOption ctx ) $
     mconcat
-      [ progDesc "Sync transactions and balances from the blockchain",
-        footer
-          "Sync will download the latest transactions from the blockchain and\
-          \ store them in a local database. It will start syncing from the\
-          \ previously stored best block. To sync everything again from the\
-          \ beginning, call sync with the --full option. You can sync only\
-          \ an individual account by specifying the --account option."
-      ]
-
-fullOption :: Parser Bool
-fullOption =
-  switch $
-    mconcat
-      [ long "full",
-        help
-          "Reset the best block and sync from the start of the blockchain",
-        showDefault
-      ]
+      [ progDesc "Sync transactions and balances from the blockchain" ]
 
 {- ScanAcc Parser -}
 
