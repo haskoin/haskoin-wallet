@@ -10,7 +10,7 @@ import Control.Monad (forM, unless, when, (<=<))
 import Control.Monad.Except
   ( MonadError (throwError),
     liftEither,
-    runExceptT,
+    runExceptT, ExceptT,
   )
 import Control.Monad.State
   ( MonadIO (..),
@@ -60,14 +60,6 @@ import Haskoin.Transaction
     verifyStdTx,
   )
 import Haskoin.Util (maybeToEither)
-import Network.Haskoin.Wallet.AccountStore
-  ( AccountStore,
-    accountStoreAccount,
-    bip44Deriv,
-    genExtAddress,
-    genIntAddress,
-    storeAddressMap,
-  )
 import Network.Haskoin.Wallet.FileIO
   ( TxSignData
       ( TxSignData,
@@ -98,14 +90,14 @@ conf :: Network -> ApiConfig
 conf net = ApiConfig net (def :: ApiConfig).host
 
 buildTxSignData ::
-  (MonadIO m, MonadError String m, MonadState AccountStore m) =>
+  (MonadIO m) =>
   Network ->
   Ctx ->
   [(Address, Natural)] ->
   Natural ->
   Natural ->
   Bool ->
-  m TxSignData
+  ExceptT String m TxSignData
 buildTxSignData net ctx rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
@@ -267,7 +259,7 @@ noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 -- Transaction Sweeping --
 
 buildSweepSignData ::
-  (MonadIO m, MonadError String m, MonadState AccountStore m) =>
+  (MonadIO m, MonadError String m) =>
   Network ->
   Ctx ->
   [Address] ->
@@ -296,7 +288,7 @@ buildSweepSignData net ctx addrs feeByte dust
         return $ TxSignData tx depTxs inDerivs outDerivs acc False net
 
 buildSweepTxs ::
-  (MonadError String m, MonadState AccountStore m) =>
+  (MonadError String m) =>
   Network ->
   Ctx ->
   [Store.Unspent] ->

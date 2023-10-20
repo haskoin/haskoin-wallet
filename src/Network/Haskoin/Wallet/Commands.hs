@@ -55,6 +55,7 @@ import Haskoin.Store.WebClient
   ( GetAddrTxs (GetAddrTxs),
     GetAddrsBalance (GetAddrsBalance),
     GetAddrsTxs (GetAddrsTxs),
+    GetAddrsUnspent (GetAddrsUnspent),
     GetBlockBest (GetBlockBest),
     GetHealth (GetHealth),
     GetTxs (GetTxs),
@@ -68,25 +69,6 @@ import Haskoin.Transaction (TxHash (..))
 import Haskoin.Util
   ( MarshalJSON (marshalValue, unmarshalValue),
     maybeToEither,
-  )
-import Network.Haskoin.Wallet.AccountStore
-  ( AccountMap,
-    accountStoreAccount,
-    addrsDerivPage,
-    emptyAccountStore,
-    extAddresses,
-    extDeriv,
-    genExtAddress,
-    getAccountStoreByDeriv,
-    insertAccountStore,
-    intDeriv,
-    readAccountLabels,
-    readAccountMap,
-    renameAccountStore,
-    storeAddressMap,
-    withAccountMap,
-    withAccountStore,
-    writeAccountLabel,
   )
 import Network.Haskoin.Wallet.Amounts
   ( AmountUnit,
@@ -119,7 +101,7 @@ import Network.Haskoin.Wallet.FileIO
     txsChecksum,
     writeDoc,
   )
-import Network.Haskoin.Wallet.Parser (Command (..))
+import Network.Haskoin.Wallet.Parser
 import Network.Haskoin.Wallet.Signing
   ( MnemonicPass (..),
     buildSweepSignData,
@@ -229,7 +211,8 @@ data Response
       { responseAccount :: !DBAccount,
         responseBestBlock :: !BlockHash,
         responseBestHeight :: !Natural,
-        responseTxCount :: !Natural
+        responseTxCount :: !Natural,
+        responseCoinCount :: !Natural
       }
   | ResponseDiscoverAcc
       { responseAccount :: !DBAccount
@@ -350,13 +333,14 @@ instance MarshalJSON Ctx Response where
             "transaction" .= marshalValue (accountNetwork a, ctx) t,
             "networktxid" .= h
           ]
-      ResponseSyncAcc as bb bh tc ->
+      ResponseSyncAcc as bb bh tc cc ->
         object
           [ "type" .= Json.String "syncacc",
             "account" .= as,
             "bestblock" .= bb,
             "bestheight" .= bh,
-            "newtxs" .= tc
+            "txupdates" .= tc,
+            "coinupdates" .= cc
           ]
       ResponseDiscoverAcc a ->
         object
@@ -460,7 +444,8 @@ instance MarshalJSON Ctx Response where
             <$> o .: "account"
             <*> o .: "bestblock"
             <*> o .: "bestheight"
-            <*> o .: "newtxs"
+            <*> o .: "txupdates"
+            <*> o .: "coinupdates"
         "discoveracc" -> do
           a <- o .: "account"
           return $ ResponseDiscoverAcc a
@@ -648,24 +633,33 @@ cmdSyncAcc ctx nameM = do
       -- Get the addresses from our local database
       (addrPathMap, addrBalMap) <- liftDB $ allAddressesMap net accId
       -- Fetch the address balances online
-      let req = GetAddrsBalance $ Map.keys addrBalMap
       Store.SerialList storeBals <-
-        liftExcept $ apiBatch ctx addrBatch (conf net) req
+        liftExcept $
+          apiBatch ctx addrBatch (conf net) $
+            GetAddrsBalance $
+              Map.keys addrBalMap
       -- Filter only those addresses whose balances have changed
       balsToUpdate <- liftEither $ filterAddresses storeBals addrBalMap
+      let addrsToUpdate = (.address) <$> balsToUpdate
       -- Update balances
       liftDB $ updateAddressBalances net balsToUpdate
       newAcc <- lift $ updateAccountBalances accId
       -- Get a list of our confirmed txs in the local database
       confirmedTxs <- liftDB $ getConfirmedTxs accId True
       -- Fetch the txids of the addresses to update
-      tids <- searchAddrTxs net ctx confirmedTxs $ (.address) <$> balsToUpdate
+      tids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
       -- Fetch the full transactions
       Store.SerialList txs <-
         liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
       -- Convert them to TxInfo and store them in the local database
       let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
       lift $ forM_ txInfos $ repsertTxInfo net ctx accId
+      -- Fetch and update coins
+      Store.SerialList storeCoins <-
+        liftExcept $
+          apiBatch ctx coinBatch (conf net) $
+            GetAddrsUnspent addrsToUpdate def
+      coinCount <- lift $ updateCoins net accId storeCoins
       -- Update the best block for this network
       lift $ updateBest net (headerHash best.header) best.height
       return $
@@ -674,6 +668,7 @@ cmdSyncAcc ctx nameM = do
           (headerHash best.header)
           (fromIntegral best.height)
           (fromIntegral $ length txInfos)
+          (fromIntegral coinCount)
 
 addrBatch :: Natural
 addrBatch = 100
@@ -681,10 +676,13 @@ addrBatch = 100
 txBatch :: Natural
 txBatch = 100
 
+coinBatch :: Natural
+coinBatch = 100
+
 txFullBatch :: Natural
 txFullBatch = 100
 
--- Filter addresses that do not need to be updated
+-- Filter addresses that need to be updated
 filterAddresses ::
   [Store.Balance] ->
   Map Address AddressBalance ->
@@ -700,6 +698,7 @@ filterAddresses sBals aMap
        in s.txs /= addrBalanceTxs b
             || s.confirmed /= addrBalanceConfirmed b
             || s.unconfirmed /= addrBalanceUnconfirmed b
+            || s.utxo /= addrBalanceCoins b
 
 searchAddrTxs ::
   (MonadIO m) =>
@@ -770,6 +769,8 @@ cmdDiscoverAccount ctx nameM =
       let fAddrs = filter ((`elem` balAddrs) . fst) addrs
        in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
 
+{-
+
 prepareTx ::
   Ctx ->
   [(Text, Text)] ->
@@ -799,8 +800,6 @@ prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
     return (addr, val)
   badAmnt a =
     "Could not parse the amount " <> a <> " as " <> showUnit unit 1
-
-{-
 
 cmdSignTx :: Ctx -> FilePath -> Natural -> IO Response
 cmdSignTx ctx fp splitIn =

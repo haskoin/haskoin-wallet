@@ -10,15 +10,12 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network (Network (name), allNets, btc, netByName)
-import Network.Haskoin.Wallet.AccountStore
-  ( accountMapKeys,
-    withAccountMap,
-  )
 import Network.Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readNatural,
   )
 import Network.Haskoin.Wallet.Util (Page (Page))
+import Network.Haskoin.Wallet.Database
 import Numeric.Natural (Natural)
 import Options.Applicative
   ( Alternative (many, some, (<|>)),
@@ -411,10 +408,10 @@ accountArg ctx desc =
 
 accountCompleter :: Ctx -> String -> IO [String]
 accountCompleter ctx pref = do
-  keys <- fromRight [] <$> run
-  return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> keys)
+  names <- fromRight [] <$> run
+  return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> names)
   where
-    run = runExceptT $ withAccountMap ctx accountMapKeys
+    run = runDB getAccountNames
 
 {- Accounts Parser -}
 

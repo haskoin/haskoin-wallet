@@ -56,6 +56,8 @@ import qualified System.Directory as D
 import Conduit (MonadUnliftIO)
 import Data.Word (Word32)
 
+{-
+
 newtype AccountMap = AccountMap {getAccountMap :: Map Text AccountStore}
   deriving (Eq, Show)
 
@@ -401,25 +403,4 @@ addresses_ ctx getIdx deriv store =
 storeAddressMap :: Ctx -> AccountStore -> Map Address SoftPath
 storeAddressMap ctx store =
   Map.fromList $ extAddresses ctx store <> intAddresses ctx store
-
--- Helpers --
-
-extDeriv :: SoftPath
-extDeriv = Deriv :/ 0
-
-intDeriv :: SoftPath
-intDeriv = Deriv :/ 1
-
-bip44Deriv :: Network -> Natural -> HardPath
-bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
-
-xPubIndex :: XPubKey -> Natural
-xPubIndex = fromIntegral . xPubChild
-
-addrsDerivPage :: Ctx -> SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
-addrsDerivPage ctx deriv (Page lim off) xpub =
-  fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
-  where
-    addrs =
-      take (fromIntegral lim) $
-        derivePathAddrs ctx xpub deriv (fromIntegral off)
+-}

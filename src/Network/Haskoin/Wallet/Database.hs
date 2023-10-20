@@ -12,6 +12,7 @@
 {-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -49,6 +50,7 @@ import qualified Data.ByteString as BS
 import Data.Char (GeneralCategory (OtherNumber))
 import Data.Either (fromRight)
 import Data.Int (Int64)
+import Data.List (find)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe)
@@ -63,13 +65,13 @@ import Database.Persist.Sqlite (runSqlite)
 import Database.Persist.TH
 import Haskoin
 import Haskoin.Crypto (xPubChild)
+import Haskoin.Store.Data (confirmed)
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
 import Haskoin.Transaction
 import Haskoin.Util (maybeToEither)
-import Network.Haskoin.Wallet.AccountStore
 import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Signing (conf)
+import Network.Haskoin.Wallet.Signing (conf, walletFingerprint)
 import Network.Haskoin.Wallet.TxInfo
 import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
 import Numeric.Natural (Natural)
@@ -135,6 +137,19 @@ DBTxInfo
   blob ByteString
   created UTCTime default=CURRENT_TIME
   Primary accountWallet accountDerivation txid
+  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
+  deriving Show
+
+DBCoin
+  accountWallet DBWalletId
+  accountDerivation Text
+  outpoint Text
+  address Text
+  blob ByteString
+  confirmed Bool
+  locked Bool
+  created UTCTime default=CURRENT_TIME
+  Primary outpoint
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
 
@@ -269,13 +284,6 @@ accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
--- like `maybe` but for a maybe/value sandwich
-joinMaybe :: b -> (a -> b) -> Maybe (Value (Maybe a)) -> b
-joinMaybe d f m =
-  case m of
-    Just (Value m') -> maybe d f m'
-    Nothing -> d
-
 nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
 nextAccountDeriv walletFP net = do
   let walletId = DBWalletKey $ fingerprintToText walletFP
@@ -382,6 +390,12 @@ getAccounts = (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
 
 getAccountsVal :: (MonadUnliftIO m) => DB m [DBAccount]
 getAccountsVal = (entityVal <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+
+getAccountNames :: (MonadUnliftIO m) => DB m [Text]
+getAccountNames = do
+  res <- select . from $ \a ->
+    return $ a ^. DBAccountName
+  return $ unValue <$> res
 
 renameAccount ::
   (MonadUnliftIO m) => Text -> Text -> DB m (Either String DBAccount)
@@ -716,10 +730,7 @@ repsertTxInfo ::
   DB m DBTxInfo
 repsertTxInfo net ctx accId tif = do
   time <- liftIO getCurrentTime
-  let confirmed =
-        case txInfoBlockRef tif of
-          Store.BlockRef _ _ -> True
-          Store.MemRef _ -> False
+  let confirmed' = Store.confirmed $ txInfoBlockRef tif
       tid = txHashToHex $ txInfoId tif
       bRef = encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
@@ -732,7 +743,7 @@ repsertTxInfo net ctx accId tif = do
             dBTxInfoAccountDerivation = accDeriv,
             dBTxInfoTxid = tid,
             dBTxInfoBlockRef = bRef,
-            dBTxInfoConfirmed = confirmed,
+            dBTxInfoConfirmed = confirmed',
             dBTxInfoBlob = blob,
             dBTxInfoCreated = time
           }
@@ -742,7 +753,7 @@ repsertTxInfo net ctx accId tif = do
       let newTxInfo =
             res
               { dBTxInfoBlockRef = bRef,
-                dBTxInfoConfirmed = confirmed,
+                dBTxInfoConfirmed = confirmed',
                 dBTxInfoBlob = blob
               }
       P.replace key newTxInfo
@@ -794,3 +805,133 @@ updateConfirmations best tif =
        in tif {txInfoConfirmations = fromIntegral $ max 0 confI}
     Store.MemRef _ ->
       tif {txInfoConfirmations = 0}
+
+{- Coins -}
+
+outpointText :: OutPoint -> Text
+outpointText = encodeHex . encode
+
+-- Spendable coins must be confirmed and not locked
+getSpendableCoins :: (MonadUnliftIO m) => DBAccountId -> DB m [DBCoin]
+getSpendableCoins (DBAccountKey wallet accDeriv) = do
+  coins <- select . from $ \c -> do
+    where_ $
+      c ^. DBCoinAccountWallet ==. val wallet &&.
+      c ^. DBCoinAccountDerivation ==. val accDeriv &&.
+      c ^. DBCoinConfirmed ==. val True &&.
+      c ^. DBCoinLocked ==. val False
+    return c
+  return $ entityVal <$> coins
+
+insertCoin ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Text ->
+  Store.Unspent ->
+  DB m DBCoin
+insertCoin (DBAccountKey wallet accDeriv) addr unspent = do
+  time <- liftIO getCurrentTime
+  let newCoin =
+        DBCoin
+          { dBCoinAccountWallet = wallet,
+            dBCoinAccountDerivation = accDeriv,
+            dBCoinOutpoint = outpointText unspent.outpoint,
+            dBCoinAddress = addr,
+            dBCoinBlob = encode unspent,
+            dBCoinConfirmed = Store.confirmed unspent.block,
+            dBCoinLocked = False,
+            dBCoinCreated = time
+          }
+  P.insert_ newCoin
+  return newCoin
+
+updateCoin :: (MonadUnliftIO m) => Store.Unspent -> DB m ()
+updateCoin unspent = do
+  let key = DBCoinKey $ outpointText unspent.outpoint
+  P.update
+    key
+    [ DBCoinBlob P.=. encode unspent,
+      DBCoinConfirmed P.=. Store.confirmed unspent.block
+    ]
+
+deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
+deleteCoin coin =
+  delete . from $ \c ->
+    where_ $
+      c ^. DBCoinOutpoint ==. val (dBCoinOutpoint coin)
+
+getCoinsByAddr :: (MonadUnliftIO m) => Text -> DB m [DBCoin]
+getCoinsByAddr addr = do
+  coins <- select . from $ \c -> do
+    where_ $ c ^. DBCoinAddress ==. val addr
+    return c
+  return $ entityVal <$> coins
+
+-- Either insert, update or delete coins as required. Returns the number of
+-- coins that have either been inserted, updated or deleted.
+updateCoins ::
+  (MonadUnliftIO m) => Network -> DBAccountId -> [Store.Unspent] -> DB m Int
+updateCoins net accId allUnspent = do
+  let storeMap = groupCoins net allUnspent
+  res <- forM (Map.assocs storeMap) $ \(addr, storeCoins) -> do
+    localCoins <- getCoinsByAddr addr
+    let storeOps = outpointText . (.outpoint) <$> storeCoins
+        localOps = dBCoinOutpoint <$> localCoins
+        toDelete = filter ((`notElem` storeOps) . dBCoinOutpoint) localCoins
+        toInsert =
+          filter ((`notElem` localOps) . outpointText . (.outpoint)) storeCoins
+        toUpdate = filter (f localCoins) storeCoins
+    forM_ toDelete deleteCoin
+    forM_ toUpdate updateCoin
+    forM_ toInsert $ insertCoin accId addr
+    return $ length toDelete + length toUpdate + length toInsert
+  return $ sum res
+  where
+    f localCoins s =
+      let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins
+       in case cM of
+            Just c -> dBCoinConfirmed c /= confirmed s.block
+            _ -> False
+
+groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
+groupCoins net =
+  Map.fromListWith (<>) . mapMaybe f
+  where
+    f x =
+      case x.address of
+        Just a -> (,[x]) <$> addrToText net a
+        _ -> Nothing
+
+setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m ()
+setLockCoin op locked = do
+  let key = DBCoinKey $ outpointText op
+  P.update key [ DBCoinLocked P.=. locked ]
+
+{- Helpers -}
+
+extDeriv :: SoftPath
+extDeriv = Deriv :/ 0
+
+intDeriv :: SoftPath
+intDeriv = Deriv :/ 1
+
+bip44Deriv :: Network -> Natural -> HardPath
+bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
+
+xPubIndex :: XPubKey -> Natural
+xPubIndex = fromIntegral . xPubChild
+
+addrsDerivPage :: Ctx -> SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
+addrsDerivPage ctx deriv (Page lim off) xpub =
+  fmap (\(a, _, i) -> (a, deriv :/ i)) addrs
+  where
+    addrs =
+      take (fromIntegral lim) $
+        derivePathAddrs ctx xpub deriv (fromIntegral off)
+
+-- like `maybe` but for a maybe/value sandwich
+joinMaybe :: b -> (a -> b) -> Maybe (Value (Maybe a)) -> b
+joinMaybe d f m =
+  case m of
+    Just (Value m') -> maybe d f m'
+    Nothing -> d
