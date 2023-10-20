@@ -635,15 +635,6 @@ cmdTxs ctx nameM page =
       (acc, txInfos) <- liftDB $ txsPage ctx nameM page
       return $ ResponseTxs acc txInfos
 
-addrBatch :: Natural
-addrBatch = 100
-
-txBatch :: Natural
-txBatch = 100
-
-txFullBatch :: Natural
-txFullBatch = 100
-
 cmdSyncAcc :: Ctx -> Maybe Text -> IO Response
 cmdSyncAcc ctx nameM = do
   runDB $
@@ -683,6 +674,15 @@ cmdSyncAcc ctx nameM = do
           (headerHash best.header)
           (fromIntegral best.height)
           (fromIntegral $ length txInfos)
+
+addrBatch :: Natural
+addrBatch = 100
+
+txBatch :: Natural
+txBatch = 100
+
+txFullBatch :: Natural
+txFullBatch = 100
 
 -- Filter addresses that do not need to be updated
 filterAddresses ::
@@ -770,8 +770,6 @@ cmdDiscoverAccount ctx nameM =
       let fAddrs = filter ((`elem` balAddrs) . fst) addrs
        in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
 
-{-
-
 prepareTx ::
   Ctx ->
   [(Text, Text)] ->
@@ -781,31 +779,28 @@ prepareTx ::
   Natural ->
   Bool ->
   IO Response
-prepareTx ctx rcpTxt accM unit feeByte dust rcptPay =
-  catchResponseError $
-    withAccountStore ctx accM $ \storeName -> do
-      net <- gets accountNetwork
-      pub <- gets accountStoreXPubKey
-      rcpts <- liftEither $ mapM (toRecipient net unit) rcpTxt
-      checkHealth ctx net
-      signDat <- buildTxSignData net ctx rcpts feeByte dust rcptPay
-      path <- liftIO $ writeDoc TxFolder signDat
-      txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
-      store <- get
-      return $ ResponsePrepareTx storeName store (cs path) txInfoU
-
-toRecipient ::
-  Network ->
-  AmountUnit ->
-  (Text, Text) ->
-  Either String (Address, Natural)
-toRecipient net unit (a, v) = do
-  addr <- textToAddrE net a
-  val <- maybeToEither (cs badAmnt) (readAmount unit v)
-  return (addr, val)
+prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
+  runDB $
+    catchResponseError $ do
+        (accId, acc) <- liftDB $ getAccount nameM
+        let net = accountNetwork acc
+            pub = accountXPubKey ctx acc
+        rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
+        checkHealth ctx net
+        signDat <- buildTxSignData net ctx rcpts feeByte dust rcptPay
+        path <- liftIO $ writeDoc TxFolder signDat
+        txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
+        store <- get
+        return $ ResponsePrepareTx storeName store (cs path) txInfoU
   where
-    badAmnt =
-      "Could not parse the amount " <> a <> " as " <> showUnit unit 1
+  toRecipient net (a, v) = do
+    addr <- textToAddrE net a
+    val <- maybeToEither (cs $ badAmnt a) (readAmount unit v)
+    return (addr, val)
+  badAmnt a =
+    "Could not parse the amount " <> a <> " as " <> showUnit unit 1
+
+{-
 
 cmdSignTx :: Ctx -> FilePath -> Natural -> IO Response
 cmdSignTx ctx fp splitIn =
