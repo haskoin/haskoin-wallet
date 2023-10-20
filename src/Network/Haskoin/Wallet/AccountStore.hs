@@ -414,7 +414,7 @@ bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a
 
 xPubIndex :: XPubKey -> Natural
-xPubIndex = fromIntegral . (`clearBit` 31) . xPubChild
+xPubIndex = fromIntegral . xPubChild
 
 addrsDerivPage :: Ctx -> SoftPath -> Page -> XPubKey -> [(Address, SoftPath)]
 addrsDerivPage ctx deriv (Page lim off) xpub =

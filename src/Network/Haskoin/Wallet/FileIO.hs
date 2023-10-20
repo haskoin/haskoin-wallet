@@ -42,7 +42,7 @@ import Haskoin.Crypto
     fromWif,
     sha256,
     withContext,
-    xPubExport,
+    xPubExport, xPubChild, Fingerprint, fingerprintToText,
   )
 import Haskoin.Network (Network (name), netByName)
 import Haskoin.Transaction
@@ -93,7 +93,8 @@ class HasFilePath a where
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
     documentNetwork :: !Network,
-    documentName :: !Text
+    documentName :: !Text,
+    documentWallet :: !Fingerprint
   }
   deriving (Eq, Show)
 
@@ -105,21 +106,21 @@ instance MarshalJSON Ctx PubKeyDoc where
         <$> (unmarshalValue (net, ctx) =<< o .: "xpubkey")
         <*> return net
         <*> (o .: "name")
+        <*> (o .: "wallet")
 
-  marshalValue ctx (PubKeyDoc k net name) =
+  marshalValue ctx (PubKeyDoc k net name wallet) =
     object
       [ "xpubkey" .= marshalValue (net, ctx) k,
         "network" .= net.name,
-        "name" .= name
+        "name" .= name,
+        "wallet" .= wallet
       ]
 
--- This is only to avoid file clashes in ~/.hw/pubkeys
-pubKeyFP :: Network -> Ctx -> XPubKey -> String
-pubKeyFP net ctx = cs . Text.take 16 . xPubExport net ctx
-
 instance HasFilePath PubKeyDoc where
-  getFilePath ctx (PubKeyDoc key net _) =
-    net.name <> "-account-" <> pubKeyFP net ctx key <> ".json"
+  getFilePath _ (PubKeyDoc key net _ wallet) =
+    let i = show $ xPubChild key
+        w = fingerprintToText wallet
+     in "account-" <> cs w <> "-" <> net.name <> "-" <> i <> ".json"
 
 data TxSignData = TxSignData
   { txSignDataTx :: !Tx,

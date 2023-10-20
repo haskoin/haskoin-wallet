@@ -13,6 +13,7 @@
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TypeFamilies #-}
+{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
@@ -46,6 +47,7 @@ import Data.Bits (Bits (clearBit))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Char (GeneralCategory (OtherNumber))
+import Data.Either (fromRight)
 import Data.Int (Int64)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -81,11 +83,15 @@ share
   [persistLowerCase|
 
 DBWallet
+  fingerprint Text
+  Primary fingerprint
+  deriving Show
 
 DBAccount
+  name Text
+  wallet DBWalletId
   index Int
   network Text
-  name Text
   derivation Text
   external Int
   internal Int
@@ -95,15 +101,16 @@ DBAccount
   balanceUnconfirmed Word64
   balanceCoins Word64
   created UTCTime default=CURRENT_TIME
-  Primary derivation
+  Primary wallet derivation
   UniqueName name
   UniqueXPubKey xPubKey
-  UniqueNetworkId network index
+  UniqueNetworkId wallet network index
   deriving Show
 
 DBAddress
   index Int
-  account DBAccountId
+  accountWallet DBWalletId
+  accountDerivation Text
   derivation Text
   address Text
   label Text
@@ -114,18 +121,21 @@ DBAddress
   balanceReceived Word64
   internal Bool
   created UTCTime default=CURRENT_TIME
-  Primary account derivation
+  Primary accountWallet accountDerivation derivation
   UniqueAddress address
+  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
 
 DBTxInfo
-  account DBAccountId
+  accountWallet DBWalletId
+  accountDerivation Text
   txid Text
   blockRef ByteString
   confirmed Bool
   blob ByteString
   created UTCTime default=CURRENT_TIME
-  Primary account txid
+  Primary accountWallet accountDerivation txid
+  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
 
 DBBest
@@ -133,12 +143,6 @@ DBBest
   bestBlock Text
   bestHeight Int
   Primary network
-  deriving Show
-
-DBRawTx
-  txid Text
-  value ByteString
-  Primary txid
   deriving Show
 |]
 
@@ -180,28 +184,34 @@ getBest net = do
 {- Accounts -}
 
 instance ToJSON DBAccount where
-  toJSON (DBAccount idx net name deriv e i xpub keyfile bc bu bo t) =
+  toJSON acc =
     object
-      [ "index" .= idx,
-        "network" .= net,
-        "name" .= name,
-        "derivation" .= deriv,
-        "external" .= e,
-        "internal" .= i,
-        "xPubKey" .= xpub,
-        "pubKeyFile" .= keyfile,
-        "balance" .= toJSON (AccountBalance bc bu bo),
-        "created" .= t
+      [ "name" .= dBAccountName acc,
+        "wallet" .= dBAccountWallet acc,
+        "index" .= dBAccountIndex acc,
+        "network" .= dBAccountNetwork acc,
+        "derivation" .= dBAccountDerivation acc,
+        "external" .= dBAccountExternal acc,
+        "internal" .= dBAccountInternal acc,
+        "xPubKey" .= dBAccountXPubKey acc,
+        "pubKeyFile" .= dBAccountPubKeyFile acc,
+        "balance" .= toJSON (AccountBalance confirmed unconfirmed coins),
+        "created" .= dBAccountCreated acc
       ]
+    where
+      confirmed = dBAccountBalanceConfirmed acc
+      unconfirmed = dBAccountBalanceUnconfirmed acc
+      coins = dBAccountBalanceCoins acc
 
 instance FromJSON DBAccount where
   parseJSON =
     withObject "DBAccount" $ \o -> do
       bal <- o .: "balance"
       DBAccount
-        <$> o .: "index"
+        <$> o .: "name"
+        <*> o .: "wallet"
+        <*> o .: "index"
         <*> o .: "network"
-        <*> o .: "name"
         <*> o .: "derivation"
         <*> o .: "external"
         <*> o .: "internal"
@@ -248,20 +258,35 @@ accountNetwork =
     . cs
     . dBAccountNetwork
 
+accountWallet :: DBAccount -> Fingerprint
+accountWallet acc =
+  let (DBWalletKey walletFP) = dBAccountWallet acc
+   in fromRight (error "Invalid WalletId in database") $
+        textToFingerprint walletFP
+
 accountXPubKey :: Ctx -> DBAccount -> XPubKey
 accountXPubKey ctx acc =
   fromMaybe (error "Invalid XPubKey in database") $
     xPubImport (accountNetwork acc) ctx (dBAccountXPubKey acc)
 
-nextAccountDeriv :: (MonadUnliftIO m) => Network -> DB m Natural
-nextAccountDeriv net = do
+-- like `maybe` but for a maybe/value sandwich
+joinMaybe :: b -> (a -> b) -> Maybe (Value (Maybe a)) -> b
+joinMaybe d f m =
+  case m of
+    Just (Value m') -> maybe d f m'
+    Nothing -> d
+
+nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
+nextAccountDeriv walletFP net = do
+  let walletId = DBWalletKey $ fingerprintToText walletFP
   dM <-
     selectOne $
       from $ \a -> do
-        where_ (a ^. DBAccountNetwork ==. val (cs net.name))
-        orderBy [desc (a ^. DBAccountIndex)]
-        return $ a ^. DBAccountIndex
-  return $ maybe 0 ((+ 1) . fromIntegral . unValue) dM
+        where_ $
+          a ^. DBAccountNetwork ==. val (cs net.name)
+            &&. a ^. DBAccountWallet ==. val walletId
+        return $ max_ $ a ^. DBAccountIndex
+  return $ joinMaybe 0 ((+ 1) . fromIntegral) dM
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
@@ -269,15 +294,24 @@ existsAccount name = P.existsBy $ UniqueName name
 existsXPubKey :: (MonadUnliftIO m) => Network -> Ctx -> XPubKey -> DB m Bool
 existsXPubKey net ctx key = P.existsBy $ UniqueXPubKey $ xPubExport net ctx key
 
+getWalletOrCreate :: (MonadUnliftIO m) => Fingerprint -> DB m DBWalletId
+getWalletOrCreate fp = do
+  let key = DBWalletKey $ fingerprintToText fp
+  walletM <- P.get key
+  case walletM of
+    Just _ -> return key
+    _ -> P.insert $ DBWallet $ fingerprintToText fp
+
 insertAccount ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  Fingerprint ->
   Text ->
   XPubKey ->
   Text ->
   DB m (Either String DBAccount)
-insertAccount net ctx name xpub keyfile = do
+insertAccount net ctx walletFP name xpub keyfile = do
   existsName <- existsAccount name
   if existsName
     then return $ Left $ "Account " <> cs name <> " already exists"
@@ -287,13 +321,15 @@ insertAccount net ctx name xpub keyfile = do
         then return $ Left "The XPubKey already exists"
         else do
           time <- liftIO getCurrentTime
+          walletId <- getWalletOrCreate walletFP
           let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
               idx = fromIntegral $ xPubIndex xpub
               account =
                 DBAccount
-                  { dBAccountIndex = idx,
+                  { dBAccountName = name,
+                    dBAccountWallet = walletId,
+                    dBAccountIndex = idx,
                     dBAccountNetwork = cs net.name,
-                    dBAccountName = name,
                     dBAccountDerivation = cs $ pathToStr path,
                     dBAccountExternal = 0,
                     dBAccountInternal = 0,
@@ -359,13 +395,13 @@ renameAccount oldName newName
           c <-
             updateCount $ \a -> do
               set a [DBAccountName =. val newName]
-              where_ (a ^. DBAccountName ==. val oldName)
+              where_ $ a ^. DBAccountName ==. val oldName
           if c == 0
             then return $ Left $ "The account " <> cs oldName <> " does not exist"
             else getAccountVal (Just newName)
 
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
-updateAccountBalances accId = do
+updateAccountBalances accId@(DBAccountKey wallet accDeriv) = do
   confirmed <- selectSum DBAddressBalanceConfirmed
   unconfirmed <- selectSum DBAddressBalanceUnconfirmed
   coins <- selectSum DBAddressBalanceCoins
@@ -382,28 +418,31 @@ updateAccountBalances accId = do
     unpack m = fromMaybe 0 $ unValue $ fromMaybe (Value $ Just 0) m
     selectSum field =
       selectOne . from $ \a -> do
-        where_ (a ^. DBAddressAccount ==. val accId)
+        where_ $
+          a ^. DBAddressAccountWallet ==. val wallet
+            &&. a ^. DBAddressAccountDerivation ==. val accDeriv
         return $ sum_ $ a ^. field
 
 {- Addresses -}
 
 instance ToJSON DBAddress where
-  toJSON acc =
+  toJSON addr =
     object
-      [ "index" .= dBAddressIndex acc,
-        "account" .= dBAddressAccount acc,
-        "derivation" .= dBAddressDerivation acc,
-        "address" .= dBAddressAddress acc,
-        "label" .= dBAddressLabel acc,
+      [ "index" .= dBAddressIndex addr,
+        "wallet" .= dBAddressAccountWallet addr,
+        "account" .= dBAddressAccountDerivation addr,
+        "derivation" .= dBAddressDerivation addr,
+        "address" .= dBAddressAddress addr,
+        "label" .= dBAddressLabel addr,
         "balance"
           .= AddressBalance
-            (dBAddressBalanceConfirmed acc)
-            (dBAddressBalanceUnconfirmed acc)
-            (dBAddressBalanceCoins acc)
-            (dBAddressBalanceTxs acc)
-            (dBAddressBalanceReceived acc),
-        "internal" .= dBAddressInternal acc,
-        "created" .= dBAddressCreated acc
+            (dBAddressBalanceConfirmed addr)
+            (dBAddressBalanceUnconfirmed addr)
+            (dBAddressBalanceCoins addr)
+            (dBAddressBalanceTxs addr)
+            (dBAddressBalanceReceived addr),
+        "internal" .= dBAddressInternal addr,
+        "created" .= dBAddressCreated addr
       ]
 
 instance FromJSON DBAddress where
@@ -412,6 +451,7 @@ instance FromJSON DBAddress where
       bal <- o .: "balance"
       DBAddress
         <$> o .: "index"
+        <*> o .: "wallet"
         <*> o .: "account"
         <*> o .: "derivation"
         <*> o .: "address"
@@ -478,7 +518,7 @@ updateAddressBalances net storeBals =
               DBAddressBalanceTxs =. val s.txs,
               DBAddressBalanceReceived =. val s.received
             ]
-          where_ (a ^. DBAddressAddress ==. val addrT)
+          where_ $ a ^. DBAddressAddress ==. val addrT
 
 -- Insert an address into the database. Does nothing if it already exists.
 insertAddress ::
@@ -489,7 +529,7 @@ insertAddress ::
   Address ->
   Text ->
   DB m (Either String DBAddress)
-insertAddress net accId deriv addr label =
+insertAddress net (DBAccountKey wallet accDeriv) deriv addr label =
   runExceptT $ do
     time <- liftIO getCurrentTime
     addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
@@ -499,7 +539,8 @@ insertAddress net accId deriv addr label =
         dbAddr =
           DBAddress
             (fromIntegral idx)
-            accId
+            wallet
+            accDeriv
             derivS
             addrT
             label'
@@ -510,7 +551,7 @@ insertAddress net accId deriv addr label =
             0
             isInternal
             time
-    addrM <- lift $ P.get (DBAddressKey accId derivS)
+    addrM <- lift $ P.get (DBAddressKey wallet accDeriv derivS)
     case addrM of
       Just a -> return a
       Nothing -> do
@@ -576,14 +617,14 @@ receiveAddress ctx nameM label =
     return (newAcc, dbAddr)
 
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
-addressPage accId (Page lim off) = do
+addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
   as <-
     select $
       from $ \a -> do
-        where_
-          ( a ^. DBAddressAccount ==. val accId
-              &&. a ^. DBAddressInternal ==. val False
-          )
+        where_ $
+          a ^. DBAddressAccountWallet ==. val wallet
+            &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+            &&. a ^. DBAddressInternal ==. val False
         orderBy [desc (a ^. DBAddressIndex)]
         limit $ fromIntegral lim
         offset $ fromIntegral off
@@ -595,13 +636,15 @@ allAddressesMap ::
   Network ->
   DBAccountId ->
   DB m (Either String (Map Address SoftPath, Map Address AddressBalance))
-allAddressesMap net accId =
+allAddressesMap net (DBAccountKey wallet accDeriv) =
   runExceptT $ do
     dbRes <-
       lift $
         select $
           from $ \a -> do
-            where_ (a ^. DBAddressAccount ==. val accId)
+            where_ $
+              a ^. DBAddressAccountWallet ==. val wallet
+                &&. a ^. DBAddressAccountDerivation ==. val accDeriv
             return a
     res <-
       forM dbRes $ \(Entity _ dbAddr) -> do
@@ -630,9 +673,10 @@ updateLabel ::
   DB m (Either String (DBAccount, DBAddress))
 updateLabel nameM idx label = do
   runExceptT $ do
-    (accId, acc) <- liftEither <=< lift $ getAccount nameM
+    (DBAccountKey wallet accDeriv, acc) <-
+      liftEither <=< lift $ getAccount nameM
     let path = cs $ pathToStr $ extDeriv :/ idx
-        aKey = DBAddressKey accId path
+        aKey = DBAddressKey wallet accDeriv path
     unless (fromIntegral idx < dBAccountExternal acc) $
       throwError $
         "Address " <> show idx <> " does not exist"
@@ -643,18 +687,19 @@ updateLabel nameM idx label = do
 
 existsTx ::
   (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
-existsTx accId txid = isJust <$> P.get (DBTxInfoKey accId $ txHashToHex txid)
+existsTx (DBAccountKey wallet accDeriv) txid =
+  isJust <$> P.get (DBTxInfoKey wallet accDeriv $ txHashToHex txid)
 
 getConfirmedTxs ::
   (MonadUnliftIO m) => DBAccountId -> Bool -> DB m (Either String [TxHash])
-getConfirmedTxs accId confirmed = do
+getConfirmedTxs (DBAccountKey wallet accDeriv) confirmed = do
   ts <-
     select $
       from $ \t -> do
-        where_
-          ( t ^. DBTxInfoAccount ==. val accId
-              &&. t ^. DBTxInfoConfirmed ==. val confirmed
-          )
+        where_ $
+          t ^. DBTxInfoAccountWallet ==. val wallet
+            &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+            &&. t ^. DBTxInfoConfirmed ==. val confirmed
         orderBy [asc (t ^. DBTxInfoBlockRef)]
         return $ t ^. DBTxInfoTxid
   return $
@@ -679,10 +724,12 @@ repsertTxInfo net ctx accId tif = do
       bRef = encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
       blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
-      key = DBTxInfoKey accId tid
+      (DBAccountKey wallet accDeriv) = accId
+      key = DBTxInfoKey wallet accDeriv tid
       txInfo =
         DBTxInfo
-          { dBTxInfoAccount = accId,
+          { dBTxInfoAccountWallet = wallet,
+            dBTxInfoAccountDerivation = accDeriv,
             dBTxInfoTxid = tid,
             dBTxInfoBlockRef = bRef,
             dBTxInfoConfirmed = confirmed,
@@ -704,21 +751,24 @@ repsertTxInfo net ctx accId tif = do
       P.insert_ txInfo
       return txInfo
 
-getTxs ::
+txsPage ::
   (MonadUnliftIO m) =>
   Ctx ->
   Maybe Text ->
   Page ->
   DB m (Either String (DBAccount, [TxInfo]))
-getTxs ctx nameM (Page lim off) =
+txsPage ctx nameM (Page lim off) =
   runExceptT $ do
-    (accId, acc) <- liftEither <=< lift $ getAccount nameM
+    (DBAccountKey wallet accDeriv, acc) <-
+      liftEither <=< lift $ getAccount nameM
     let net = accountNetwork acc
     dbTxs <-
       lift $
         select $
           from $ \t -> do
-            where_ $ t ^. DBTxInfoAccount ==. val accId
+            where_ $
+              t ^. DBTxInfoAccountWallet ==. val wallet
+                &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
             orderBy [asc (t ^. DBTxInfoBlockRef)]
             limit $ fromIntegral lim
             offset $ fromIntegral off
@@ -731,8 +781,7 @@ getTxs ctx nameM (Page lim off) =
               BS.fromStrict dbTx
     bestM <- lift $ getBest net
     case bestM of
-      Just (_, h) ->
-        return (acc, updateConfirmations h <$> res)
+      Just (_, h) -> return (acc, updateConfirmations h <$> res)
       _ -> return (acc, res)
 
 updateConfirmations :: BlockHeight -> TxInfo -> TxInfo

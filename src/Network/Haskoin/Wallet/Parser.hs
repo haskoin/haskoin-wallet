@@ -129,10 +129,10 @@ data Command
   | CommandSendTx
       { commandFilePath :: !FilePath
       }
-  | CommandSync
+  | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text)
       }
-  | CommandScanAcc
+  | CommandDiscoverAcc
       { commandMaybeAcc :: !(Maybe Text)
       }
   | CommandVersion
@@ -202,8 +202,8 @@ commandParser ctx =
         mconcat
           [ commandGroup "Online (Blockchain) commands",
             command "sendtx" sendTxParser,
-            command "sync" (syncParser ctx),
-            command "scanacc" (scanAccParser ctx),
+            command "syncacc" (syncAccParser ctx),
+            command "discoveracc" (discoverAccParser ctx),
             hidden
           ],
       hsubparser $
@@ -660,24 +660,24 @@ sendTxParser =
   info (CommandSendTx <$> fileArgument "Path of the transaction file") $
     mconcat [progDesc "Broadcast a signed transaction file to the network"]
 
-{- Sync Parser -}
+{- SyncAcc Parser -}
 
-syncParser :: Ctx -> ParserInfo Command
-syncParser ctx =
-  info (CommandSync <$> accountOption ctx ) $
+syncAccParser :: Ctx -> ParserInfo Command
+syncAccParser ctx =
+  info (CommandSyncAcc <$> accountOption ctx ) $
     mconcat
       [ progDesc "Sync transactions and balances from the blockchain" ]
 
-{- ScanAcc Parser -}
+{- DiscoverAcc Parser -}
 
-scanAccParser :: Ctx -> ParserInfo Command
-scanAccParser ctx =
-  info (CommandScanAcc <$> accountOption ctx) $
+discoverAccParser :: Ctx -> ParserInfo Command
+discoverAccParser ctx =
+  info (CommandDiscoverAcc <$> accountOption ctx) $
     mconcat
       [ progDesc "Scan the blockchain to generate missing addresses",
         footer
           "If you are recovering an account or there are addresses missing in\
-          \ your account, you can call scanacc to search the blockchain for\
+          \ your account, you can call discoveracc to search the blockchain for\
           \ missing addresses. Addresses will be scanned and generated until\
           \ a gap (default = 20) of unused addresses is found."
       ]

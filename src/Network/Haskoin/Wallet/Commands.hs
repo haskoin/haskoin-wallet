@@ -10,6 +10,7 @@
 module Network.Haskoin.Wallet.Commands where
 
 import Conduit (MonadUnliftIO, ResourceT)
+import Control.Applicative (Alternative (some))
 import Control.Monad (forM, forM_, mzero, unless, when, (<=<))
 import Control.Monad.Except
   ( ExceptT,
@@ -37,6 +38,7 @@ import Haskoin.Address (Address, addrToText, textToAddr)
 import Haskoin.Block (BlockHash (..), headerHash)
 import Haskoin.Crypto
   ( Ctx,
+    Fingerprint,
     HardPath,
     Hash256,
     Mnemonic,
@@ -45,6 +47,7 @@ import Haskoin.Crypto
     deriveXPubKey,
     fromMnemonic,
     pathToList,
+    xPubFP,
   )
 import Haskoin.Network (Network (name), netByName)
 import qualified Haskoin.Store.Data as Store
@@ -118,12 +121,14 @@ import Network.Haskoin.Wallet.FileIO
   )
 import Network.Haskoin.Wallet.Parser (Command (..))
 import Network.Haskoin.Wallet.Signing
-  ( buildSweepSignData,
+  ( MnemonicPass (..),
+    buildSweepSignData,
     buildTxSignData,
     conf,
     signTxWithKeys,
     signWalletTx,
     signingKey,
+    walletFingerprint,
   )
 import Network.Haskoin.Wallet.TxInfo
   ( TxInfo,
@@ -146,7 +151,6 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
-import Control.Applicative (Alternative(some))
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -221,13 +225,13 @@ data Response
         responseTransaction :: !TxInfo,
         responseNetworkTxId :: !TxHash
       }
-  | ResponseSync
+  | ResponseSyncAcc
       { responseAccount :: !DBAccount,
         responseBestBlock :: !BlockHash,
         responseBestHeight :: !Natural,
         responseTxCount :: !Natural
       }
-  | ResponseScanAcc
+  | ResponseDiscoverAcc
       { responseAccount :: !DBAccount
       }
   | ResponseVersion
@@ -346,17 +350,17 @@ instance MarshalJSON Ctx Response where
             "transaction" .= marshalValue (accountNetwork a, ctx) t,
             "networktxid" .= h
           ]
-      ResponseSync as bb bh tc ->
+      ResponseSyncAcc as bb bh tc ->
         object
-          [ "type" .= Json.String "sync",
+          [ "type" .= Json.String "syncacc",
             "account" .= as,
             "bestblock" .= bb,
             "bestheight" .= bh,
             "newtxs" .= tc
           ]
-      ResponseScanAcc a ->
+      ResponseDiscoverAcc a ->
         object
-          [ "type" .= Json.String "scanacc",
+          [ "type" .= Json.String "discoveracc",
             "account" .= a
           ]
       ResponseVersion v ->
@@ -451,15 +455,15 @@ instance MarshalJSON Ctx Response where
           t <- f =<< o .: "transaction"
           h <- o .: "networktxid"
           return $ ResponseSendTx a t h
-        "sync" ->
-          ResponseSync
+        "syncacc" ->
+          ResponseSyncAcc
             <$> o .: "account"
             <*> o .: "bestblock"
             <*> o .: "bestheight"
             <*> o .: "newtxs"
-        "scanacc" -> do
+        "discoveracc" -> do
           a <- o .: "account"
-          return $ ResponseScanAcc a
+          return $ ResponseDiscoverAcc a
         "version" -> do
           v <- o .: "version"
           return $ ResponseVersion v
@@ -501,8 +505,8 @@ commandResponse ctx =
     CommandAddrs accM p -> cmdAddrs accM p
     CommandLabel accM i l -> cmdLabel accM i l
     CommandTxs accM p -> cmdTxs ctx accM p
-    CommandSync accM -> cmdSync ctx accM
-    CommandScanAcc accM -> cmdScanAccount ctx accM
+    CommandSyncAcc accM -> cmdSyncAcc ctx accM
+    CommandDiscoverAcc accM -> cmdDiscoverAccount ctx accM
 
 --  CommandPrepareTx rcpts accM unit fee dust rcptPay ->
 --    prepareTx ctx rcpts accM unit fee dust rcptPay
@@ -531,13 +535,14 @@ cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Respons
 cmdCreateAcc ctx name net derivM splitIn =
   runDB $
     catchResponseError $ do
-      d <- maybe (lift $ nextAccountDeriv net) return derivM
-      prvKey <- askSigningKey ctx net d splitIn
+      (mnem, walletFP) <- askMnemonicPass net ctx splitIn
+      d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
+      prvKey <- liftEither $ signingKey net ctx mnem d
       let xpub = deriveXPubKey ctx prvKey
-          doc = PubKeyDoc xpub net name
+          doc = PubKeyDoc xpub net name walletFP
       path <- liftIO $ docFilePath ctx PubKeyFolder doc
-      account <- liftDB $ insertAccount net ctx name xpub (cs path)
-      _ <- writeDoc ctx PubKeyFolder (PubKeyDoc xpub net name)
+      account <- liftDB $ insertAccount net ctx walletFP name xpub (cs path)
+      _ <- writeDoc ctx PubKeyFolder doc
       return $ ResponseCreateAcc account
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
@@ -548,7 +553,8 @@ cmdTestAcc ctx nameM splitIn =
       let net = accountNetwork acc
           xPubKey = accountXPubKey ctx acc
           d = accountIndex acc
-      xPrvKey <- askSigningKey ctx net d splitIn
+      (mnem, _) <- askMnemonicPass net ctx splitIn
+      xPrvKey <- liftEither $ signingKey net ctx mnem d
       return $
         if deriveXPubKey ctx xPrvKey == xPubKey
           then
@@ -570,9 +576,10 @@ cmdImportAcc :: Ctx -> FilePath -> IO Response
 cmdImportAcc ctx fp =
   runDB $
     catchResponseError $ do
-      doc@(PubKeyDoc xpub net name) <- liftEitherIO $ readMarshalFile ctx fp
+      doc@(PubKeyDoc xpub net name wallet) <-
+        liftEitherIO $ readMarshalFile ctx fp
       path <- liftIO $ docFilePath ctx PubKeyFolder doc
-      acc <- liftDB $ insertAccount net ctx name xpub (cs path)
+      acc <- liftDB $ insertAccount net ctx wallet name xpub (cs path)
       _ <- writeDoc ctx PubKeyFolder doc
       return $ ResponseImportAcc acc
 
@@ -583,7 +590,8 @@ cmdRenameAcc ctx oldName newName =
       acc <- liftDB $ renameAccount oldName newName
       let xpub = accountXPubKey ctx acc
           net = accountNetwork acc
-      _ <- writeDoc ctx PubKeyFolder $ PubKeyDoc xpub net newName
+          wallet = accountWallet acc
+      _ <- writeDoc ctx PubKeyFolder $ PubKeyDoc xpub net newName wallet
       return $ ResponseRenameAcc oldName newName acc
 
 cmdAccounts :: Maybe Text -> IO Response
@@ -624,7 +632,7 @@ cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdTxs ctx nameM page =
   runDB $
     catchResponseError $ do
-      (acc, txInfos) <- liftDB $ getTxs ctx nameM page
+      (acc, txInfos) <- liftDB $ txsPage ctx nameM page
       return $ ResponseTxs acc txInfos
 
 addrBatch :: Natural
@@ -636,8 +644,8 @@ txBatch = 100
 txFullBatch :: Natural
 txFullBatch = 100
 
-cmdSync :: Ctx -> Maybe Text -> IO Response
-cmdSync ctx nameM = do
+cmdSyncAcc :: Ctx -> Maybe Text -> IO Response
+cmdSyncAcc ctx nameM = do
   runDB $
     catchResponseError $ do
       (accId, acc) <- liftDB $ getAccount nameM
@@ -670,7 +678,7 @@ cmdSync ctx nameM = do
       -- Update the best block for this network
       lift $ updateBest net (headerHash best.header) best.height
       return $
-        ResponseSync
+        ResponseSyncAcc
           newAcc
           (headerHash best.header)
           (fromIntegral best.height)
@@ -721,7 +729,7 @@ searchAddrTxs net ctx confirmedTxs as
                     offset = offset
                   }
             )
-          -- Remove txs that we already have
+      -- Remove txs that we already have
       let tids = ((.txid) <$> txRefs) \\ confirmedTxs
       -- Either we have reached the end of the stream, or we have hit some
       -- txs in confirmedTxs. In both cases, we can stop the search.
@@ -732,8 +740,8 @@ searchAddrTxs net ctx confirmedTxs as
           rest <- go (Just lastId) 1 xs
           return $ tids <> rest
 
-cmdScanAccount :: Ctx -> Maybe Text -> IO Response
-cmdScanAccount ctx nameM =
+cmdDiscoverAccount :: Ctx -> Maybe Text -> IO Response
+cmdDiscoverAccount ctx nameM =
   runDB $
     catchResponseError $ do
       (accId, acc) <- liftDB $ getAccount nameM
@@ -744,7 +752,7 @@ cmdScanAccount ctx nameM =
       i <- go net pub intDeriv 0 (Page (fromIntegral gap) 0)
       _ <- liftDB $ updateDeriv net ctx accId extDeriv e
       newAcc <- liftDB $ updateDeriv net ctx accId intDeriv i
-      return $ ResponseScanAcc newAcc
+      return $ ResponseDiscoverAcc newAcc
   where
     go net pub path d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx path page pub
@@ -946,33 +954,37 @@ askInputLine message = do
     return
     inputM
 
-askMnemonic :: String -> IO Mnemonic
-askMnemonic txt = do
+askMnemonicWords :: String -> IO Mnemonic
+askMnemonicWords txt = do
   mnm <- askInputLineHidden txt
   case fromMnemonic (cs mnm) of -- validate the mnemonic
     Right _ -> return $ cs mnm
     Left _ -> do
       liftIO $ putStrLn "Invalid mnemonic"
-      askMnemonic txt
+      askMnemonicWords txt
 
-askSigningKey ::
+askMnemonicPass ::
   (MonadError String m, MonadIO m) =>
-  Ctx ->
   Network ->
+  Ctx ->
   Natural ->
-  Natural ->
-  m XPrvKey
-askSigningKey _ _ _ 0 = throwError "Mnemonic split can not be 0"
-askSigningKey ctx net acc splitIn = do
+  m (MnemonicPass, Fingerprint)
+askMnemonicPass net ctx splitIn = do
   mnm <-
     if splitIn == 1
-      then liftIO $ askMnemonic "Enter your mnemonic: "
+      then liftIO $ askMnemonicWords "Enter your mnemonic words: "
       else do
         ms <- forM [1 .. splitIn] $ \n ->
-          liftIO $ askMnemonic $ "Split mnemonic part #" <> show n <> ": "
+          liftIO $ askMnemonicWords $ "Split mnemonic part #" <> show n <> ": "
         liftEither $ mergeMnemonicParts ms
   passStr <- liftIO askPassword
-  liftEither $ signingKey net ctx (cs passStr) (cs mnm) acc
+  let mnem =
+        MnemonicPass
+          { mnemonicWords = mnm,
+            mnemonicPass = cs passStr
+          }
+  walletFP <- liftEither $ walletFingerprint net ctx mnem
+  return (mnem, walletFP)
 
 askPassword :: IO String
 askPassword = do
