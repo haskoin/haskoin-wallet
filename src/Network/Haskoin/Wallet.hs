@@ -20,7 +20,7 @@ import Options.Applicative
 clientMain :: IO ()
 clientMain =
   withContext $ \ctx -> do
-    cmd <- customExecParser (prefs showHelpOnEmpty) (programParser ctx)
+    cmd <- customExecParser (prefs showHelpOnEmpty) programParser
     res <- commandResponse ctx cmd
     jsonPrinter ctx res
 

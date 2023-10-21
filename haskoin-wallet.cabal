@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.35.2.
+-- This file has been generated from package.yaml by hpack version 0.36.0.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 42e7e8f00920014ce2ac4511b42981451dc4f7a21e5d2edc0f9ff59559e22570
+-- hash: 3b64153f511007896e597194427d818ad9fdaeb1d22677507b84cf0f4af5505a
 
 name:           haskoin-wallet
 version:        0.8.0
@@ -71,9 +71,9 @@ library
     , wreq >=0.5.3.2
   exposed-modules:
       Network.Haskoin.Wallet
-      Network.Haskoin.Wallet.AccountStore
       Network.Haskoin.Wallet.Amounts
       Network.Haskoin.Wallet.Commands
+      Network.Haskoin.Wallet.Config
       Network.Haskoin.Wallet.Database
       Network.Haskoin.Wallet.Entropy
       Network.Haskoin.Wallet.FileIO

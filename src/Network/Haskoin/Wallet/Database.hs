@@ -71,7 +71,6 @@ import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
 import Haskoin.Transaction
 import Haskoin.Util (maybeToEither)
 import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Signing (conf, walletFingerprint)
 import Network.Haskoin.Wallet.TxInfo
 import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
 import Numeric.Natural (Natural)
@@ -153,6 +152,12 @@ DBCoin
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
 
+DBRawTx
+  hash Text
+  blob ByteString
+  Primary hash
+  deriving Show
+
 DBBest
   network Text
   bestBlock Text
@@ -161,13 +166,7 @@ DBBest
   deriving Show
 |]
 
-gap :: Int64
-gap = 20
-
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
-
-liftDB :: (Monad m) => DB m (Either String a) -> ExceptT String (DB m) a
-liftDB = liftEither <=< lift
 
 runDB :: (MonadUnliftIO m) => DB m a -> m a
 runDB action = do
@@ -210,12 +209,12 @@ instance ToJSON DBAccount where
         "internal" .= dBAccountInternal acc,
         "xPubKey" .= dBAccountXPubKey acc,
         "pubKeyFile" .= dBAccountPubKeyFile acc,
-        "balance" .= toJSON (AccountBalance confirmed unconfirmed coins),
+        "balance" .= toJSON (AccountBalance confirm unconfirm coins),
         "created" .= dBAccountCreated acc
       ]
     where
-      confirmed = dBAccountBalanceConfirmed acc
-      unconfirmed = dBAccountBalanceUnconfirmed acc
+      confirm = dBAccountBalanceConfirmed acc
+      unconfirm = dBAccountBalanceUnconfirmed acc
       coins = dBAccountBalanceCoins acc
 
 instance FromJSON DBAccount where
@@ -288,12 +287,11 @@ nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
 nextAccountDeriv walletFP net = do
   let walletId = DBWalletKey $ fingerprintToText walletFP
   dM <-
-    selectOne $
-      from $ \a -> do
-        where_ $
-          a ^. DBAccountNetwork ==. val (cs net.name)
-            &&. a ^. DBAccountWallet ==. val walletId
-        return $ max_ $ a ^. DBAccountIndex
+    selectOne . from $ \a -> do
+      where_ $
+        a ^. DBAccountNetwork ==. val (cs net.name)
+          &&. a ^. DBAccountWallet ==. val walletId
+      return $ max_ $ a ^. DBAccountIndex
   return $ joinMaybe 0 ((+ 1) . fromIntegral) dM
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
@@ -318,18 +316,18 @@ insertAccount ::
   Text ->
   XPubKey ->
   Text ->
-  DB m (Either String DBAccount)
+  ExceptT String (DB m) DBAccount
 insertAccount net ctx walletFP name xpub keyfile = do
-  existsName <- existsAccount name
+  existsName <- lift $ existsAccount name
   if existsName
-    then return $ Left $ "Account " <> cs name <> " already exists"
+    then throwError $ "Account " <> cs name <> " already exists"
     else do
-      existsKey <- existsXPubKey net ctx xpub
+      existsKey <- lift $ existsXPubKey net ctx xpub
       if existsKey
-        then return $ Left "The XPubKey already exists"
+        then throwError "The XPubKey already exists"
         else do
           time <- liftIO getCurrentTime
-          walletId <- getWalletOrCreate walletFP
+          walletId <- lift $ getWalletOrCreate walletFP
           let path = bip44Deriv net $ fromIntegral $ xPubChild xpub
               idx = fromIntegral $ xPubIndex xpub
               account =
@@ -348,8 +346,8 @@ insertAccount net ctx walletFP name xpub keyfile = do
                     dBAccountBalanceCoins = 0,
                     dBAccountCreated = time
                   }
-          P.insert_ account
-          return $ Right account
+          lift $ P.insert_ account
+          return account
 
 -- When a name is provided, get that account or throw an error if it doesn't
 -- exist. When no name is provided, return the account only if there is one
@@ -357,34 +355,31 @@ insertAccount net ctx walletFP name xpub keyfile = do
 getAccount ::
   (MonadUnliftIO m) =>
   Maybe Text ->
-  DB m (Either String (DBAccountId, DBAccount))
+  ExceptT String (DB m) (DBAccountId, DBAccount)
 getAccount (Just name) = do
-  aM <- P.getBy $ UniqueName name
-  return $
-    case aM of
-      Just a -> Right (entityKey a, entityVal a)
-      _ -> Left $ "The account " <> cs name <> " does not exist"
+  aM <- lift $ P.getBy $ UniqueName name
+  case aM of
+    Just a -> return (entityKey a, entityVal a)
+    _ -> throwError $ "The account " <> cs name <> " does not exist"
 getAccount Nothing = do
-  as <- getAccounts
-  return $
-    case as of
-      [a] -> Right a
-      [] -> Left "There are no accounts in the wallet"
-      _ -> Left "Specify which account to use"
+  as <- lift getAccounts
+  case as of
+    [a] -> return a
+    [] -> throwError "There are no accounts in the wallet"
+    _ -> throwError "Specify which account to use"
 
 getAccountId ::
-  (MonadUnliftIO m) => DBAccountId -> DB m (Either String DBAccount)
-getAccountId accId = maybeToEither "Invalid account" <$> P.get accId
+  (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
+getAccountId accId =
+  liftEither . maybeToEither "Invalid account" =<< lift (P.get accId)
 
 getAccountVal ::
-  (MonadUnliftIO m) => Maybe Text -> DB m (Either String DBAccount)
-getAccountVal nameM =
-  runExceptT $ do
-    (_, acc) <- liftEither =<< lift (getAccount nameM)
-    return acc
+  (MonadUnliftIO m) => Maybe Text -> ExceptT String (DB m) DBAccount
+getAccountVal nameM = snd <$> getAccount nameM
 
 getAccounts :: (MonadUnliftIO m) => DB m [(DBAccountId, DBAccount)]
-getAccounts = (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+getAccounts =
+  (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
   where
     go a = (entityKey a, entityVal a)
 
@@ -398,32 +393,32 @@ getAccountNames = do
   return $ unValue <$> res
 
 renameAccount ::
-  (MonadUnliftIO m) => Text -> Text -> DB m (Either String DBAccount)
+  (MonadUnliftIO m) => Text -> Text -> ExceptT String (DB m) DBAccount
 renameAccount oldName newName
-  | oldName == newName = return $ Left "Old and new names are the same"
+  | oldName == newName = throwError "Old and new names are the same"
   | otherwise = do
-      e <- existsAccount newName
+      e <- lift $ existsAccount newName
       if e
-        then return $ Left $ "The account " <> cs newName <> " already exists"
+        then throwError $ "The account " <> cs newName <> " already exists"
         else do
           c <-
-            updateCount $ \a -> do
+            lift . updateCount $ \a -> do
               set a [DBAccountName =. val newName]
               where_ $ a ^. DBAccountName ==. val oldName
           if c == 0
-            then return $ Left $ "The account " <> cs oldName <> " does not exist"
+            then throwError $ "The account " <> cs oldName <> " does not exist"
             else getAccountVal (Just newName)
 
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
 updateAccountBalances accId@(DBAccountKey wallet accDeriv) = do
-  confirmed <- selectSum DBAddressBalanceConfirmed
-  unconfirmed <- selectSum DBAddressBalanceUnconfirmed
+  confirm <- selectSum DBAddressBalanceConfirmed
+  unconfirm <- selectSum DBAddressBalanceUnconfirmed
   coins <- selectSum DBAddressBalanceCoins
   update $ \a -> do
     set
       a
-      [ DBAccountBalanceConfirmed =. val (unpack confirmed),
-        DBAccountBalanceUnconfirmed =. val (unpack unconfirmed),
+      [ DBAccountBalanceConfirmed =. val (unpack confirm),
+        DBAccountBalanceUnconfirmed =. val (unpack unconfirm),
         DBAccountBalanceCoins =. val (unpack coins)
       ]
     where_ $ a ^. DBAccountId ==. val accId
@@ -516,23 +511,21 @@ updateAddressBalances ::
   (MonadUnliftIO m) =>
   Network ->
   [Store.Balance] ->
-  DB m (Either String ())
+  ExceptT String (DB m) ()
 updateAddressBalances net storeBals =
-  runExceptT $
-    forM_ storeBals $ \s -> do
-      addrT <-
-        liftEither $ maybeToEither "Invalid Address" (addrToText net s.address)
-      lift $
-        update $ \a -> do
-          set
-            a
-            [ DBAddressBalanceConfirmed =. val s.confirmed,
-              DBAddressBalanceUnconfirmed =. val s.unconfirmed,
-              DBAddressBalanceCoins =. val s.utxo,
-              DBAddressBalanceTxs =. val s.txs,
-              DBAddressBalanceReceived =. val s.received
-            ]
-          where_ $ a ^. DBAddressAddress ==. val addrT
+  forM_ storeBals $ \s -> do
+    addrT <-
+      liftEither $ maybeToEither "Invalid Address" (addrToText net s.address)
+    lift . update $ \a -> do
+      set
+        a
+        [ DBAddressBalanceConfirmed =. val s.confirmed,
+          DBAddressBalanceUnconfirmed =. val s.unconfirmed,
+          DBAddressBalanceCoins =. val s.utxo,
+          DBAddressBalanceTxs =. val s.txs,
+          DBAddressBalanceReceived =. val s.received
+        ]
+      where_ $ a ^. DBAddressAddress ==. val addrT
 
 -- Insert an address into the database. Does nothing if it already exists.
 insertAddress ::
@@ -542,35 +535,34 @@ insertAddress ::
   SoftPath ->
   Address ->
   Text ->
-  DB m (Either String DBAddress)
-insertAddress net (DBAccountKey wallet accDeriv) deriv addr label =
-  runExceptT $ do
-    time <- liftIO getCurrentTime
-    addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
-    (isInternal, idx) <- parseDeriv
-    let label' = if isInternal then "Internal Address" else label
-        derivS = cs $ pathToStr deriv
-        dbAddr =
-          DBAddress
-            (fromIntegral idx)
-            wallet
-            accDeriv
-            derivS
-            addrT
-            label'
-            0
-            0
-            0
-            0
-            0
-            isInternal
-            time
-    addrM <- lift $ P.get (DBAddressKey wallet accDeriv derivS)
-    case addrM of
-      Just a -> return a
-      Nothing -> do
-        lift $ P.insert_ dbAddr
-        return dbAddr
+  ExceptT String (DB m) DBAddress
+insertAddress net (DBAccountKey wallet accDeriv) deriv addr label = do
+  time <- liftIO getCurrentTime
+  addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
+  (isInternal, idx) <- parseDeriv
+  let label' = if isInternal then "Internal Address" else label
+      derivS = cs $ pathToStr deriv
+      dbAddr =
+        DBAddress
+          (fromIntegral idx)
+          wallet
+          accDeriv
+          derivS
+          addrT
+          label'
+          0
+          0
+          0
+          0
+          0
+          isInternal
+          time
+  addrM <- lift $ P.get (DBAddressKey wallet accDeriv derivS)
+  case addrM of
+    Just a -> return a
+    Nothing -> do
+      lift $ P.insert_ dbAddr
+      return dbAddr
   where
     parseDeriv =
       case pathToList deriv of
@@ -587,48 +579,83 @@ updateDeriv ::
   DBAccountId ->
   SoftPath ->
   Natural ->
-  DB m (Either String DBAccount)
-updateDeriv net ctx accId path deriv =
-  runExceptT $ do
-    acc <- liftEither <=< lift $ getAccountId accId
-    internal <-
-      case pathToList path of
-        [0] -> return False
-        [1] -> return True
-        _ -> throwError "Invalid updateDeriv SoftPath"
-    let xPubKey = accountXPubKey ctx acc
-        label
-          | internal = DBAccountInternal
-          | otherwise = DBAccountExternal
-        accDeriv
-          | internal = dBAccountInternal
-          | otherwise = dBAccountExternal
-    if accDeriv acc >= fromIntegral deriv
-      then return acc -- Nothing to do
-      else do
-        let addrs = addrsDerivPage ctx path (Page deriv 0) xPubKey
-        forM_ addrs $ \(a, p) -> lift $ insertAddress net accId p a ""
-        lift $ P.update accId [label P.=. fromIntegral deriv]
-        liftEither <=< lift $ getAccountId accId
+  ExceptT String (DB m) DBAccount
+updateDeriv net ctx accId path deriv = do
+  acc <- getAccountId accId
+  internal <-
+    case pathToList path of
+      [0] -> return False
+      [1] -> return True
+      _ -> throwError "Invalid updateDeriv SoftPath"
+  let xPubKey = accountXPubKey ctx acc
+      label
+        | internal = DBAccountInternal
+        | otherwise = DBAccountExternal
+      accDeriv
+        | internal = fromIntegral . dBAccountInternal
+        | otherwise = fromIntegral . dBAccountExternal
+  if accDeriv acc >= deriv
+    then return acc -- Nothing to do
+    else do
+      let addrs =
+            addrsDerivPage
+              ctx
+              path
+              (Page (deriv - accDeriv acc) (accDeriv acc))
+              xPubKey
+      forM_ addrs $ \(a, p) -> insertAddress net accId p a ""
+      lift $ P.update accId [label P.=. fromIntegral deriv]
+      getAccountId accId
 
 receiveAddress ::
   (MonadUnliftIO m) =>
   Ctx ->
   Maybe Text ->
   Text ->
-  DB m (Either String (DBAccount, DBAddress))
-receiveAddress ctx nameM label =
-  runExceptT $ do
-    (accId, acc) <- liftEither <=< lift $ getAccount nameM
-    let net = accountNetwork acc
-        xpub = accountXPubKey ctx acc
-        ext = fromIntegral $ dBAccountExternal acc
-        (addr, _) = derivePathAddr ctx xpub extDeriv ext
-    dbAddr <-
-      liftEither <=< lift $
-        insertAddress net accId (extDeriv :/ ext) addr label
-    newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
-    return (newAcc, dbAddr)
+  ExceptT String (DB m) (DBAccount, DBAddress)
+receiveAddress ctx nameM label = do
+  (accId, acc) <- getAccount nameM
+  let net = accountNetwork acc
+      xpub = accountXPubKey ctx acc
+      ext = fromIntegral $ dBAccountExternal acc
+      (addr, _) = derivePathAddr ctx xpub extDeriv ext
+  dbAddr <- insertAddress net accId (extDeriv :/ ext) addr label
+  newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
+  return (newAcc, dbAddr)
+
+peekInternalAddress ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  DBAccountId ->
+  Word32 ->
+  ExceptT String (DB m) (Address, SoftPath)
+peekInternalAddress ctx accId offset' = do
+  acc <- getAccountId accId
+  let net = accountNetwork acc
+      xpub = accountXPubKey ctx acc
+      accIdx = fromIntegral $ dBAccountInternal acc
+      idx = accIdx + offset'
+      (addr, _) = derivePathAddr ctx xpub intDeriv idx
+  _ <- insertAddress net accId (intDeriv :/ idx) addr ""
+  return (addr, intDeriv :/ idx)
+
+commitInternalAddress ::
+     (MonadUnliftIO m)
+  => DBAccountId
+  -> Maybe Natural -- Number of new addresses
+  -> ExceptT String (DB m) DBAccount
+commitInternalAddress accId (Just count') =
+  lift $ P.updateGet accId [DBAccountInternal P.+=. fromIntegral count']
+commitInternalAddress accId@(DBAccountKey wallet accDeriv) Nothing = do
+  idxM <-
+    lift . selectOne . from $ \a -> do
+      where_ $
+        a ^. DBAddressAccountWallet ==. val wallet
+          &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+          &&. a ^. DBAddressInternal ==. val True
+      return $ max_ $ a ^. DBAddressIndex
+  let intIdx = joinMaybe 0 (+ 1) idxM
+  lift $ P.updateGet accId [DBAccountInternal P.=. intIdx]
 
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
 addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
@@ -649,76 +676,90 @@ allAddressesMap ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
-  DB m (Either String (Map Address SoftPath, Map Address AddressBalance))
-allAddressesMap net (DBAccountKey wallet accDeriv) =
-  runExceptT $ do
-    dbRes <-
-      lift $
-        select $
-          from $ \a -> do
-            where_ $
-              a ^. DBAddressAccountWallet ==. val wallet
-                &&. a ^. DBAddressAccountDerivation ==. val accDeriv
-            return a
-    res <-
-      forM dbRes $ \(Entity _ dbAddr) -> do
-        a <- liftEither $ textToAddrE net $ dBAddressAddress dbAddr
-        d <-
-          liftEither $
-            maybeToEither "parsePath failed" $
-              parseSoft $
-                cs $
-                  dBAddressDerivation dbAddr
-        let b =
-              AddressBalance
-                (dBAddressBalanceConfirmed dbAddr)
-                (dBAddressBalanceUnconfirmed dbAddr)
-                (dBAddressBalanceCoins dbAddr)
-                (dBAddressBalanceTxs dbAddr)
-                (dBAddressBalanceReceived dbAddr)
-        return ((a, d), (a, b))
-    return (Map.fromList $ fst <$> res, Map.fromList $ snd <$> res)
+  ExceptT String (DB m) (Map Address SoftPath, Map Address AddressBalance)
+allAddressesMap net (DBAccountKey wallet accDeriv) = do
+  dbRes <-
+    lift . select $
+      from $ \a -> do
+        where_ $
+          a ^. DBAddressAccountWallet ==. val wallet
+            &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        return a
+  res <-
+    forM dbRes $ \(Entity _ dbAddr) -> do
+      a <- liftEither $ textToAddrE net $ dBAddressAddress dbAddr
+      d <-
+        liftEither . maybeToEither "parsePath failed" $
+          parseSoft . cs $
+            dBAddressDerivation dbAddr
+      let b =
+            AddressBalance
+              (dBAddressBalanceConfirmed dbAddr)
+              (dBAddressBalanceUnconfirmed dbAddr)
+              (dBAddressBalanceCoins dbAddr)
+              (dBAddressBalanceTxs dbAddr)
+              (dBAddressBalanceReceived dbAddr)
+      return ((a, d), (a, b))
+  return (Map.fromList $ fst <$> res, Map.fromList $ snd <$> res)
 
 updateLabel ::
   (MonadUnliftIO m) =>
   Maybe Text ->
   Word32 ->
   Text ->
-  DB m (Either String (DBAccount, DBAddress))
+  ExceptT String (DB m) (DBAccount, DBAddress)
 updateLabel nameM idx label = do
+  (DBAccountKey wallet accDeriv, acc) <- getAccount nameM
+  let path = cs $ pathToStr $ extDeriv :/ idx
+      aKey = DBAddressKey wallet accDeriv path
+  unless (fromIntegral idx < dBAccountExternal acc) $
+    throwError $
+      "Address " <> show idx <> " does not exist"
+  adr <- lift $ P.updateGet aKey [DBAddressLabel P.=. label]
+  return (acc, adr)
+
+getCoinDeriv ::
+  (MonadUnliftIO m) => Network -> Store.Unspent -> DB m (Either String SoftPath)
+getCoinDeriv net unspent =
   runExceptT $ do
-    (DBAccountKey wallet accDeriv, acc) <-
-      liftEither <=< lift $ getAccount nameM
-    let path = cs $ pathToStr $ extDeriv :/ idx
-        aKey = DBAddressKey wallet accDeriv path
-    unless (fromIntegral idx < dBAccountExternal acc) $
-      throwError $
-        "Address " <> show idx <> " does not exist"
-    adr <- lift $ P.updateGet aKey [DBAddressLabel P.=. label]
-    return (acc, adr)
+    addr <-
+      liftEither . maybeToEither "getCoinDeriv: no address" $ unspent.address
+    liftEither <=< lift $ getAddrDeriv net addr
+
+getAddrDeriv ::
+  (MonadUnliftIO m) => Network -> Address -> DB m (Either String SoftPath)
+getAddrDeriv net addr = 
+  runExceptT $ do
+    addrT <-
+      liftEither . maybeToEither "getAddrDeriv: no address" $ addrToText net addr
+    derivM <-
+      lift . selectOne . from $ \a -> do
+        where_ $
+          a ^. DBAddressAddress ==. val addrT
+        return $ a ^. DBAddressDerivation
+    liftEither . maybeToEither "getAddrDeriv: no derivation" $
+      parseSoft . cs . unValue =<< derivM
 
 {- Transactions -}
 
-existsTx ::
-  (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
+existsTx :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
 existsTx (DBAccountKey wallet accDeriv) txid =
   isJust <$> P.get (DBTxInfoKey wallet accDeriv $ txHashToHex txid)
 
 getConfirmedTxs ::
-  (MonadUnliftIO m) => DBAccountId -> Bool -> DB m (Either String [TxHash])
-getConfirmedTxs (DBAccountKey wallet accDeriv) confirmed = do
+  (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
+getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
   ts <-
-    select $
+    lift . select $
       from $ \t -> do
         where_ $
           t ^. DBTxInfoAccountWallet ==. val wallet
             &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
-            &&. t ^. DBTxInfoConfirmed ==. val confirmed
+            &&. t ^. DBTxInfoConfirmed ==. val confirm
         orderBy [asc (t ^. DBTxInfoBlockRef)]
         return $ t ^. DBTxInfoTxid
-  return $
-    forM ts $ \(Value t) ->
-      maybeToEither "getUnconfirmedTxs invalid TxHash" $ hexToTxHash t
+  forM ts $ \(Value t) ->
+    liftEither $ maybeToEither "getUnconfirmedTxs invalid TxHash" $ hexToTxHash t
 
 -- Insert a new transaction or replace it, if it already exists
 repsertTxInfo ::
@@ -767,33 +808,28 @@ txsPage ::
   Ctx ->
   Maybe Text ->
   Page ->
-  DB m (Either String (DBAccount, [TxInfo]))
-txsPage ctx nameM (Page lim off) =
-  runExceptT $ do
-    (DBAccountKey wallet accDeriv, acc) <-
-      liftEither <=< lift $ getAccount nameM
-    let net = accountNetwork acc
-    dbTxs <-
-      lift $
-        select $
-          from $ \t -> do
-            where_ $
-              t ^. DBTxInfoAccountWallet ==. val wallet
-                &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
-            orderBy [asc (t ^. DBTxInfoBlockRef)]
-            limit $ fromIntegral lim
-            offset $ fromIntegral off
-            return $ t ^. DBTxInfoBlob
-    res <-
-      forM dbTxs $ \(Value dbTx) -> do
-        liftEither $
-          maybeToEither "TxInfo unmarshalJSON Failed" $
-            unmarshalJSON (net, ctx) $
-              BS.fromStrict dbTx
-    bestM <- lift $ getBest net
-    case bestM of
-      Just (_, h) -> return (acc, updateConfirmations h <$> res)
-      _ -> return (acc, res)
+  ExceptT String (DB m) (DBAccount, [TxInfo])
+txsPage ctx nameM (Page lim off) = do
+  (DBAccountKey wallet accDeriv, acc) <- getAccount nameM
+  let net = accountNetwork acc
+  dbTxs <-
+    lift . select . from $ \t -> do
+      where_ $
+        t ^. DBTxInfoAccountWallet ==. val wallet
+          &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+      orderBy [asc (t ^. DBTxInfoBlockRef)]
+      limit $ fromIntegral lim
+      offset $ fromIntegral off
+      return $ t ^. DBTxInfoBlob
+  res <-
+    forM dbTxs $ \(Value dbTx) -> do
+      liftEither . maybeToEither "TxInfo unmarshalJSON Failed" $
+        unmarshalJSON (net, ctx) $
+          BS.fromStrict dbTx
+  bestM <- lift $ getBest net
+  case bestM of
+    Just (_, h) -> return (acc, updateConfirmations h <$> res)
+    _ -> return (acc, res)
 
 updateConfirmations :: BlockHeight -> TxInfo -> TxInfo
 updateConfirmations best tif =
@@ -812,16 +848,18 @@ outpointText :: OutPoint -> Text
 outpointText = encodeHex . encode
 
 -- Spendable coins must be confirmed and not locked
-getSpendableCoins :: (MonadUnliftIO m) => DBAccountId -> DB m [DBCoin]
+getSpendableCoins ::
+  (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [Store.Unspent]
 getSpendableCoins (DBAccountKey wallet accDeriv) = do
-  coins <- select . from $ \c -> do
+  coins <- lift . select . from $ \c -> do
     where_ $
-      c ^. DBCoinAccountWallet ==. val wallet &&.
-      c ^. DBCoinAccountDerivation ==. val accDeriv &&.
-      c ^. DBCoinConfirmed ==. val True &&.
-      c ^. DBCoinLocked ==. val False
+      c ^. DBCoinAccountWallet ==. val wallet
+        &&. c ^. DBCoinAccountDerivation ==. val accDeriv
+        &&. c ^. DBCoinConfirmed ==. val True
+        &&. c ^. DBCoinLocked ==. val False
     return c
-  return $ entityVal <$> coins
+  let bss = dBCoinBlob . entityVal <$> coins
+  mapM (liftEither . decode) bss
 
 insertCoin ::
   (MonadUnliftIO m) =>
@@ -870,7 +908,11 @@ getCoinsByAddr addr = do
 -- Either insert, update or delete coins as required. Returns the number of
 -- coins that have either been inserted, updated or deleted.
 updateCoins ::
-  (MonadUnliftIO m) => Network -> DBAccountId -> [Store.Unspent] -> DB m Int
+     (MonadUnliftIO m)
+  => Network
+  -> DBAccountId
+  -> [Store.Unspent]
+  -> DB m (Int, [DBCoin])
 updateCoins net accId allUnspent = do
   let storeMap = groupCoins net allUnspent
   res <- forM (Map.assocs storeMap) $ \(addr, storeCoins) -> do
@@ -883,9 +925,9 @@ updateCoins net accId allUnspent = do
         toUpdate = filter (f localCoins) storeCoins
     forM_ toDelete deleteCoin
     forM_ toUpdate updateCoin
-    forM_ toInsert $ insertCoin accId addr
-    return $ length toDelete + length toUpdate + length toInsert
-  return $ sum res
+    newCoins <- forM toInsert $ insertCoin accId addr
+    return (length toDelete + length toUpdate + length toInsert, newCoins)
+  return (sum $ fst <$> res, concatMap snd res)
   where
     f localCoins s =
       let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins
@@ -905,7 +947,23 @@ groupCoins net =
 setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m ()
 setLockCoin op locked = do
   let key = DBCoinKey $ outpointText op
-  P.update key [ DBCoinLocked P.=. locked ]
+  P.update key [DBCoinLocked P.=. locked]
+
+{- Raw Transactions -}
+
+insertRawTx :: (MonadUnliftIO m) => Tx -> DB m ()
+insertRawTx tx = do
+  let hash = txHashToHex $ txHash tx
+      key = DBRawTxKey hash
+  P.repsert key $ DBRawTx hash (encode tx)
+
+getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
+getRawTx hash = do
+  let key = DBRawTxKey $ txHashToHex hash
+  txM <- lift $ P.get key
+  case txM of
+    Just tx -> liftEither . decode $ dBRawTxBlob tx
+    Nothing -> throwError "getRawTx: missing transaction"
 
 {- Helpers -}
 

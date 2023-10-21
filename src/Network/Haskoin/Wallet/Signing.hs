@@ -5,12 +5,14 @@
 
 module Network.Haskoin.Wallet.Signing where
 
+import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (second)
-import Control.Monad (forM, unless, when, (<=<))
+import Control.Monad (forM, unless, void, when, (<=<))
 import Control.Monad.Except
-  ( MonadError (throwError),
+  ( ExceptT,
+    MonadError (throwError),
     liftEither,
-    runExceptT, ExceptT,
+    runExceptT,
   )
 import Control.Monad.State
   ( MonadIO (..),
@@ -26,10 +28,11 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
-import Data.Word (Word64)
-import Haskoin.Address (Address)
+import Data.Word (Word32, Word64)
+import Haskoin.Address (Address, textToAddr)
 import Haskoin.Crypto
   ( Ctx,
+    Fingerprint,
     SecKey,
     SoftPath,
     XPrvKey (key),
@@ -37,7 +40,8 @@ import Haskoin.Crypto
     derivePath,
     deriveXPubKey,
     makeXPrvKey,
-    mnemonicToSeed, Fingerprint, xPubFP,
+    mnemonicToSeed,
+    xPubFP,
   )
 import Haskoin.Network (Network)
 import qualified Haskoin.Store.Data as Store
@@ -60,6 +64,8 @@ import Haskoin.Transaction
     verifyStdTx,
   )
 import Haskoin.Util (maybeToEither)
+import Network.Haskoin.Wallet.Config
+import Network.Haskoin.Wallet.Database
 import Network.Haskoin.Wallet.FileIO
   ( TxSignData
       ( TxSignData,
@@ -82,48 +88,53 @@ import Network.Haskoin.Wallet.Util
     safeSubtract,
   )
 import Numeric.Natural (Natural)
-import System.Random (Random (randomR), StdGen, newStdGen)
+import System.Random (Random (randomR), StdGen, newStdGen, initStdGen)
+import Data.Either (rights)
 
--- Building Transactions --
-
-conf :: Network -> ApiConfig
-conf net = ApiConfig net (def :: ApiConfig).host
+{- Building Transactions -}
 
 buildTxSignData ::
-  (MonadIO m) =>
+  (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  DBAccountId ->
+  DBAccount ->
   [(Address, Natural)] ->
   Natural ->
   Natural ->
   Bool ->
-  ExceptT String m TxSignData
-buildTxSignData net ctx rcpts feeByte dust rcptPay
+  ExceptT String (DB m) TxSignData
+buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
-      origStore <- get
-      acc <- liftEither =<< gets accountStoreAccount
-      walletAddrMap <- gets (storeAddressMap ctx)
-      let req = GetAddrsUnspent (Map.keys walletAddrMap) def
-      Store.SerialList allCoins <- liftExcept $ apiBatch ctx 20 (conf net) req
-      (change, changeDeriv) <- genIntAddress ctx
+      -- Get all spendable coins in the account
+      allCoins <- getSpendableCoins accId
+      -- Get a change address
+      (change, changeDeriv) <- peekInternalAddress ctx accId 0
+      -- Build a transaction and pick the coins
       gen <- liftIO newStdGen
       (tx, pickedCoins) <-
         liftEither $
           buildWalletTx net ctx gen rcpts change allCoins feeByte dust rcptPay
-      (inDerivs, outDerivs') <-
-        liftEither $ getDerivs pickedCoins rcpts walletAddrMap
+      -- Get the derivations of our recipients and picked coins
+      rcptsDerivs <- mapM (f . getAddrDeriv net) $ fst <$> rcpts
+      inDerivs <- mapM (f . getCoinDeriv net) pickedCoins
+      -- Check if we have a change output
       let noChange = length tx.outputs == length rcpts
           outDerivs =
             if noChange
-              then outDerivs'
-              else changeDeriv : outDerivs'
-      -- Get dependant transactions
+              then rcptsDerivs
+              else changeDeriv : rcptsDerivs
+      -- Get the dependent transactions
       let depTxHash = (.hash) . (.outpoint) <$> tx.inputs
-      depTxsRaw <- liftExcept $ apiBatch ctx 20 (conf net) (GetTxsRaw depTxHash)
-      let depTxs = depTxsRaw.get
-      when noChange $ put origStore -- Rollback store changes
-      return $ TxSignData tx depTxs inDerivs outDerivs acc False net
+      depTxs <- mapM getRawTx depTxHash
+      -- Commit the internal address if we used it
+      unless noChange $ void $ commitInternalAddress accId Nothing
+      -- Return the result
+      let idx = fromIntegral $ dBAccountIndex acc
+      return $ TxSignData tx depTxs inDerivs outDerivs idx False net
+  where
+    f = liftEither <=< lift
 
 buildWalletTx ::
   Network ->
@@ -180,23 +191,7 @@ makeRcptsPay fee rcpts =
     (q, r) = fee `quotRem` fromIntegral (length rcpts)
     toPay = if r == 0 then q else q + 1
 
-getDerivs ::
-  [Store.Unspent] ->
-  [(Address, Natural)] ->
-  Map Address SoftPath ->
-  Either String ([SoftPath], [SoftPath])
-getDerivs pickedCoins rcpts walletAddrMap = do
-  selCoinAddrs <- maybeToEither err $ mapM (.address) pickedCoins
-  let inDerivs =
-        Map.elems $
-          Map.restrictKeys walletAddrMap $
-            Set.fromList selCoinAddrs
-  return (inDerivs, outDerivs)
-  where
-    outDerivs = Map.elems $ Map.intersection walletAddrMap $ Map.fromList rcpts
-    err = "Could not read unspent address in getDerivs"
-
--- Signing Transactions --
+{- Signing Transactions -}
 
 data MnemonicPass = MnemonicPass
   { mnemonicWords :: !Text,
@@ -256,54 +251,66 @@ signTxWithKeys ctx tsd@(TxSignData tx _ _ _ _ signed net) publicKey secKeys = do
 noEmptyInputs :: Tx -> Bool
 noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 
--- Transaction Sweeping --
+{- Transaction Sweeping -}
 
 buildSweepSignData ::
-  (MonadIO m, MonadError String m) =>
+  (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  DBAccountId ->
+  DBAccount ->
   [Address] ->
   Natural ->
   Natural ->
-  m [TxSignData]
-buildSweepSignData net ctx addrs feeByte dust
+  ExceptT String (DB m) [TxSignData]
+buildSweepSignData net ctx accId acc addrs feeByte dust
   | null addrs = throwError "No addresses provided to sweep"
   | otherwise = do
-      acc <- liftEither =<< gets accountStoreAccount
-      walletAddrMap <- gets (storeAddressMap ctx)
-      let req = GetAddrsUnspent addrs def {limit = Just 0}
+      -- Get the unspent coins of the addresses
       Store.SerialList coins <-
-        liftExcept $ apiBatch ctx 20 (conf net) req
+        liftExcept . apiBatch ctx coinBatch (conf net) $
+          GetAddrsUnspent addrs def {limit = Just 0}
       when (null coins) $
         throwError "There are no coins to sweep in those addresses"
-      gen <- liftIO newStdGen
-      txs <- evalStateT (buildSweepTxs net ctx coins feeByte dust) gen
-      forM txs $ \(tx, pickedCoins, outDerivs) -> do
+      -- Build a set of sweep transactions
+      gen <- liftIO initStdGen
+      (txs, intCount) <-
+        evalStateT (buildSweepTxs net ctx accId coins feeByte dust) gen
+      -- For each sweep transaction
+      res <- forM txs $ \(tx, pickedCoins, outDerivs) -> do
+        -- Get the dependent transactions
         let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
-        depTxsRaw <-
-          liftExcept $
-            apiBatch ctx 20 (conf net) (GetTxsRaw depTxHash)
-        let depTxs = depTxsRaw.get
-        (inDerivs, _) <- liftEither $ getDerivs pickedCoins [] walletAddrMap
-        return $ TxSignData tx depTxs inDerivs outDerivs acc False net
+        Store.RawResultList depTxs <-
+          liftExcept . apiBatch ctx txFullBatch (conf net) $
+            GetTxsRaw depTxHash
+        -- Check if any of the coins belong to us
+        resE <- lift $ mapM (getCoinDeriv net) pickedCoins
+        let inDerivs = rights resE
+            accIdx = fromIntegral $ dBAccountIndex acc
+        return $ TxSignData tx depTxs inDerivs outDerivs accIdx False net
+      -- Commit the internal addresses used
+      _ <- commitInternalAddress accId (Just intCount)
+      return res
 
 buildSweepTxs ::
-  (MonadError String m) =>
-  Network ->
-  Ctx ->
-  [Store.Unspent] ->
-  Natural ->
-  Natural ->
-  StateT StdGen m [(Tx, [Store.Unspent], [SoftPath])]
-buildSweepTxs net ctx allCoins feeByte dust = do
-  origStore <- lift get
+     (MonadUnliftIO m)
+  => Network
+  -> Ctx
+  -> DBAccountId
+  -> [Store.Unspent]
+  -> Natural
+  -> Natural
+  -> StateT
+       StdGen
+       (ExceptT String (DB m))
+       ([(Tx, [Store.Unspent], [SoftPath])], Natural)
+buildSweepTxs net ctx accId allCoins feeByte dust = do
   liftEither <=< retryEither 10 $ do
-    lift $ put origStore -- Retry with the original store
     shuffledCoins <- randomShuffle allCoins
-    runExceptT $ go shuffledCoins []
+    runExceptT $ go shuffledCoins [] 0
   where
-    go [] acc = return acc
-    go coins acc = do
+    go [] acc idx = return (acc, fromIntegral idx)
+    go coins acc idx = do
       nIns <- randomRange 1 5
       let (pickedCoins, restCoins) = splitAt nIns coins
           coinsTot = sum $ (.value) <$> pickedCoins
@@ -314,14 +321,14 @@ buildSweepTxs net ctx allCoins feeByte dust = do
         throwError "Could not find a sweep solution"
       amnt1 <- randomRange amntMin (amntTot - amntMin)
       let amnt2 = amntTot - amnt1
-      (addr1, deriv1) <- lift $ lift (genExtAddress ctx)
-      (addr2, deriv2) <- lift $ lift (genExtAddress ctx)
+      (addr1, deriv1) <- lift . lift $ peekInternalAddress ctx accId idx
+      (addr2, deriv2) <- lift . lift $ peekInternalAddress ctx accId (idx+1)
       rcpts <- randomShuffle [(addr1, amnt1), (addr2, amnt2)]
       rcptsTxt <- liftEither $ mapM (addrToText2 net) rcpts
       tx <-
         liftEither $
           buildAddrTx net ctx ((.outpoint) <$> pickedCoins) rcptsTxt
-      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : acc)
+      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : acc) (idx+2)
 
 -- Utilities --
 
@@ -342,10 +349,12 @@ randomShuffle xs = do
     _ -> error "randomShuffle"
 
 retryEither ::
-  (MonadState StdGen m) =>
-  Natural ->
-  m (Either err a) ->
-  m (Either err a)
+     (Monad m) => Natural -> m (Either String a) -> m (Either String a)
 retryEither 0 _ = error "Must retryEither at least 1 time"
 retryEither 1 m = m
-retryEither i m = either (const $ retryEither (i - 1) m) (return . Right) =<< m
+retryEither i m = do
+  resE <- m
+  case resE of
+    Left _ -> retryEither (i-1) m
+    Right _ -> return resE
+

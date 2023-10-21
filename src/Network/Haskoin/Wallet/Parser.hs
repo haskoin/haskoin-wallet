@@ -14,8 +14,8 @@ import Network.Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readNatural,
   )
-import Network.Haskoin.Wallet.Util (Page (Page))
 import Network.Haskoin.Wallet.Database
+import Network.Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
   ( Alternative (many, some, (<|>)),
@@ -117,7 +117,8 @@ data Command
         commandRcptPay :: !Bool
       }
   | CommandReview
-      { commandFilePath :: !FilePath
+      { commandMaybeAcc :: !(Maybe Text),
+        commandFilePath :: !FilePath
       }
   | CommandSignTx
       { commandFilePath :: !FilePath,
@@ -150,9 +151,9 @@ data Command
       }
   deriving (Eq, Show)
 
-programParser :: Ctx -> ParserInfo Command
-programParser ctx =
-  info (commandParser ctx <**> helper) $
+programParser :: ParserInfo Command
+programParser =
+  info (commandParser <**> helper) $
     mconcat
       [ fullDesc,
         progDesc
@@ -163,34 +164,34 @@ programParser ctx =
           \ private keys on disk."
       ]
 
-commandParser :: Ctx -> Parser Command
-commandParser ctx =
+commandParser :: Parser Command
+commandParser =
   asum
     [ hsubparser $
         mconcat
           [ commandGroup "Mnemonic and account management",
             command "mnemonic" mnemonicParser,
             command "createacc" createAccParser,
-            command "testacc" (testAccParser ctx),
+            command "testacc" testAccParser,
             command "importacc" importAccParser,
-            command "renameacc" (renameAccParser ctx),
-            command "accounts" (accountsParser ctx),
+            command "renameacc" renameAccParser,
+            command "accounts" accountsParser,
             metavar "COMMAND",
             style (const "COMMAND --help")
           ],
       hsubparser $
         mconcat
           [ commandGroup "Address management",
-            command "receive" (receiveParser ctx),
-            command "addrs" (addrsParser ctx),
-            command "label" (labelParser ctx),
+            command "receive" receiveParser,
+            command "addrs" addrsParser,
+            command "label" labelParser,
             hidden
           ],
       hsubparser $
         mconcat
           [ commandGroup "Transaction management",
-            command "txs" (txsParser ctx),
-            command "preparetx" (prepareTxParser ctx),
+            command "txs" txsParser,
+            command "preparetx" prepareTxParser,
             command "review" reviewParser,
             command "signtx" signTxParser,
             hidden
@@ -199,16 +200,16 @@ commandParser ctx =
         mconcat
           [ commandGroup "Online (Blockchain) commands",
             command "sendtx" sendTxParser,
-            command "syncacc" (syncAccParser ctx),
-            command "discoveracc" (discoverAccParser ctx),
+            command "syncacc" syncAccParser,
+            command "discoveracc" discoverAccParser,
             hidden
           ],
       hsubparser $
         mconcat
           [ commandGroup "Utilities",
             command "version" versionParser,
-            command "preparesweep" (prepareSweepParser ctx),
-            command "signsweep" (signSweepParser ctx),
+            command "preparesweep" prepareSweepParser,
+            command "signsweep" signSweepParser,
             command "rolldice" rollDiceParser,
             hidden
           ]
@@ -349,9 +350,9 @@ derivationOption =
 
 {- TestAcc Parser -}
 
-testAccParser :: Ctx -> ParserInfo Command
-testAccParser ctx =
-  info (CommandTestAcc <$> accountOption ctx <*> splitInOption) $
+testAccParser :: ParserInfo Command
+testAccParser =
+  info (CommandTestAcc <$> accountOption <*> splitInOption) $
     mconcat
       [ progDescDoc $ offline "Test your mnemonic and passphrase",
         footer
@@ -360,8 +361,8 @@ testAccParser ctx =
           \ and make sure that it matches the account on file."
       ]
 
-accountOption :: Ctx -> Parser (Maybe Text)
-accountOption ctx =
+accountOption :: Parser (Maybe Text)
+accountOption =
   optional $
     strOption $
       mconcat
@@ -369,7 +370,7 @@ accountOption ctx =
           long "account",
           help "Specify an account to use for this command",
           metavar "TEXT",
-          completer (mkCompleter $ accountCompleter ctx)
+          completer (mkCompleter accountCompleter)
         ]
 
 {- ImportAcc Parser -}
@@ -388,47 +389,42 @@ importAccParser =
 
 {- RenameAcc Parser -}
 
-renameAccParser :: Ctx -> ParserInfo Command
-renameAccParser ctx =
+renameAccParser :: ParserInfo Command
+renameAccParser =
   info
     ( CommandRenameAcc
-        <$> accountArg ctx "Old account name"
+        <$> accountArg "Old account name"
         <*> textArg "New account name"
     )
     $ mconcat [progDesc "Rename an account"]
 
-accountArg :: Ctx -> String -> Parser Text
-accountArg ctx desc =
+accountArg :: String -> Parser Text
+accountArg desc =
   argument str $
     mconcat
       [ help desc,
         metavar "TEXT",
-        completer (mkCompleter $ accountCompleter ctx)
+        completer (mkCompleter accountCompleter)
       ]
 
-accountCompleter :: Ctx -> String -> IO [String]
-accountCompleter ctx pref = do
-  names <- fromRight [] <$> run
+accountCompleter :: String -> IO [String]
+accountCompleter pref = do
+  names <- runDB getAccountNames
   return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> names)
-  where
-    run = runDB getAccountNames
 
 {- Accounts Parser -}
 
-accountsParser :: Ctx -> ParserInfo Command
-accountsParser ctx =
-  info (CommandAccounts <$> accountOption ctx) $
+accountsParser :: ParserInfo Command
+accountsParser =
+  info (CommandAccounts <$> accountOption) $
     mconcat [progDesc "Display account information"]
 
 {- Receive Parser -}
 
-receiveParser :: Ctx -> ParserInfo Command
-receiveParser ctx =
+receiveParser :: ParserInfo Command
+receiveParser =
   info
-    ( CommandReceive
-        <$> accountOption ctx
-        <*> labelOption
-    )
+    (CommandReceive <$> accountOption <*> labelOption)
     $ mconcat [progDesc "Get a new address for receiving a payment"]
 
 labelOption :: Parser (Maybe Text)
@@ -444,11 +440,11 @@ labelOption =
 
 {- Addrs Parser -}
 
-addrsParser :: Ctx -> ParserInfo Command
-addrsParser ctx =
+addrsParser :: ParserInfo Command
+addrsParser =
   info
     ( CommandAddrs
-        <$> accountOption ctx
+        <$> accountOption
         <*> (Page <$> limitOption <*> offsetOption)
     )
     $ mconcat [progDesc "List the latest receiving addresses in the account"]
@@ -479,11 +475,11 @@ limitOption =
 
 {- Label Parser-}
 
-labelParser :: Ctx -> ParserInfo Command
-labelParser ctx =
+labelParser :: ParserInfo Command
+labelParser =
   info
     ( CommandLabel
-        <$> accountOption ctx
+        <$> accountOption
         <*> addrIndexArg
         <*> textArg "The new address label"
     )
@@ -499,23 +495,23 @@ addrIndexArg =
 
 {- Txs Parser -}
 
-txsParser :: Ctx -> ParserInfo Command
-txsParser ctx =
+txsParser :: ParserInfo Command
+txsParser =
   info
     ( CommandTxs
-        <$> accountOption ctx
+        <$> accountOption
         <*> (Page <$> limitOption <*> offsetOption)
     )
     $ mconcat [progDesc "Display the transactions in an account"]
 
 {- PrepareTx Parser -}
 
-prepareTxParser :: Ctx -> ParserInfo Command
-prepareTxParser ctx =
+prepareTxParser :: ParserInfo Command
+prepareTxParser =
   info
     ( CommandPrepareTx
         <$> some recipientArg
-        <*> accountOption ctx
+        <*> accountOption
         <*> unitOption
         <*> feeOption
         <*> dustOption
@@ -615,8 +611,12 @@ rcptPayOption =
 
 reviewParser :: ParserInfo Command
 reviewParser =
-  info (CommandReview <$> fileArgument "Path of the transaction file") $
-    mconcat
+  info
+    ( CommandReview
+        <$> accountOption
+        <*> fileArgument "Path of the transaction file"
+    )
+    $ mconcat
       [ progDesc "Review the contents of a transaction file",
         footer
           "The review command allows you to inspect the details of a transaction\
@@ -659,17 +659,17 @@ sendTxParser =
 
 {- SyncAcc Parser -}
 
-syncAccParser :: Ctx -> ParserInfo Command
-syncAccParser ctx =
-  info (CommandSyncAcc <$> accountOption ctx ) $
+syncAccParser :: ParserInfo Command
+syncAccParser =
+  info (CommandSyncAcc <$> accountOption) $
     mconcat
-      [ progDesc "Sync transactions and balances from the blockchain" ]
+      [progDesc "Sync transactions and balances from the blockchain"]
 
 {- DiscoverAcc Parser -}
 
-discoverAccParser :: Ctx -> ParserInfo Command
-discoverAccParser ctx =
-  info (CommandDiscoverAcc <$> accountOption ctx) $
+discoverAccParser :: ParserInfo Command
+discoverAccParser =
+  info (CommandDiscoverAcc <$> accountOption) $
     mconcat
       [ progDesc "Scan the blockchain to generate missing addresses",
         footer
@@ -689,13 +689,13 @@ versionParser =
 
 {- PrepareSweep Parser -}
 
-prepareSweepParser :: Ctx -> ParserInfo Command
-prepareSweepParser ctx =
+prepareSweepParser :: ParserInfo Command
+prepareSweepParser =
   info
     ( CommandPrepareSweep
         <$> many (addressArg "List of addresses to sweep")
         <*> maybeFileOption "File containing addresses to sweep"
-        <*> accountOption ctx
+        <*> accountOption
         <*> feeOption
         <*> dustOption
     )
@@ -726,13 +726,13 @@ maybeFileOption desc =
 
 {- SignSweep Parser -}
 
-signSweepParser :: Ctx -> ParserInfo Command
-signSweepParser ctx =
+signSweepParser :: ParserInfo Command
+signSweepParser =
   info
     ( CommandSignSweep
         <$> dirArgument "Folder containing the sweep transactions"
         <*> fileArgument "Path to the file containing the private keys"
-        <*> accountOption ctx
+        <*> accountOption
     )
     $ mconcat
       [ progDesc "Sign all the transactions contained in a sweep folder",
