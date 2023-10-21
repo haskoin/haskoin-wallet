@@ -108,6 +108,7 @@ DBAccount
   UniqueXPubKey xPubKey
   UniqueNetworkId wallet network index
   deriving Show
+  deriving Eq
 
 DBAddress
   index Int
@@ -127,6 +128,7 @@ DBAddress
   UniqueAddress address
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
+  deriving Eq
 
 DBTxInfo
   accountWallet DBWalletId
@@ -139,6 +141,7 @@ DBTxInfo
   Primary accountWallet accountDerivation txid
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
+  deriving Eq
 
 DBCoin
   accountWallet DBWalletId
@@ -152,12 +155,14 @@ DBCoin
   Primary outpoint
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
   deriving Show
+  deriving Eq
 
 DBRawTx
   hash Text
   blob ByteString
   Primary hash
   deriving Show
+  deriving Eq
 
 DBBest
   network Text
@@ -795,13 +800,14 @@ getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
     liftEither $ maybeToEither "getUnconfirmedTxs invalid TxHash" $ hexToTxHash t
 
 -- Insert a new transaction or replace it, if it already exists
+-- Returns True if there was a change or an insert
 repsertTxInfo ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   DBAccountId ->
   TxInfo ->
-  DB m DBTxInfo
+  DB m (DBTxInfo, Bool)
 repsertTxInfo net ctx accId tif = do
   time <- liftIO getCurrentTime
   let confirmed' = Store.confirmed $ txInfoBlockRef tif
@@ -831,10 +837,10 @@ repsertTxInfo net ctx accId tif = do
                 dBTxInfoBlob = blob
               }
       P.replace key newTxInfo
-      return newTxInfo
+      return (newTxInfo, res /= newTxInfo)
     Nothing -> do
       P.insert_ txInfo
-      return txInfo
+      return (txInfo, True)
 
 txsPage ::
   (MonadUnliftIO m) =>

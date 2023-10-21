@@ -474,7 +474,7 @@ commandResponse ctx =
     CommandReview accM file -> cmdReview ctx accM file
     CommandSignTx file s -> cmdSignTx ctx file s
     CommandSendTx file -> cmdSendTx ctx file
-    CommandSyncAcc accM -> cmdSyncAcc ctx accM
+    CommandSyncAcc accM full -> cmdSyncAcc ctx accM full
     CommandDiscoverAcc accM -> cmdDiscoverAccount ctx accM
     CommandVersion -> cmdVersion
     CommandPrepareSweep as fileM accM fee dust ->
@@ -656,8 +656,8 @@ cmdSendTx ctx fp =
     Store.TxId netTxId <- liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
     return $ ResponseSendTx netTxId
 
-cmdSyncAcc :: Ctx -> Maybe Text -> IO Response
-cmdSyncAcc ctx nameM = do
+cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> IO Response
+cmdSyncAcc ctx nameM full = do
   runDB . catchResponseError $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
@@ -672,28 +672,39 @@ cmdSyncAcc ctx nameM = do
       liftExcept . apiBatch ctx addrBatch (conf net) $
         GetAddrsBalance (Map.keys addrBalMap)
     -- Filter only those addresses whose balances have changed
-    balsToUpdate <- liftEither $ filterAddresses storeBals addrBalMap
+    balsToUpdate <-
+      if full
+        then return storeBals
+        else liftEither $ filterAddresses storeBals addrBalMap
     let addrsToUpdate = (.address) <$> balsToUpdate
     -- Update balances
     updateAddressBalances net balsToUpdate
     newAcc <- lift $ updateAccountBalances accId
+    -- Get a list of our confirmed txs in the local database
+    -- Use an empty list when doing a full sync
+    confirmedTxs <- if full then return [] else getConfirmedTxs accId True
     -- Fetch the txids of the addresses to update
-    tids <- searchAddrTxs net ctx addrsToUpdate
+    tids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
     -- Fetch the full transactions
     Store.SerialList txs <-
       liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
     -- Convert them to TxInfo and store them in the local database
     let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
-    lift $ forM_ txInfos $ repsertTxInfo net ctx accId
+    resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
     -- Fetch and update coins
     Store.SerialList storeCoins <-
       liftExcept . apiBatch ctx coinBatch (conf net) $
         GetAddrsUnspent addrsToUpdate def
     (coinCount, newCoins) <- lift $ updateCoins net accId storeCoins
     -- Get the dependent tranactions of the new coins
-    depTxsHash <- mapM (liftEither . coinToTxHash) newCoins
+    depTxsHash <-
+      if full
+        then return $ (.outpoint.hash) <$> storeCoins
+        else mapM (liftEither . coinToTxHash) newCoins
     Store.RawResultList rawTxs <-
-      liftExcept . apiBatch ctx txFullBatch (conf net) $ GetTxsRaw depTxsHash
+      liftExcept . apiBatch ctx txFullBatch (conf net) $
+        GetTxsRaw $
+          nub depTxsHash
     lift $ forM_ rawTxs insertRawTx
     -- Update the best block for this network
     lift $ updateBest net (headerHash best.header) best.height
@@ -702,7 +713,7 @@ cmdSyncAcc ctx nameM = do
         newAcc
         (headerHash best.header)
         (fromIntegral best.height)
-        (fromIntegral $ length txInfos)
+        (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
         (fromIntegral coinCount)
 
 coinToTxHash :: DBCoin -> Either String TxHash
@@ -734,10 +745,11 @@ searchAddrTxs ::
   (MonadIO m) =>
   Network ->
   Ctx ->
+  [TxHash] ->
   [Address] ->
   ExceptT String m [TxHash]
-searchAddrTxs _ _ [] = return []
-searchAddrTxs net ctx as
+searchAddrTxs _ _ _ [] = return []
+searchAddrTxs net ctx confirmedTxs as
   | length as > fromIntegral addrBatch =
       nub . concat <$> mapM (go Nothing 0) (chunksOf addrBatch as)
   | otherwise =
@@ -757,8 +769,10 @@ searchAddrTxs net ctx as
                     offset = offset
                   }
             )
-      let tids = (.txid) <$> txRefs
-      -- If we have reached the end of the stream we can stop the search.
+      -- Remove txs that we already have
+      let tids = ((.txid) <$> txRefs) \\ confirmedTxs
+      -- Either we have reached the end of the stream, or we have hit some
+      -- txs in confirmedTxs. In both cases, we can stop the search.
       if length tids < fromIntegral txBatch
         then return tids
         else do

@@ -128,7 +128,8 @@ data Command
       { commandFilePath :: !FilePath
       }
   | CommandSyncAcc
-      { commandMaybeAcc :: !(Maybe Text)
+      { commandMaybeAcc :: !(Maybe Text),
+        commandFull :: !Bool
       }
   | CommandDiscoverAcc
       { commandMaybeAcc :: !(Maybe Text)
@@ -661,9 +662,29 @@ sendTxParser =
 
 syncAccParser :: ParserInfo Command
 syncAccParser =
-  info (CommandSyncAcc <$> accountOption) $
+  info (CommandSyncAcc <$> accountOption <*> fullOption) $
     mconcat
-      [progDesc "Sync transactions and balances from the blockchain"]
+      [ progDesc "Download new transactions, balances and coins",
+        footer
+          "The wallet data is stored in a local database. Most commands\
+          \ will query this database to show results. To refresh your local\
+          \ database with the latest information from the blockchain, you must\
+          \ call syncacc. This will pull the latest transactions, balances and\
+          \ coins into your wallet. Unles you specify the --full option, a\
+          \ partial sync is performed by comparing address balances and\
+          \ downloading only the data from addresses that have changed. If you\
+          \ specify the --full option, everything will be downloaded again but\
+          \ this can take time depending on the size of your wallet."
+      ]
+
+fullOption :: Parser Bool
+fullOption =
+  switch $
+    mconcat
+      [ long "full",
+        help "Perform a full sync instead of a regular sync",
+        showDefault
+      ]
 
 {- DiscoverAcc Parser -}
 
