@@ -124,6 +124,9 @@ data Command
       { commandFilePath :: !FilePath,
         commandSplitIn :: !Natural
       }
+  | CommandCoins
+      { commandMaybeAcc :: !(Maybe Text)
+      }
   | CommandSendTx
       { commandFilePath :: !FilePath
       }
@@ -195,6 +198,7 @@ commandParser =
             command "preparetx" prepareTxParser,
             command "review" reviewParser,
             command "signtx" signTxParser,
+            command "coins" coinsParser,
             hidden
           ],
       hsubparser $
@@ -484,7 +488,7 @@ labelParser =
         <*> addrIndexArg
         <*> textArg "The new address label"
     )
-    $ mconcat [progDesc "List the latest receiving addresses in the account"]
+    $ mconcat [progDesc "Set the label of an address"]
 
 addrIndexArg :: Parser Natural
 addrIndexArg =
@@ -650,6 +654,15 @@ signTxParser =
           \ have to enter the mnemonic again. If you have a split mnemonic, you\
           \ will have to use the --split option."
       ]
+
+{- Coins Parser -}
+
+coinsParser :: ParserInfo Command
+coinsParser =
+  info
+    (CommandCoins <$> accountOption)
+    $ mconcat
+      [progDesc "List all the coins in an account"]
 
 {- SendTx Parser -}
 

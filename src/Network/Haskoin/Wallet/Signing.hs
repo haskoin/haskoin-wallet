@@ -130,6 +130,8 @@ buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
       depTxs <- mapM getRawTx depTxHash
       -- Commit the internal address if we used it
       unless noChange $ void $ commitInternalAddress accId 0
+      -- Lock the coins that we used
+      lift $ mapM_ (\c -> setLockCoin c.outpoint True) pickedCoins
       -- Return the result
       let idx = fromIntegral $ dBAccountIndex acc
       return $ TxSignData tx depTxs inDerivs outDerivs idx False net
