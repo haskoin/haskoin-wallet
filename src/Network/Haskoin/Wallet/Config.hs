@@ -32,6 +32,9 @@ conf net = ApiConfig net (def :: ApiConfig).host
 gap :: Natural
 gap = 20
 
+recoveryGap :: Natural
+recoveryGap = 40
+
 addrBatch :: Natural
 addrBatch = 100
 

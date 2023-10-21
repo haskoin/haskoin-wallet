@@ -677,10 +677,8 @@ cmdSyncAcc ctx nameM = do
     -- Update balances
     updateAddressBalances net balsToUpdate
     newAcc <- lift $ updateAccountBalances accId
-    -- Get a list of our confirmed txs in the local database
-    confirmedTxs <- getConfirmedTxs accId True
     -- Fetch the txids of the addresses to update
-    tids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
+    tids <- searchAddrTxs net ctx addrsToUpdate
     -- Fetch the full transactions
     Store.SerialList txs <-
       liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
@@ -736,11 +734,10 @@ searchAddrTxs ::
   (MonadIO m) =>
   Network ->
   Ctx ->
-  [TxHash] ->
   [Address] ->
   ExceptT String m [TxHash]
-searchAddrTxs _ _ _ [] = return []
-searchAddrTxs net ctx confirmedTxs as
+searchAddrTxs _ _ [] = return []
+searchAddrTxs net ctx as
   | length as > fromIntegral addrBatch =
       nub . concat <$> mapM (go Nothing 0) (chunksOf addrBatch as)
   | otherwise =
@@ -760,10 +757,8 @@ searchAddrTxs net ctx confirmedTxs as
                     offset = offset
                   }
             )
-      -- Remove txs that we already have
-      let tids = ((.txid) <$> txRefs) \\ confirmedTxs
-      -- Either we have reached the end of the stream, or we have hit some
-      -- txs in confirmedTxs. In both cases, we can stop the search.
+      let tids = (.txid) <$> txRefs
+      -- If we have reached the end of the stream we can stop the search.
       if length tids < fromIntegral txBatch
         then return tids
         else do
@@ -778,8 +773,8 @@ cmdDiscoverAccount ctx nameM =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     checkHealth ctx net
-    e <- go net pub extDeriv 0 (Page (fromIntegral gap) 0)
-    i <- go net pub intDeriv 0 (Page (fromIntegral gap) 0)
+    e <- go net pub extDeriv 0 (Page recoveryGap 0)
+    i <- go net pub intDeriv 0 (Page recoveryGap 0)
     _ <- updateDeriv net ctx accId extDeriv e
     newAcc <- updateDeriv net ctx accId intDeriv i
     return $ ResponseDiscoverAcc newAcc
@@ -792,8 +787,8 @@ cmdDiscoverAccount ctx nameM =
       if null vBals
         then return d
         else do
-          let d' = findMax addrs $ (.address) <$> vBals
-          go net pub path (d' + 1) (Page lim (off + lim))
+          let dMax = findMax addrs $ (.address) <$> vBals
+          go net pub path (dMax + 1) (Page lim (off + lim))
     -- Find the largest ID amongst the addresses that have a positive balance
     findMax :: [(Address, SoftPath)] -> [Address] -> Natural
     findMax addrs balAddrs =

@@ -129,7 +129,7 @@ buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
       let depTxHash = (.hash) . (.outpoint) <$> tx.inputs
       depTxs <- mapM getRawTx depTxHash
       -- Commit the internal address if we used it
-      unless noChange $ void $ commitInternalAddress accId Nothing
+      unless noChange $ void $ commitInternalAddress accId 0
       -- Return the result
       let idx = fromIntegral $ dBAccountIndex acc
       return $ TxSignData tx depTxs inDerivs outDerivs idx False net
@@ -289,7 +289,7 @@ buildSweepSignData net ctx accId acc addrs feeByte dust
             accIdx = fromIntegral $ dBAccountIndex acc
         return $ TxSignData tx depTxs inDerivs outDerivs accIdx False net
       -- Commit the internal addresses used
-      _ <- commitInternalAddress accId (Just intCount)
+      when (intCount > 0) $ void $ commitInternalAddress accId (intCount - 1)
       return res
 
 buildSweepTxs ::
@@ -309,8 +309,8 @@ buildSweepTxs net ctx accId allCoins feeByte dust = do
     shuffledCoins <- randomShuffle allCoins
     runExceptT $ go shuffledCoins [] 0
   where
-    go [] acc idx = return (acc, fromIntegral idx)
-    go coins acc idx = do
+    go [] acc offset' = return (acc, fromIntegral offset')
+    go coins acc offset' = do
       nIns <- randomRange 1 5
       let (pickedCoins, restCoins) = splitAt nIns coins
           coinsTot = sum $ (.value) <$> pickedCoins
@@ -321,14 +321,14 @@ buildSweepTxs net ctx accId allCoins feeByte dust = do
         throwError "Could not find a sweep solution"
       amnt1 <- randomRange amntMin (amntTot - amntMin)
       let amnt2 = amntTot - amnt1
-      (addr1, deriv1) <- lift . lift $ peekInternalAddress ctx accId idx
-      (addr2, deriv2) <- lift . lift $ peekInternalAddress ctx accId (idx+1)
+      (addr1, deriv1) <- lift . lift $ peekInternalAddress ctx accId offset'
+      (addr2, deriv2) <- lift . lift $ peekInternalAddress ctx accId (offset'+1)
       rcpts <- randomShuffle [(addr1, amnt1), (addr2, amnt2)]
       rcptsTxt <- liftEither $ mapM (addrToText2 net) rcpts
       tx <-
         liftEither $
           buildAddrTx net ctx ((.outpoint) <$> pickedCoins) rcptsTxt
-      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : acc) (idx+2)
+      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : acc) (offset'+2)
 
 -- Utilities --
 

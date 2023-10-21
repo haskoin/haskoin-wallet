@@ -70,6 +70,7 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
 import Haskoin.Transaction
 import Haskoin.Util (maybeToEither)
+import Network.Haskoin.Wallet.Config
 import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.TxInfo
 import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
@@ -617,45 +618,77 @@ receiveAddress ctx nameM label = do
   (accId, acc) <- getAccount nameM
   let net = accountNetwork acc
       xpub = accountXPubKey ctx acc
-      ext = fromIntegral $ dBAccountExternal acc
-      (addr, _) = derivePathAddr ctx xpub extDeriv ext
-  dbAddr <- insertAddress net accId (extDeriv :/ ext) addr label
-  newAcc <- lift $ P.updateGet accId [DBAccountExternal P.+=. 1]
+      idx = fromIntegral $ dBAccountExternal acc :: Natural
+      idxW = fromIntegral idx :: Word32
+      idxI = fromIntegral idx :: Int
+  -- Verify that we respect the gap
+  usedIdx <- lift $ lastUsedAddress accId False
+  when (idx > usedIdx + gap) $
+    throwError $
+      "Can not generate addresses beyond the gap of " <> show gap
+  -- Create the address and update the account index
+  let (addr, _) = derivePathAddr ctx xpub extDeriv idxW
+  dbAddr <- insertAddress net accId (extDeriv :/ idxW) addr label
+  newAcc <-
+    lift $ P.updateGet accId [DBAccountExternal P.=. idxI + 1]
   return (newAcc, dbAddr)
 
 peekInternalAddress ::
   (MonadUnliftIO m) =>
   Ctx ->
   DBAccountId ->
-  Word32 ->
+  Natural -> -- Offset
   ExceptT String (DB m) (Address, SoftPath)
-peekInternalAddress ctx accId offset' = do
-  acc <- getAccountId accId
-  let net = accountNetwork acc
-      xpub = accountXPubKey ctx acc
-      accIdx = fromIntegral $ dBAccountInternal acc
-      idx = accIdx + offset'
-      (addr, _) = derivePathAddr ctx xpub intDeriv idx
-  _ <- insertAddress net accId (intDeriv :/ idx) addr ""
-  return (addr, intDeriv :/ idx)
+peekInternalAddress ctx accId offset'
+  | offset' >= gap = throwError "peekInternalAddress: Offset >= gap"
+  | otherwise = do
+      acc <- getAccountId accId
+      let accIdx = dBAccountInternal acc
+          idx = fromIntegral accIdx + offset' :: Natural
+          idxW = fromIntegral idx :: Word32
+      -- Verify that we respect the gap
+      usedIdx <- lift $ lastUsedAddress accId True
+      when (idx > usedIdx + gap) $
+        throwError $
+          "Can not generate internal addresses beyond the gap of " <> show gap
+      -- Create an internal address but do not update the account index
+      let net = accountNetwork acc
+          xpub = accountXPubKey ctx acc
+          (addr, _) = derivePathAddr ctx xpub intDeriv idxW
+      _ <- insertAddress net accId (intDeriv :/ idxW) addr ""
+      return (addr, intDeriv :/ idxW)
 
 commitInternalAddress ::
-     (MonadUnliftIO m)
-  => DBAccountId
-  -> Maybe Natural -- Number of new addresses
-  -> ExceptT String (DB m) DBAccount
-commitInternalAddress accId (Just count') =
-  lift $ P.updateGet accId [DBAccountInternal P.+=. fromIntegral count']
-commitInternalAddress accId@(DBAccountKey wallet accDeriv) Nothing = do
-  idxM <-
-    lift . selectOne . from $ \a -> do
-      where_ $
-        a ^. DBAddressAccountWallet ==. val wallet
-          &&. a ^. DBAddressAccountDerivation ==. val accDeriv
-          &&. a ^. DBAddressInternal ==. val True
-      return $ max_ $ a ^. DBAddressIndex
-  let intIdx = joinMaybe 0 (+ 1) idxM
-  lift $ P.updateGet accId [DBAccountInternal P.=. intIdx]
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Natural -> -- Offset
+  ExceptT String (DB m) DBAccount
+commitInternalAddress accId@(DBAccountKey wallet accDeriv) offset' = do
+  acc <- getAccountId accId
+  let accIdx = dBAccountInternal acc
+      idx = fromIntegral accIdx + fromIntegral offset'
+  addrM <- lift . selectOne . from $ \a -> do
+    where_ $
+      a ^. DBAddressAccountWallet ==. val wallet
+        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        &&. a ^. DBAddressInternal ==. val True
+        &&. a ^. DBAddressIndex ==. val idx
+    return a
+  case addrM of
+    Just _ -> do
+      lift $ P.updateGet accId [DBAccountInternal P.=. idx + 1]
+    Nothing -> throwError "commitInternalAddress: Invalid offset"
+
+lastUsedAddress :: (MonadUnliftIO m) => DBAccountId -> Bool -> DB m Natural
+lastUsedAddress (DBAccountKey wallet accDeriv) internal = do
+  resM <- selectOne . from $ \a -> do
+    where_ $
+      a ^. DBAddressAccountWallet ==. val wallet
+        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        &&. a ^. DBAddressInternal ==. val internal
+        &&. a ^. DBAddressBalanceTxs >. val 0
+    return $ max_ $ a ^. DBAddressIndex
+  return $ joinMaybe 0 fromIntegral resM
 
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
 addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
@@ -728,7 +761,7 @@ getCoinDeriv net unspent =
 
 getAddrDeriv ::
   (MonadUnliftIO m) => Network -> Address -> DB m (Either String SoftPath)
-getAddrDeriv net addr = 
+getAddrDeriv net addr =
   runExceptT $ do
     addrT <-
       liftEither . maybeToEither "getAddrDeriv: no address" $ addrToText net addr
@@ -908,11 +941,11 @@ getCoinsByAddr addr = do
 -- Either insert, update or delete coins as required. Returns the number of
 -- coins that have either been inserted, updated or deleted.
 updateCoins ::
-     (MonadUnliftIO m)
-  => Network
-  -> DBAccountId
-  -> [Store.Unspent]
-  -> DB m (Int, [DBCoin])
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  [Store.Unspent] ->
+  DB m (Int, [DBCoin])
 updateCoins net accId allUnspent = do
   let storeMap = groupCoins net allUnspent
   res <- forM (Map.assocs storeMap) $ \(addr, storeCoins) -> do
