@@ -16,6 +16,7 @@ import Haskoin.Store.WebClient
   ( ApiConfig (..),
   )
 import Numeric.Natural (Natural)
+import qualified System.Directory as D
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
@@ -25,6 +26,12 @@ versionString = CURRENT_PACKAGE_VERSION
 #else
 versionString = "Unavailable"
 #endif
+
+hwDataDirectory :: IO FilePath
+hwDataDirectory = do
+  dir <- D.getAppUserDataDirectory "hw"
+  D.createDirectoryIfMissing True dir
+  return dir
 
 conf :: Network -> ApiConfig
 conf net = ApiConfig net (def :: ApiConfig).host

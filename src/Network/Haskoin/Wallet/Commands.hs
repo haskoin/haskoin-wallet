@@ -68,12 +68,13 @@ import Haskoin.Store.WebClient
     apiBatch,
     apiCall,
   )
-import Haskoin.Transaction (OutPoint (..), TxHash (..))
+import Haskoin.Transaction (OutPoint (..), TxHash (..), nosigTxHash)
 import Haskoin.Util
   ( MarshalJSON (marshalValue, unmarshalValue),
     decodeHex,
     eitherToMaybe,
     maybeToEither,
+    snd3
   )
 import Network.Haskoin.Wallet.Amounts
   ( AmountUnit,
@@ -89,33 +90,9 @@ import Network.Haskoin.Wallet.Entropy
     word8ToBase6,
   )
 import Network.Haskoin.Wallet.FileIO
-  ( HWFolder (PubKeyFolder, SweepFolder, TxFolder),
-    PubKeyDoc (PubKeyDoc),
-    TxSignData
-      ( TxSignData,
-        txSignDataAccount,
-        txSignDataNetwork,
-        txSignDataTx
-      ),
-    checkFileExists,
-    docFilePath,
-    hwDataDirectory,
-    parseAddrsFile,
-    parseSecKeysFile,
-    readFileWords,
-    readMarshalFile,
-    txsChecksum,
-    writeDoc,
-  )
 import Network.Haskoin.Wallet.Parser
 import Network.Haskoin.Wallet.Signing
 import Network.Haskoin.Wallet.TxInfo
-  ( TxInfo,
-    UnsignedTxInfo,
-    parseTxSignData,
-    toTxInfo,
-    unsignedToTxInfo,
-  )
 import Network.Haskoin.Wallet.Util
   ( Page (Page),
     addrToText3,
@@ -177,18 +154,19 @@ data Response
       }
   | ResponsePrepareTx
       { responseAccount :: !DBAccount,
-        responseTxFile :: !Text,
-        responseUnsignedTx :: !UnsignedTxInfo
+        responsePendingTx :: !NoSigTxInfo
       }
-  | ResponseReview
+  | ResponsePendingTxs
       { responseAccount :: !DBAccount,
-        responseTransactionM :: !(Maybe TxInfo),
-        responseUnsignedTxM :: !(Maybe UnsignedTxInfo)
+        responsePendingTxs :: ![NoSigTxInfo]
+      }
+  | ResponseReviewTx
+      { responseAccount :: !DBAccount,
+        responsePendingTx :: !NoSigTxInfo
       }
   | ResponseSignTx
-      { responseTxFile :: !Text,
-        responseTransaction :: !TxInfo,
-        responseNetwork :: !Network
+      { responseAccount :: !DBAccount,
+        responsePendingTx :: !NoSigTxInfo
       }
   | ResponseCoins
       { responseAccount :: !DBAccount,
@@ -214,12 +192,12 @@ data Response
   | ResponsePrepareSweep
       { responseAccount :: !DBAccount,
         responseTxFiles :: ![Text],
-        responseUnsignedTxs :: ![UnsignedTxInfo]
+        responsePendingTxs :: ![NoSigTxInfo]
       }
   | ResponseSignSweep
       { responseAccount :: !DBAccount,
         responseTxFiles :: ![Text],
-        responseTransactions :: ![TxInfo]
+        responsePendingTxs :: ![NoSigTxInfo]
       }
   | ResponseRollDice
       { responseRollDice :: ![Natural],
@@ -294,29 +272,33 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "txs" .= (marshalValue (accountNetwork a, ctx) <$> txs)
           ]
-      ResponsePrepareTx a f t ->
+      ResponsePrepareTx a t -> do
+        let net = accountNetwork a
         object
           [ "type" .= Json.String "preparetx",
             "account" .= a,
-            "txfile" .= f,
-            "unsignedtx" .= marshalValue (accountNetwork a, ctx) t
+            "pendingtx" .= marshalValue (net, ctx) t
           ]
-      ResponseReview a wTxM uTxM -> do
+      ResponsePendingTxs a ts -> do
         let net = accountNetwork a
-            wTx = marshalValue (net, ctx) <$> wTxM
-            uTx = marshalValue (net, ctx) <$> uTxM
         object
-          [ "type" .= Json.String "review",
+          [ "type" .= Json.String "pendingtxs",
             "account" .= a,
-            "transaction" .= fromMaybe Json.Null wTx,
-            "unsignedtx" .= fromMaybe Json.Null uTx
+            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
           ]
-      ResponseSignTx f t net ->
+      ResponseReviewTx a tx -> do
+        let net = accountNetwork a
+        object
+          [ "type" .= Json.String "reviewtx",
+            "account" .= a,
+            "pendingtx" .= marshalValue (net, ctx) tx
+          ]
+      ResponseSignTx a t -> do
+        let net = accountNetwork a
         object
           [ "type" .= Json.String "signtx",
-            "txfile" .= f,
-            "transaction" .= marshalValue (net, ctx) t,
-            "network" .= net.name
+            "account" .= a,
+            "pendingtx" .= marshalValue (net, ctx) t
           ]
       ResponseCoins a coins -> do
         let net = accountNetwork a
@@ -349,21 +331,21 @@ instance MarshalJSON Ctx Response where
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
-      ResponsePrepareSweep a fs ts ->
+      ResponsePrepareSweep a fs ts -> do
+        let net = accountNetwork a
         object
           [ "type" .= Json.String "preparesweep",
             "account" .= a,
             "txfiles" .= fs,
-            "unsignedtxs"
-              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> ts)
+            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
           ]
-      ResponseSignSweep a fs ts ->
+      ResponseSignSweep a fs ts -> do
+        let net = accountNetwork a
         object
           [ "type" .= Json.String "signsweep",
             "account" .= a,
             "txfiles" .= fs,
-            "transactions"
-              .= Json.toJSON (marshalValue (accountNetwork a, ctx) <$> ts)
+            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
           ]
       ResponseRollDice ns e ->
         object
@@ -416,22 +398,24 @@ instance MarshalJSON Ctx Response where
           return $ ResponseTxs a txs
         "preparetx" -> do
           a <- o .: "account"
-          f <- o .: "txfile"
-          let g = unmarshalValue (accountNetwork a, ctx)
-          t <- g =<< o .: "unsignedtx"
-          return $ ResponsePrepareTx a f t
-        "review" -> do
+          let net = accountNetwork a
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
+          return $ ResponsePrepareTx a t
+        "pendingtxs" -> do
           a <- o .: "account"
-          let f = unmarshalValue (accountNetwork a, ctx)
-              g = unmarshalValue (accountNetwork a, ctx)
-          wTxM <- maybe (return Nothing) ((Just <$>) . f) =<< o .:? "transaction"
-          uTxM <- maybe (return Nothing) ((Just <$>) . g) =<< o .:? "unsignedtx"
-          return $ ResponseReview a wTxM uTxM
+          let net = accountNetwork a
+          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
+          return $ ResponsePendingTxs a ts
+        "reviewtx" -> do
+          a <- o .: "account"
+          let net = accountNetwork a
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
+          return $ ResponseReviewTx a t
         "signtx" -> do
-          net <- maybe mzero return . netByName =<< o .: "network"
-          f <- o .: "txfile"
-          t <- unmarshalValue (net, ctx) =<< o .: "transaction"
-          return $ ResponseSignTx f t net
+          a <- o .: "account"
+          let net = accountNetwork a
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
+          return $ ResponseSignTx a t
         "coins" -> do
           a <- o .: "account"
           xs <- o .: "coins"
@@ -459,14 +443,14 @@ instance MarshalJSON Ctx Response where
         "preparesweep" -> do
           a <- o .: "account"
           fs <- o .: "txfiles"
-          let f = unmarshalValue (accountNetwork a, ctx)
-          ts <- mapM f =<< o .: "unsignedtxs"
+          let net = accountNetwork a
+          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
           return $ ResponsePrepareSweep a fs ts
         "signsweep" -> do
           a <- o .: "account"
           fs <- o .: "txfiles"
-          let f = unmarshalValue (accountNetwork a, ctx)
-          ts <- mapM f =<< o .: "transactions"
+          let net = accountNetwork a
+          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
           return $ ResponseSignSweep a fs ts
         "rolldice" ->
           ResponseRollDice
@@ -489,7 +473,7 @@ commandResponse ctx =
     CommandCreateAcc t n dM s -> cmdCreateAcc ctx t n dM s
     CommandTestAcc nameM s -> cmdTestAcc ctx nameM s
     CommandImportAcc f -> cmdImportAcc ctx f
-    CommandRenameAcc old new -> cmdRenameAcc ctx old new
+    CommandRenameAcc old new -> cmdRenameAcc old new
     CommandAccounts nameM -> cmdAccounts nameM
     -- Address management
     CommandReceive nameM labM -> cmdReceive ctx nameM labM
@@ -497,10 +481,11 @@ commandResponse ctx =
     CommandLabel nameM i l -> cmdLabel nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx nameM p
-    CommandPrepareTx rcpts nameM unit fee dust rcptPay ->
-      prepareTx ctx rcpts nameM unit fee dust rcptPay
-    CommandReview nameM file -> cmdReview ctx nameM file
-    CommandSignTx file s -> cmdSignTx ctx file s
+    CommandPrepareTx rcpts nameM unit fee dust rcptPay o ->
+      cmdPrepareTx ctx rcpts nameM unit fee dust rcptPay o
+    CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
+    CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
+    CommandSignTx nameM h s -> cmdSignTx ctx nameM h s
     CommandCoins nameM p -> cmdCoins nameM p
     -- Online commands
     CommandSendTx nameM file -> cmdSendTx ctx nameM file
@@ -508,8 +493,8 @@ commandResponse ctx =
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
     -- Utilities
     CommandVersion -> cmdVersion
-    CommandPrepareSweep as fileM nameM fee dust ->
-      prepareSweep ctx as fileM nameM fee dust
+    CommandPrepareSweep as fileM nameM fee dust dir ->
+      prepareSweep ctx as fileM nameM fee dust dir
     CommandSignSweep dir keyFile nameM -> signSweep ctx dir keyFile nameM
     CommandRollDice n -> rollDice n
 
@@ -532,10 +517,7 @@ cmdCreateAcc ctx name net derivM splitIn =
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
     prvKey <- liftEither $ signingKey net ctx mnem d
     let xpub = deriveXPubKey ctx prvKey
-        doc = PubKeyDoc xpub net name walletFP
-    path <- liftIO $ docFilePath ctx PubKeyFolder doc
-    account <- insertAccount net ctx walletFP name xpub (cs path)
-    _ <- writeDoc ctx PubKeyFolder doc
+    account <- insertAccount net ctx walletFP name xpub
     return $ ResponseCreateAcc account
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
@@ -567,21 +549,14 @@ cmdTestAcc ctx nameM splitIn =
 cmdImportAcc :: Ctx -> FilePath -> IO Response
 cmdImportAcc ctx fp =
   runDB . catchResponseError $ do
-    doc@(PubKeyDoc xpub net name wallet) <-
-      liftEitherIO $ readMarshalFile ctx fp
-    path <- liftIO $ docFilePath ctx PubKeyFolder doc
-    acc <- insertAccount net ctx wallet name xpub (cs path)
-    _ <- writeDoc ctx PubKeyFolder doc
+    (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
+    acc <- insertAccount net ctx wallet name xpub
     return $ ResponseImportAcc acc
 
-cmdRenameAcc :: Ctx -> Text -> Text -> IO Response
-cmdRenameAcc ctx oldName newName =
+cmdRenameAcc :: Text -> Text -> IO Response
+cmdRenameAcc oldName newName =
   runDB . catchResponseError $ do
     acc <- renameAccount oldName newName
-    let xpub = accountXPubKey ctx acc
-        net = accountNetwork acc
-        wallet = accountWallet acc
-    _ <- writeDoc ctx PubKeyFolder $ PubKeyDoc xpub net newName wallet
     return $ ResponseRenameAcc oldName newName acc
 
 cmdAccounts :: Maybe Text -> IO Response
@@ -620,7 +595,7 @@ cmdTxs ctx nameM page =
     (acc, txInfos) <- txsPage ctx nameM page
     return $ ResponseTxs acc txInfos
 
-prepareTx ::
+cmdPrepareTx ::
   Ctx ->
   [(Text, Text)] ->
   Maybe Text ->
@@ -628,21 +603,26 @@ prepareTx ::
   Natural ->
   Natural ->
   Bool ->
+  Maybe FilePath ->
   IO Response
-prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
+cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
   runDB . catchResponseError $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
-    checkHealth ctx net
     (signDat, commitDB) <-
-      buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
+      buildTxSignData net ctx accId rcpts feeByte dust rcptPay
     txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
+    nosigHash <- repsertPendingTx accId signDat
+    case fileM of
+      Just file -> do
+        checkPathFree file
+        liftIO $ writeJsonFile file $ Json.toJSON signDat
+      _ -> return ()
     commitDB
     newAcc <- getAccountId accId
-    path <- writeDoc ctx TxFolder signDat
-    return $ ResponsePrepareTx newAcc (cs path) txInfoU
+    return $ ResponsePrepareTx newAcc $ NoSigUnsigned nosigHash txInfoU
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
@@ -651,34 +631,59 @@ prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
     badAmnt v =
       "Could not parse the amount " <> v <> " as " <> showUnit unit 1
 
-cmdReview :: Ctx -> Maybe Text -> FilePath -> IO Response
-cmdReview ctx nameM fp =
+cmdPendingTxs :: Ctx -> Maybe Text -> Page -> IO Response
+cmdPendingTxs ctx nameM page =
+  runDB . catchResponseError $ do
+    (accId, acc) <- getAccount nameM
+    let net = accountNetwork acc
+        pub = accountXPubKey ctx acc
+    tsds <- pendingTxPage accId page
+    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed)) -> do
+      txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+      return $
+        if signed
+          then NoSigSigned nosigH $ unsignedToTxInfo tx txInfoU
+          else NoSigUnsigned nosigH txInfoU
+    return $ ResponsePendingTxs acc txs
+
+cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdReviewTx ctx nameM fp =
   runDB . catchResponseError $ do
     acc <- getAccountVal nameM
-    let pub = accountXPubKey ctx acc
-    tsd@(TxSignData tx _ _ _ idx signed net) <-
-      liftEitherIO $ readMarshalFile ctx fp
-    when (dBAccountIndex acc /= fromIntegral idx) $
-      throwError $
-        "Invalid account index. Expecting account " <> show idx
+    let net = accountNetwork acc
+        pub = accountXPubKey ctx acc
+    tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
     txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
     let txInfo = unsignedToTxInfo tx txInfoU
+        nosigHash = nosigTxHash tx
     return $
-      if signed
-        then ResponseReview acc (Just txInfo) Nothing
-        else ResponseReview acc Nothing (Just txInfoU)
+      ResponseReviewTx acc $
+        if signed
+          then NoSigSigned nosigHash txInfo
+          else NoSigUnsigned nosigHash txInfoU
 
-cmdSignTx :: Ctx -> FilePath -> Natural -> IO Response
-cmdSignTx ctx fp splitIn =
-  catchResponseError $ do
-    txSignData <- liftEitherIO $ readMarshalFile ctx fp
-    let net = txSignDataNetwork txSignData
-        idx = txSignDataAccount txSignData
-    (mnem, _) <- askMnemonicPass net ctx splitIn
-    prvKey <- liftEither $ signingKey net ctx mnem idx
-    (newSignData, txInfo) <- liftEither $ signWalletTx ctx txSignData prvKey
-    path <- writeDoc ctx TxFolder newSignData
-    return $ ResponseSignTx (cs path) txInfo net
+cmdSignTx :: Ctx -> Maybe Text -> TxHash -> Natural -> IO Response
+cmdSignTx ctx nameM nosigHash splitIn =
+  runDB . catchResponseError $ do
+    txSignDataM <- lift $ getPendingTx nosigHash
+    case txSignDataM of
+      Nothing -> throwError "The transaction does not exist in the wallet"
+      Just tsd -> do
+        when (txSignDataSigned tsd) $
+          throwError "The transaction is already signed"
+        (accId, acc) <- getAccount nameM
+        let net = accountNetwork acc
+            idx = fromIntegral $ dBAccountIndex acc
+            accPub = accountXPubKey ctx acc
+        (mnem, _) <- askMnemonicPass net ctx splitIn
+        prvKey <- liftEither $ signingKey net ctx mnem idx
+        let pubKey = deriveXPubKey ctx prvKey
+        unless (accPub == pubKey) $
+          throwError "The mnemonic did not match the provided account"
+        (newSignData, txInfo) <-
+          liftEither $ signWalletTx net ctx tsd prvKey
+        nosigH <- repsertPendingTx accId newSignData
+        return $ ResponseSignTx acc (NoSigSigned nosigH txInfo)
 
 cmdCoins :: Maybe Text -> Page -> IO Response
 cmdCoins nameM page =
@@ -695,18 +700,14 @@ cmdSendTx :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdSendTx ctx nameM fp =
   runDB . catchResponseError $ do
     acc <- getAccountVal nameM
-    let pub = accountXPubKey ctx acc
-    tsd@(TxSignData signedTx _ _ _ idx signed net) <-
+    let net = accountNetwork acc
+        pub = accountXPubKey ctx acc
+    tsd@(TxSignData signedTx _ _ _ signed) <-
       liftEitherIO $ readMarshalFile ctx fp
-    -- Let's perform some sanity checks before sending
-    when (dBAccountIndex acc /= fromIntegral idx) $
-      throwError $
-        "Invalid account index. Expecting account " <> show idx
     txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
     let txInfo = unsignedToTxInfo signedTx txInfoU
         verify = verifyTxInfo net ctx signedTx txInfo
-    unless (signed && verify) $
-      throwError "The transaction is not signed"
+    unless (signed && verify) $ throwError "The transaction is not signed"
     checkHealth ctx net
     Store.TxId netTxId <- liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
     return $ ResponseSendTx acc txInfo netTxId
@@ -877,8 +878,9 @@ prepareSweep ::
   Maybe Text ->
   Natural ->
   Natural ->
+  FilePath ->
   IO Response
-prepareSweep ctx addrsTxt fileM nameM feeByte dust =
+prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
   runDB . catchResponseError $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
@@ -890,14 +892,16 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust =
         _ -> return []
     let addrs = addrsArg <> addrsFile
     checkHealth ctx net
-    (signDats, commitDB) <-
-      buildSweepSignData net ctx accId acc addrs feeByte dust
-    let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
-    txInfosU <- liftEither $ mapM (parseTxSignData net ctx pub) signDats
+    (tsds, commitDB) <- buildSweepSignData net ctx accId addrs feeByte dust
+    let f tsd@(TxSignData tx _ _ _ _) = do
+            infoU <- parseTxSignData net ctx pub tsd
+            return $ NoSigUnsigned (nosigTxHash tx) infoU
+    txInfosU <- liftEither $ mapM f tsds
+    sweepDir <- initSweepDir tsds dir
+    files <- writeSweepFiles tsds sweepDir
     commitDB
     newAcc <- getAccountId accId
-    paths <- mapM (writeDoc ctx (SweepFolder chksum)) signDats
-    return $ ResponsePrepareSweep newAcc (cs <$> paths) txInfosU
+    return $ ResponsePrepareSweep newAcc (cs <$> files) txInfosU
 
 signSweep :: Ctx -> FilePath -> FilePath -> Maybe Text -> IO Response
 signSweep ctx sweepDir keyFile nameM =
@@ -905,34 +909,26 @@ signSweep ctx sweepDir keyFile nameM =
     acc <- getAccountVal nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-        idx = dBAccountIndex acc
     -- Read the files containing the transactions to sweep
     sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
-    tsds <- mapM (liftEitherIO . readMarshalFile ctx) sweepFiles
-    when (null tsds) $ throwError "No sweep transactions to sign"
-    unless (all (valid (fromIntegral idx) net) tsds) $
-      throwError "Transactions do not match account information"
+    tsdsU <- mapM (liftEitherIO . readMarshalFile ctx) sweepFiles
+    when (null tsdsU) $ throwError "No sweep transactions to sign"
     -- Read the file containing the private keys
     secKeys <- parseSecKeysFile net <$> liftIO (readFileWords keyFile)
     when (null secKeys) $ throwError "No private keys to sign"
     -- Sign the transactions
     signRes <-
-      forM tsds $ \tsd ->
-        liftEither $ signTxWithKeys ctx tsd pub secKeys
+      forM tsdsU $ \tsdU -> do
+        (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsdU pub secKeys
+        return (newTsd, NoSigSigned (nosigTxHash $ txSignDataTx newTsd) txInfo)
     -- Checksum validation
-    let initChksum = cs $ txsChecksum $ txSignDataTx <$> tsds
-        chksum = cs $ txsChecksum $ txSignDataTx . fst <$> signRes
-    when (initChksum /= chksum) $
+    let oldChksum = txsChecksum $ txSignDataTx <$> tsdsU
+        newChksum = txsChecksum $ txSignDataTx . fst <$> signRes
+    when (oldChksum /= newChksum) $
       throwError "The transactions checksum do not match"
     -- Write the signed transactions to JSON files
-    res <-
-      forM signRes $ \(newTsd, txInfo) -> do
-        path <- writeDoc ctx (SweepFolder chksum) newTsd
-        return (path, txInfo)
-    return $ ResponseSignSweep acc (cs . fst <$> res) (snd <$> res)
-  where
-    valid idx net tsd =
-      txSignDataAccount tsd == idx && txSignDataNetwork tsd == net
+    signedFiles <- writeSweepFiles (fst <$> signRes) sweepDir
+    return $ ResponseSignSweep acc (cs <$> signedFiles) (snd <$> signRes)
 
 rollDice :: Natural -> IO Response
 rollDice n = do

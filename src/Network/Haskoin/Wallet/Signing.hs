@@ -93,13 +93,12 @@ buildTxSignData ::
   Network ->
   Ctx ->
   DBAccountId ->
-  DBAccount ->
   [(Address, Natural)] ->
   Natural ->
   Natural ->
   Bool ->
   ExceptT String (DB m) (TxSignData, ExceptT String (DB m) ())
-buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
+buildTxSignData net ctx accId rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
       -- Get all spendable coins in the account
@@ -125,9 +124,8 @@ buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
       let depTxHash = (.hash) . (.outpoint) <$> tx.inputs
       depTxs <- mapM getRawTx depTxHash
       -- Return the result
-      let idx = fromIntegral $ dBAccountIndex acc
       return
-        ( TxSignData tx depTxs (nub inDerivs) (nub outDerivs) idx False net,
+        ( TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False,
           do
             -- Commit the internal address if we used it
             unless noChange $ void $ commitInternalAddress accId 0
@@ -211,23 +209,25 @@ walletFingerprint net ctx mnem = do
   return $ xPubFP ctx $ deriveXPubKey ctx xPrvKey
 
 signWalletTx ::
+  Network ->
   Ctx ->
   TxSignData ->
   XPrvKey ->
   Either String (TxSignData, TxInfo)
-signWalletTx ctx tsd@TxSignData {txSignDataInputPaths = inPaths} signKey =
-  signTxWithKeys ctx tsd publicKey prvKeys
+signWalletTx net ctx tsd@TxSignData {txSignDataInputPaths = inPaths} signKey =
+  signTxWithKeys net ctx tsd publicKey prvKeys
   where
     publicKey = deriveXPubKey ctx signKey
     prvKeys = (.key) . (\p -> derivePath ctx p signKey) <$> inPaths
 
 signTxWithKeys ::
+  Network ->
   Ctx ->
   TxSignData ->
   XPubKey ->
   [SecKey] ->
   Either String (TxSignData, TxInfo)
-signTxWithKeys ctx tsd@(TxSignData tx _ _ _ _ signed net) publicKey secKeys = do
+signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
   when signed $ Left "The transaction is already signed"
   txInfoU <- parseTxSignData net ctx publicKey tsd
   -- signing
@@ -254,7 +254,7 @@ verifyTxInfo net ctx tx txInfo =
       sigInputs = mySigInputs <> othSigInputs
       f i = (i.script, i.value, i.outpoint)
       vDat = f <$> sigInputs
-   in txHash tx == txInfoId txInfo
+   in txHash tx == txInfoHash txInfo
         && noEmptyInputs tx
         && verifyStdTx net ctx tx vDat
 
@@ -268,12 +268,11 @@ buildSweepSignData ::
   Network ->
   Ctx ->
   DBAccountId ->
-  DBAccount ->
   [Address] ->
   Natural ->
   Natural ->
   ExceptT String (DB m) ([TxSignData], ExceptT String (DB m) ())
-buildSweepSignData net ctx accId acc addrs feeByte dust
+buildSweepSignData net ctx accId addrs feeByte dust
   | null addrs = throwError "No addresses provided to sweep"
   | otherwise = do
       -- Get the unspent coins of the addresses
@@ -296,9 +295,8 @@ buildSweepSignData net ctx accId acc addrs feeByte dust
         -- Check if any of the coins belong to us
         resE <- lift $ mapM (getCoinDeriv net accId) pickedCoins
         let inDerivs = rights resE
-            accIdx = fromIntegral $ dBAccountIndex acc
         return $
-          TxSignData tx depTxs (nub inDerivs) (nub outDerivs) accIdx False net
+          TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
       return
         ( res,
           -- Commit the internal addresses used

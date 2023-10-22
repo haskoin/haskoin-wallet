@@ -6,23 +6,23 @@
 
 module Network.Haskoin.Wallet.FileIO where
 
-import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Applicative ((<|>))
+import Control.Monad
 import Control.Monad.Except
   ( ExceptT,
     MonadError (throwError),
     liftEither,
     runExceptT,
   )
-import Control.Applicative ((<|>))
-import Control.Monad (MonadPlus (mzero), (<=<), unless, when)
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Data.Aeson
 import Data.Aeson
   ( object,
     withObject,
     (.:),
     (.=),
   )
-import qualified Data.Aeson as Json
-import qualified Data.Aeson.Types as Json
+import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Short as BSS
 import Data.Maybe (fromMaybe, mapMaybe)
@@ -33,16 +33,19 @@ import qualified Data.Text as Text
 import Haskoin.Address (Address)
 import Haskoin.Crypto
   ( Ctx,
+    Fingerprint,
     Hash256 (get),
     PrivateKey (key),
     SecKey,
     SoftPath,
     XPubKey,
+    fingerprintToText,
     fromMiniKey,
     fromWif,
     sha256,
     withContext,
-    xPubExport, xPubChild, Fingerprint, fingerprintToText,
+    xPubChild,
+    xPubExport,
   )
 import Haskoin.Network (Network (name), netByName)
 import Haskoin.Transaction
@@ -60,35 +63,11 @@ import Haskoin.Util
 import Network.Haskoin.Wallet.Util
   ( encodeJsonPrettyLn,
     textToAddrE,
-    xPubChecksum,
     (</>),
   )
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import qualified System.IO as IO
-
-data HWFolder
-  = TxFolder
-  | PubKeyFolder
-  | SweepFolder !String
-  deriving (Eq, Show)
-
-toFolder :: HWFolder -> String
-toFolder =
-  \case
-    TxFolder -> "transactions"
-    PubKeyFolder -> "pubkeys"
-    SweepFolder chksum -> "sweep-" <> chksum
-
-hwDataDirectory :: Maybe HWFolder -> IO FilePath
-hwDataDirectory subDirM = do
-  appDir <- D.getAppUserDataDirectory "hw"
-  let dir = maybe appDir ((appDir </>) . toFolder) subDirM
-  D.createDirectoryIfMissing True dir
-  return dir
-
-class HasFilePath a where
-  getFilePath :: Ctx -> a -> String
 
 data PubKeyDoc = PubKeyDoc
   { documentPubKey :: !XPubKey,
@@ -116,73 +95,44 @@ instance MarshalJSON Ctx PubKeyDoc where
         "wallet" .= wallet
       ]
 
-instance HasFilePath PubKeyDoc where
-  getFilePath _ (PubKeyDoc key net _ wallet) =
-    let i = show $ xPubChild key
-        w = fingerprintToText wallet
-     in "account-" <> cs w <> "-" <> net.name <> "-" <> i <> ".json"
-
 data TxSignData = TxSignData
   { txSignDataTx :: !Tx,
     txSignDataInputs :: ![Tx],
     txSignDataInputPaths :: ![SoftPath],
     txSignDataOutputPaths :: ![SoftPath],
-    txSignDataAccount :: !Natural,
-    txSignDataSigned :: !Bool,
-    txSignDataNetwork :: !Network
+    txSignDataSigned :: !Bool
   }
   deriving (Eq, Show)
 
-instance MarshalJSON Ctx TxSignData where
-  unmarshalValue _ =
+instance FromJSON TxSignData where
+  parseJSON =
     withObject "txsigndata" $ \o -> do
-      net <- maybe mzero return . netByName =<< o .: "network"
       let f = eitherToMaybe . S.decode <=< decodeHex
       t <- maybe mzero return . f =<< o .: "tx"
       i <- maybe mzero return . mapM f =<< o .: "txinputs"
       TxSignData t i
         <$> o .: "inputpaths"
         <*> o .: "outputpaths"
-        <*> o .: "account"
         <*> o .: "signed"
-        <*> pure net
-  marshalValue _ (TxSignData t i oi op a s net) =
+
+instance ToJSON TxSignData where
+  toJSON (TxSignData t i oi op s) =
     object
       [ "tx" .= encodeHex (S.encode t),
         "txinputs" .= (encodeHex . S.encode <$> i),
         "inputpaths" .= oi,
         "outputpaths" .= op,
-        "account" .= a,
-        "signed" .= s,
-        "network" .= net.name
+        "signed" .= s
       ]
 
-instance HasFilePath TxSignData where
-  getFilePath _ (TxSignData tx _ _ _ _ s net) =
-    net.name <> heading <> cs (txChecksum tx) <> ".json"
-    where
-      heading = if s then "-signedtx-" else "-unsignedtx-"
+instance MarshalJSON Ctx TxSignData where
+  marshalValue _ = toJSON
+  unmarshalValue _ = parseJSON
 
-docFilePath :: (HasFilePath a) => Ctx -> HWFolder -> a -> IO FilePath
-docFilePath ctx folder doc = do
-  dir <- hwDataDirectory $ Just folder
-  return $ dir </> getFilePath ctx doc
-
-checkFileExists :: MonadIO m => FilePath -> ExceptT String m ()
-checkFileExists path = do
-  exist <- liftIO $ D.doesFileExist path
-  when exist $ throwError $ "File " <> path <> " already exists"
-
-writeDoc ::
-  (MarshalJSON Ctx a, HasFilePath a, MonadIO m) =>
-  Ctx ->
-  HWFolder ->
-  a ->
-  ExceptT String m FilePath
-writeDoc ctx folder doc = do
-  path <- liftIO $ docFilePath ctx folder doc
-  liftIO $ writeJsonFile path $ marshalValue ctx doc
-  return path
+checkPathFree :: (MonadIO m) => FilePath -> ExceptT String m ()
+checkPathFree path = do
+  exist <- liftIO $ D.doesPathExist path
+  when exist $ throwError $ "Path " <> path <> " already exists"
 
 txChecksum :: Tx -> Text
 txChecksum = Text.take 8 . txHashToHex . nosigTxHash
@@ -193,21 +143,46 @@ txsChecksum txs =
   where
     bss = BSS.fromShort . (.get) . (.get) . nosigTxHash <$> txs
 
+txSignDataFileName :: TxSignData -> FilePath
+txSignDataFileName (TxSignData tx _ _ _ s) =
+  let heading = if s then "signedtx-" else "unsignedtx-"
+   in heading <> cs (txChecksum tx) <> ".json"
+
+initSweepDir ::
+     (MonadIO m) => [TxSignData] -> FilePath -> ExceptT String m FilePath
+initSweepDir tsds dir = do
+  let chksum = cs $ txsChecksum $ txSignDataTx <$> tsds
+      sweepDir = dir </> "sweep-" <> chksum
+  exists <- liftIO $ D.doesDirectoryExist dir
+  unless exists $ throwError $ "Invalid directory " <> dir
+  liftIO $ D.createDirectoryIfMissing False sweepDir
+  return sweepDir
+
+writeSweepFiles ::
+  (MonadIO m) => [TxSignData] -> FilePath -> ExceptT String m [FilePath]
+writeSweepFiles tsds sweepDir = do
+  exists <- liftIO $ D.doesDirectoryExist sweepDir
+  unless exists $ throwError $ "Invalid directory " <> sweepDir
+  forM tsds $ \tsd -> do
+    let file = sweepDir </> txSignDataFileName tsd
+    liftIO $ writeJsonFile file $ toJSON tsd
+    return file
+
 -- JSON IO Helpers--
 
-writeJsonFile :: String -> Json.Value -> IO ()
+writeJsonFile :: FilePath -> Value -> IO ()
 writeJsonFile filePath doc = C8.writeFile filePath $ encodeJsonPrettyLn doc
 
-readJsonFile :: (Json.FromJSON a) => FilePath -> IO (Either String a)
-readJsonFile = Json.eitherDecodeFileStrict'
+readJsonFile :: (FromJSON a) => FilePath -> IO (Either String a)
+readJsonFile = eitherDecodeFileStrict'
 
-writeMarshalFile :: (MarshalJSON s a) => s -> String -> a -> IO ()
+writeMarshalFile :: (MarshalJSON s a) => s -> FilePath -> a -> IO ()
 writeMarshalFile s filePath a = writeJsonFile filePath $ marshalValue s a
 
 readMarshalFile :: (MarshalJSON s a) => s -> FilePath -> IO (Either String a)
 readMarshalFile s filePath = do
   vE <- readJsonFile filePath
-  return $ Json.parseEither (unmarshalValue s) =<< vE
+  return $ parseEither (unmarshalValue s) =<< vE
 
 -- Parse wallet dump files for sweeping --
 

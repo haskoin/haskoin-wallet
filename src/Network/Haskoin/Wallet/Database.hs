@@ -21,6 +21,7 @@
 module Network.Haskoin.Wallet.Database where
 
 import Conduit (MonadUnliftIO, ResourceT)
+import Control.Arrow ((&&&))
 import Control.Exception (try)
 import Control.Monad
   ( MonadPlus (mzero),
@@ -98,7 +99,6 @@ DBAccount
   external Int
   internal Int
   xPubKey Text
-  pubKeyFile Text
   balanceConfirmed Word64
   balanceUnconfirmed Word64
   balanceCoins Word64
@@ -166,6 +166,17 @@ DBRawTx
   deriving Show
   deriving Eq
 
+DBPendingTx
+  accountWallet DBWalletId
+  accountDerivation Text
+  nosigHash Text
+  blob ByteString
+  created UTCTime default=CURRENT_TIME
+  Primary nosigHash
+  Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
+  deriving Show
+  deriving Eq
+
 DBBest
   network Text
   bestBlock Text
@@ -178,7 +189,7 @@ type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
 runDB :: (MonadUnliftIO m) => DB m a -> m a
 runDB action = do
-  dir <- liftIO $ hwDataDirectory Nothing
+  dir <- liftIO hwDataDirectory
   let dbFile = dir </> "accounts.sqlite"
   runSqlite (cs dbFile) $ do
     _ <- runMigrationQuiet migrateAll
@@ -216,7 +227,6 @@ instance ToJSON DBAccount where
         "external" .= dBAccountExternal acc,
         "internal" .= dBAccountInternal acc,
         "xPubKey" .= dBAccountXPubKey acc,
-        "pubKeyFile" .= dBAccountPubKeyFile acc,
         "balance" .= toJSON (AccountBalance confirm unconfirm coins),
         "created" .= dBAccountCreated acc
       ]
@@ -238,7 +248,6 @@ instance FromJSON DBAccount where
         <*> o .: "external"
         <*> o .: "internal"
         <*> o .: "xPubKey"
-        <*> o .: "pubKeyFile"
         <*> (bal .: "confirmed")
         <*> (bal .: "unconfirmed")
         <*> (bal .: "coins")
@@ -323,9 +332,8 @@ insertAccount ::
   Fingerprint ->
   Text ->
   XPubKey ->
-  Text ->
   ExceptT String (DB m) DBAccount
-insertAccount net ctx walletFP name xpub keyfile = do
+insertAccount net ctx walletFP name xpub = do
   existsName <- lift $ existsAccount name
   if existsName
     then throwError $ "Account " <> cs name <> " already exists"
@@ -348,7 +356,6 @@ insertAccount net ctx walletFP name xpub keyfile = do
                     dBAccountExternal = 0,
                     dBAccountInternal = 0,
                     dBAccountXPubKey = xPubExport net ctx xpub,
-                    dBAccountPubKeyFile = keyfile,
                     dBAccountBalanceConfirmed = 0,
                     dBAccountBalanceUnconfirmed = 0,
                     dBAccountBalanceCoins = 0,
@@ -823,7 +830,7 @@ repsertTxInfo ::
 repsertTxInfo net ctx accId tif = do
   time <- liftIO getCurrentTime
   let confirmed' = Store.confirmed $ txInfoBlockRef tif
-      tid = txHashToHex $ txInfoId tif
+      tid = txHashToHex $ txInfoHash tif
       bRef = encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
       blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
@@ -1096,6 +1103,62 @@ getRawTx hash = do
   case txM of
     Just tx -> liftEither . decode $ dBRawTxBlob tx
     Nothing -> throwError "getRawTx: missing transaction"
+
+{- Pending Transactions -}
+
+repsertPendingTx ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  TxSignData ->
+  ExceptT String (DB m) TxHash
+repsertPendingTx (DBAccountKey wallet accDeriv) tsd = do
+  time <- liftIO getCurrentTime
+  let nosigHash = nosigTxHash $ txSignDataTx tsd
+      nosigHashT = txHashToHex nosigHash
+      key = DBPendingTxKey nosigHashT
+      bs = BS.toStrict $ Json.encode tsd
+      ptx = DBPendingTx wallet accDeriv nosigHashT bs time
+  prevM <- lift $ getPendingTx nosigHash
+  case prevM of
+    Just prev -> do
+      when (not (txSignDataSigned tsd) && txSignDataSigned prev) $
+        throwError
+          "There is already a signed copy of this transaction in the database"
+      lift $ P.update key [DBPendingTxBlob P.=. bs]
+    Nothing -> lift $ P.insert_ ptx
+  return nosigHash
+
+getPendingTx ::
+  (MonadUnliftIO m) => TxHash -> DB m (Maybe TxSignData)
+getPendingTx nosigHash = do
+  let hashT = txHashToHex nosigHash
+      key = DBPendingTxKey hashT
+      f = Json.decode . BS.fromStrict . dBPendingTxBlob
+  (f =<<) <$> P.get key
+
+pendingTxPage ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Page ->
+  ExceptT String (DB m) [(TxHash, TxSignData)]
+pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
+  tsds <-
+    lift . select . from $ \p -> do
+      where_ $ do
+        p ^. DBPendingTxAccountWallet ==. val wallet
+          &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
+      orderBy [desc (p ^. DBPendingTxCreated)]
+      limit $ fromIntegral lim
+      offset $ fromIntegral off
+      return p
+  forM tsds $ \(Entity _ res) -> do
+    tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ dBPendingTxBlob res
+    nosigHash <-
+      liftEither $
+        maybeToEither "TxHash" $
+          hexToTxHash $
+            dBPendingTxNosigHash res
+    return (nosigHash, tsd)
 
 {- Helpers -}
 

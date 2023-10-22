@@ -45,6 +45,7 @@ import Haskoin.Transaction
     TxIn (outpoint),
     TxOut (TxOut, value),
     guessTxSize,
+    nosigTxHash,
     txHash,
   )
 import Haskoin.Util
@@ -83,7 +84,7 @@ instance Json.FromJSON TxType where
       _ -> fail "Invalid TxType"
 
 data TxInfo = TxInfo
-  { txInfoId :: !TxHash,
+  { txInfoHash :: !TxHash,
     txInfoType :: !TxType,
     txInfoAmount :: !Integer,
     txInfoMyOutputs :: !(Map Address MyOutputs),
@@ -165,7 +166,7 @@ instance MarshalJSON Ctx OtherInputs where
 instance MarshalJSON (Network, Ctx) TxInfo where
   marshalValue (net, ctx) tx =
     object
-      [ "txid" .= txInfoId tx,
+      [ "txid" .= txInfoHash tx,
         "type" .= txInfoType tx,
         "amount" .= txInfoAmount tx,
         "myoutputs" .= mapAddrText net (txInfoMyOutputs tx),
@@ -197,6 +198,34 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> (read <$> o .: "feebyte")
         <*> o .: "block"
         <*> o .: "confirmations"
+
+data NoSigTxInfo
+  = NoSigSigned !TxHash !TxInfo
+  | NoSigUnsigned !TxHash !UnsignedTxInfo
+  deriving (Eq, Show)
+
+instance MarshalJSON (Network, Ctx) NoSigTxInfo where
+  marshalValue (net, ctx) (NoSigSigned h t) =
+    object
+      [ "nosighash" .= h,
+        "txinfo" .= marshalValue (net, ctx) t,
+        "signed" .= True
+      ]
+  marshalValue (net, ctx) (NoSigUnsigned h t) =
+    object
+      [ "nosighash" .= h,
+        "txinfo" .= marshalValue (net, ctx) t,
+        "signed" .= False
+      ]
+
+  unmarshalValue (net, ctx) =
+    Json.withObject "TxInfo" $ \o -> do
+      s <- o .: "signed"
+      tV <- o .: "txinfo"
+      h <- o .: "nosighash"
+      if s
+        then NoSigSigned h <$> unmarshalValue (net, ctx) tV
+        else NoSigUnsigned h <$> unmarshalValue (net, ctx) tV
 
 marshalMap ::
   (MarshalJSON Ctx v) =>
@@ -230,7 +259,7 @@ toTxInfo ::
   Map Address SoftPath -> Natural -> Store.Transaction -> TxInfo
 toTxInfo walletAddrs currHeight sTx =
   TxInfo
-    { txInfoId = sTx.txid,
+    { txInfoHash = sTx.txid,
       txInfoType = txType amount fee,
       txInfoAmount = amount,
       txInfoMyOutputs = Map.map (uncurry MyOutputs) myOutputsMap,
@@ -339,7 +368,7 @@ data UnsignedTxInfo = UnsignedTxInfo
 unsignedToTxInfo :: Tx -> UnsignedTxInfo -> TxInfo
 unsignedToTxInfo tx uTx =
   TxInfo
-    { txInfoId = txHash tx,
+    { txInfoHash = txHash tx,
       txInfoType = unsignedTxInfoType uTx,
       txInfoAmount = unsignedTxInfoAmount uTx,
       txInfoMyOutputs = unsignedTxInfoMyOutputs uTx,
@@ -391,7 +420,7 @@ parseTxSignData ::
   XPubKey ->
   TxSignData ->
   Either String UnsignedTxInfo
-parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
+parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths _) = do
   coins <- txSignDataCoins tsd
   -- Fees
   let outSum = fromIntegral $ sum $ (.value) <$> tx.outputs :: Natural
@@ -443,7 +472,7 @@ parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
     size = guessTxSize (length tx.inputs) [] (length tx.outputs) 0
 
 txSignDataCoins :: TxSignData -> Either String [(OutPoint, TxOut)]
-txSignDataCoins (TxSignData tx depTxs _ _ _ _ _) =
+txSignDataCoins (TxSignData tx depTxs _ _ _) =
   maybeToEither "Referenced input transactions are missing" $ mapM f ops
   where
     ops = (.outpoint) <$> tx.inputs :: [OutPoint]

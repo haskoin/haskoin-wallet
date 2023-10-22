@@ -10,6 +10,7 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network (Network (name), allNets, btc, netByName)
+import Haskoin.Transaction (TxHash, hexToTxHash)
 import Network.Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readNatural,
@@ -114,14 +115,20 @@ data Command
         commandUnit :: !AmountUnit,
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
-        commandRcptPay :: !Bool
+        commandRcptPay :: !Bool,
+        commandOutputFileMaybe :: !(Maybe FilePath)
       }
-  | CommandReview
+  | CommandPendingTxs
+      { commandMaybeAcc :: !(Maybe Text),
+        commandPage :: !Page
+      }
+  | CommandReviewTx
       { commandMaybeAcc :: !(Maybe Text),
         commandFilePath :: !FilePath
       }
   | CommandSignTx
-      { commandFilePath :: !FilePath,
+      { commandMaybeAcc :: !(Maybe Text),
+        commandNoSigHash :: !TxHash,
         commandSplitIn :: !Natural
       }
   | CommandCoins
@@ -145,7 +152,8 @@ data Command
         commandMaybeFilePath :: !(Maybe FilePath),
         commandMaybeAcc :: !(Maybe Text),
         commandFeeByte :: !Natural,
-        commandDust :: !Natural
+        commandDust :: !Natural,
+        commandOutputDir :: !FilePath
       }
   | CommandSignSweep
       { commandSweepPath :: !FilePath,
@@ -198,7 +206,8 @@ commandParser =
           [ commandGroup "Transaction management",
             command "txs" txsParser,
             command "preparetx" prepareTxParser,
-            command "review" reviewParser,
+            command "pendingtxs" pendingTxsParser,
+            command "reviewtx" reviewTxParser,
             command "signtx" signTxParser,
             command "coins" coinsParser,
             hidden
@@ -523,21 +532,10 @@ prepareTxParser =
         <*> feeOption
         <*> dustOption
         <*> rcptPayOption
+        <*> outputFileMaybeOption
     )
     $ mconcat
-      [ progDesc "Prepare a new unsigned transaction",
-        footer
-          "You can call preparetx on an online computer to create an unsigned\
-          \ transaction that spends funds from your account. This can be done\
-          \ without having access to your mnemonic. A file containing your\
-          \ unsigned transaction will be created in ~/.hw/transactions.\
-          \ You can then inspect the transaction using the review command.\
-          \ If you are unhappy with the transaction, you can simply delete the\
-          \ file in ~/.hw/transactions. Otherwise, you can move the transaction\
-          \ file to an offline computer and sign it with the signtx command.\
-          \ Once signed, you can move the signed transaction file back to an\
-          \ online computer and broadcast it using the sendtx command."
-      ]
+      [progDesc "Prepare a new unsigned transaction"]
 
 recipientArg :: Parser (Text, Text)
 recipientArg =
@@ -614,47 +612,58 @@ rcptPayOption =
         showDefault
       ]
 
-{- Review Parser -}
+outputFileMaybeOption :: Parser (Maybe FilePath)
+outputFileMaybeOption =
+  optional $
+    strOption $
+      mconcat
+        [ short 'o',
+          long "output",
+          help "Write the results to this file",
+          metavar "FILENAME",
+          action "file"
+        ]
 
-reviewParser :: ParserInfo Command
-reviewParser =
+{- PendingTxs Parser -}
+
+pendingTxsParser :: ParserInfo Command
+pendingTxsParser =
   info
-    ( CommandReview
+    ( CommandPendingTxs
         <$> accountOption
-        <*> fileArgument "Path of the transaction file"
+        <*> (Page <$> limitOption <*> offsetOption)
     )
     $ mconcat
-      [ progDesc "Review the contents of a transaction file",
-        footer
-          "The review command allows you to inspect the details of a transaction\
-          \ file that was created using the preparetx command. This might be\
-          \ useful to check that everything is correct before signing (signtx) and\
-          \ broadcasting (sendtx) the transaction."
-      ]
+      [progDesc "Display the pending transactions in an account"]
+
+{- ReviewTx Parser -}
+
+reviewTxParser :: ParserInfo Command
+reviewTxParser =
+  info
+    ( CommandReviewTx
+        <$> accountOption
+        <*> fileArgument "Path to the transaction file to review"
+    )
+    $ mconcat
+      [progDesc "Review a transaction file"]
 
 {- SignTx Parser -}
 
 signTxParser :: ParserInfo Command
 signTxParser =
   info
-    ( CommandSignTx
-        <$> fileArgument "Path of the transaction file"
-        <*> splitInOption
+    ( CommandSignTx <$> accountOption <*> noSigHashArg <*> splitInOption
     )
     $ mconcat
-      [ progDescDoc $
-          offline "Sign a transaction that was created with preparetx",
-        footer
-          "The signtx command allows you to sign an unsigned transaction file\
-          \ that was created using the preparetx command. Ideally you want to\
-          \ run signtx on an offline computer as you will have to type the\
-          \ mnemonic. Once signed, a new signed transaction file will be created\
-          \ in ~/.hw/transactions. You can move this file to an online computer\
-          \ and broadcast it using the sendtx command. The mnemonic is only used\
-          \ to sign the transaction. The mnemonic or the private keys will not\
-          \ be stored on disk. If you want to sign another transaction, you will\
-          \ have to enter the mnemonic again. If you have a split mnemonic, you\
-          \ will have to use the --split option."
+      [progDescDoc $ offline "Sign a transaction"]
+
+noSigHashArg :: Parser TxHash
+noSigHashArg =
+  argument (maybeReader $ hexToTxHash . cs) $
+    mconcat
+      [ help "The hash (nosigHash) of the transaction",
+        metavar "TXHASH"
       ]
 
 {- Coins Parser -}
@@ -686,18 +695,7 @@ syncAccParser :: ParserInfo Command
 syncAccParser =
   info (CommandSyncAcc <$> accountOption <*> fullOption) $
     mconcat
-      [ progDesc "Download new transactions, balances and coins",
-        footer
-          "The wallet data is stored in a local database. Most commands\
-          \ will query this database to show results. To refresh your local\
-          \ database with the latest information from the blockchain, you must\
-          \ call syncacc. This will pull the latest transactions, balances and\
-          \ coins into your wallet. Unles you specify the --full option, a\
-          \ partial sync is performed by comparing address balances and\
-          \ downloading only the data from addresses that have changed. If you\
-          \ specify the --full option, everything will be downloaded again but\
-          \ this can take time depending on the size of your wallet."
-      ]
+      [progDesc "Download new transactions, balances and coins"]
 
 fullOption :: Parser Bool
 fullOption =
@@ -737,35 +735,45 @@ prepareSweepParser =
   info
     ( CommandPrepareSweep
         <$> many (addressArg "List of addresses to sweep")
-        <*> maybeFileOption "File containing addresses to sweep"
+        <*> addressFileOption
         <*> accountOption
         <*> feeOption
         <*> dustOption
+        <*> outputDirOption
     )
     $ mconcat
       [ progDesc "Sweep funds into this wallet",
         footer
           "This utility command will prepare a set of unsigned transactions\
           \ that will send all the funds available in the given addresses to\
-          \ your hw account. The typical use case for this command is to\
+          \ your account. The typical use case for this command is to\
           \ migrate an old wallet to hw. You can pass the addresses on the\
           \ command line or they can be parsed from a file. The preparesweep\
           \ command will randomize all the coins and create a number of transactions\
-          \ containing between 1 and 5 inputs and 2 outputs. The transactions\
-          \ will be available in the ~/.hw/sweep-[id] folder. You can then\
-          \ use the signsweep command to sign the transactions."
+          \ containing between 1 and 5 inputs and 2 outputs."
       ]
 
-maybeFileOption :: String -> Parser (Maybe FilePath)
-maybeFileOption desc =
+addressFileOption :: Parser (Maybe FilePath)
+addressFileOption =
   optional $
     strOption $
       mconcat
-        [ long "file",
-          help desc,
+        [ long "addrs",
+          help "File containing addresses to sweep",
           metavar "FILENAME",
           action "file"
         ]
+
+outputDirOption :: Parser FilePath
+outputDirOption =
+  strOption $
+    mconcat
+      [ short 'o',
+        long "output",
+        help "Directory where the results will be written to",
+        metavar "DIRNAME",
+        action "file"
+      ]
 
 {- SignSweep Parser -}
 
