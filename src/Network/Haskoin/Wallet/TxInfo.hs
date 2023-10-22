@@ -421,7 +421,7 @@ parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths _ _ _) = do
   unless (length coins == length tx.inputs) $
     Left "Referenced input transactions are missing"
   unless (length inPaths == Map.size myInputsMap) $
-    Left "Private key derivations don't match the transaction inputs"
+    Left "Input derivations don't match the transaction inputs"
   unless (length outPaths == Map.size myOutputsMap) $
     Left "Output derivations don't match the transaction outputs"
   return $

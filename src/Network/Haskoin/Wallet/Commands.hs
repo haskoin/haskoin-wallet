@@ -190,8 +190,14 @@ data Response
         responseTransaction :: !TxInfo,
         responseNetwork :: !Network
       }
+  | ResponseCoins
+      { responseAccount :: !DBAccount,
+        responseCoins :: ![JsonCoin]
+      }
   | ResponseSendTx
-      { responseNetworkTxId :: !TxHash
+      { responseAccount :: !DBAccount,
+        responseTransaction :: !TxInfo,
+        responseNetworkTxId :: !TxHash
       }
   | ResponseSyncAcc
       { responseAccount :: !DBAccount,
@@ -299,12 +305,12 @@ instance MarshalJSON Ctx Response where
         let net = accountNetwork a
             wTx = marshalValue (net, ctx) <$> wTxM
             uTx = marshalValue (net, ctx) <$> uTxM
-         in object
-              [ "type" .= Json.String "review",
-                "account" .= a,
-                "transaction" .= fromMaybe Json.Null wTx,
-                "unsignedtx" .= fromMaybe Json.Null uTx
-              ]
+        object
+          [ "type" .= Json.String "review",
+            "account" .= a,
+            "transaction" .= fromMaybe Json.Null wTx,
+            "unsignedtx" .= fromMaybe Json.Null uTx
+          ]
       ResponseSignTx f t net ->
         object
           [ "type" .= Json.String "signtx",
@@ -312,9 +318,19 @@ instance MarshalJSON Ctx Response where
             "transaction" .= marshalValue (net, ctx) t,
             "network" .= net.name
           ]
-      ResponseSendTx h ->
+      ResponseCoins a coins -> do
+        let net = accountNetwork a
+        object
+          [ "type" .= Json.String "coins",
+            "account" .= a,
+            "coins" .= (marshalValue net <$> coins)
+          ]
+      ResponseSendTx a t h -> do
+        let net = accountNetwork a
         object
           [ "type" .= Json.String "sendtx",
+            "account" .= a,
+            "transaction" .= marshalValue (net, ctx) t,
             "networktxid" .= h
           ]
       ResponseSyncAcc as bb bh tc cc ->
@@ -408,8 +424,7 @@ instance MarshalJSON Ctx Response where
           a <- o .: "account"
           let f = unmarshalValue (accountNetwork a, ctx)
               g = unmarshalValue (accountNetwork a, ctx)
-          wTxM <-
-            maybe (return Nothing) ((Just <$>) . f) =<< o .:? "transaction"
+          wTxM <- maybe (return Nothing) ((Just <$>) . f) =<< o .:? "transaction"
           uTxM <- maybe (return Nothing) ((Just <$>) . g) =<< o .:? "unsignedtx"
           return $ ResponseReview a wTxM uTxM
         "signtx" -> do
@@ -417,7 +432,17 @@ instance MarshalJSON Ctx Response where
           f <- o .: "txfile"
           t <- unmarshalValue (net, ctx) =<< o .: "transaction"
           return $ ResponseSignTx f t net
-        "sendtx" -> ResponseSendTx <$> o .: "networktxid"
+        "coins" -> do
+          a <- o .: "account"
+          xs <- o .: "coins"
+          coins <- mapM (unmarshalValue (accountNetwork a)) xs
+          return $ ResponseCoins a coins
+        "sendtx" -> do
+          a <- o .: "account"
+          let net = accountNetwork a
+          ResponseSendTx a
+            <$> (unmarshalValue (net, ctx) =<< o .: "transaction")
+            <*> o .: "networktxid"
         "syncacc" ->
           ResponseSyncAcc
             <$> o .: "account"
@@ -425,17 +450,17 @@ instance MarshalJSON Ctx Response where
             <*> o .: "bestheight"
             <*> o .: "txupdates"
             <*> o .: "coinupdates"
-        "discoveracc" -> do
-          a <- o .: "account"
-          return $ ResponseDiscoverAcc a
-        "version" -> do
-          v <- o .: "version"
-          return $ ResponseVersion v
+        "discoveracc" ->
+          ResponseDiscoverAcc
+            <$> o .: "account"
+        "version" ->
+          ResponseVersion
+            <$> o .: "version"
         "preparesweep" -> do
           a <- o .: "account"
           fs <- o .: "txfiles"
-          let g = unmarshalValue (accountNetwork a, ctx)
-          ts <- mapM g =<< o .: "unsignedtxs"
+          let f = unmarshalValue (accountNetwork a, ctx)
+          ts <- mapM f =<< o .: "unsignedtxs"
           return $ ResponsePrepareSweep a fs ts
         "signsweep" -> do
           a <- o .: "account"
@@ -443,10 +468,10 @@ instance MarshalJSON Ctx Response where
           let f = unmarshalValue (accountNetwork a, ctx)
           ts <- mapM f =<< o .: "transactions"
           return $ ResponseSignSweep a fs ts
-        "rolldice" -> do
-          ns <- o .: "dice"
-          e <- o .: "entropysource"
-          return $ ResponseRollDice ns e
+        "rolldice" ->
+          ResponseRollDice
+            <$> o .: "dice"
+            <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
 
 catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
@@ -459,27 +484,33 @@ catchResponseError m = do
 commandResponse :: Ctx -> Command -> IO Response
 commandResponse ctx =
   \case
+    -- Mnemonic and account management
     CommandMnemonic e d s -> cmdMnemonic e d s
     CommandCreateAcc t n dM s -> cmdCreateAcc ctx t n dM s
-    CommandTestAcc accM s -> cmdTestAcc ctx accM s
+    CommandTestAcc nameM s -> cmdTestAcc ctx nameM s
     CommandImportAcc f -> cmdImportAcc ctx f
     CommandRenameAcc old new -> cmdRenameAcc ctx old new
-    CommandAccounts accM -> cmdAccounts accM
-    CommandReceive accM labM -> cmdReceive ctx accM labM
-    CommandAddrs accM p -> cmdAddrs accM p
-    CommandLabel accM i l -> cmdLabel accM i l
-    CommandTxs accM p -> cmdTxs ctx accM p
-    CommandPrepareTx rcpts accM unit fee dust rcptPay ->
-      prepareTx ctx rcpts accM unit fee dust rcptPay
-    CommandReview accM file -> cmdReview ctx accM file
+    CommandAccounts nameM -> cmdAccounts nameM
+    -- Address management
+    CommandReceive nameM labM -> cmdReceive ctx nameM labM
+    CommandAddrs nameM p -> cmdAddrs nameM p
+    CommandLabel nameM i l -> cmdLabel nameM i l
+    -- Transaction management
+    CommandTxs nameM p -> cmdTxs ctx nameM p
+    CommandPrepareTx rcpts nameM unit fee dust rcptPay ->
+      prepareTx ctx rcpts nameM unit fee dust rcptPay
+    CommandReview nameM file -> cmdReview ctx nameM file
     CommandSignTx file s -> cmdSignTx ctx file s
-    CommandSendTx file -> cmdSendTx ctx file
-    CommandSyncAcc accM full -> cmdSyncAcc ctx accM full
-    CommandDiscoverAcc accM -> cmdDiscoverAccount ctx accM
+    CommandCoins nameM p -> cmdCoins nameM p
+    -- Online commands
+    CommandSendTx nameM file -> cmdSendTx ctx nameM file
+    CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
+    CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
+    -- Utilities
     CommandVersion -> cmdVersion
-    CommandPrepareSweep as fileM accM fee dust ->
-      prepareSweep ctx as fileM accM fee dust
-    CommandSignSweep dir keyFile accM -> signSweep ctx dir keyFile accM
+    CommandPrepareSweep as fileM nameM fee dust ->
+      prepareSweep ctx as fileM nameM fee dust
+    CommandSignSweep dir keyFile nameM -> signSweep ctx dir keyFile nameM
     CommandRollDice n -> rollDice n
 
 -- runDB . catchResponseError Monad Stack:
@@ -605,17 +636,19 @@ prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     checkHealth ctx net
-    signDat <- buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
-    path <- writeDoc ctx TxFolder signDat
+    (signDat, commitDB) <-
+      buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
     txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
+    commitDB
+    path <- writeDoc ctx TxFolder signDat
     return $ ResponsePrepareTx acc (cs path) txInfoU
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
-      val <- maybeToEither (cs $ badAmnt a) (readAmount unit v)
+      val <- maybeToEither (cs $ badAmnt v) (readAmount unit v)
       return (addr, val)
-    badAmnt a =
-      "Could not parse the amount " <> a <> " as " <> showUnit unit 1
+    badAmnt v =
+      "Could not parse the amount " <> v <> " as " <> showUnit unit 1
 
 cmdReview :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdReview ctx nameM fp =
@@ -636,7 +669,7 @@ cmdReview ctx nameM fp =
 
 cmdSignTx :: Ctx -> FilePath -> Natural -> IO Response
 cmdSignTx ctx fp splitIn =
-  runDB . catchResponseError $ do
+  catchResponseError $ do
     txSignData <- liftEitherIO $ readMarshalFile ctx fp
     let net = txSignDataNetwork txSignData
         idx = txSignDataAccount txSignData
@@ -646,15 +679,36 @@ cmdSignTx ctx fp splitIn =
     path <- writeDoc ctx TxFolder newSignData
     return $ ResponseSignTx (cs path) txInfo net
 
-cmdSendTx :: Ctx -> FilePath -> IO Response
-cmdSendTx ctx fp =
-  catchResponseError $ do
-    (TxSignData signedTx _ _ _ _ signed net) <-
+cmdCoins :: Maybe Text -> Page -> IO Response
+cmdCoins nameM page =
+  runDB . catchResponseError $ do
+    (accId, acc) <- getAccount nameM
+    let net = accountNetwork acc
+    coins <- lift $ coinPage accId page
+    bestM <- lift $ getBest net
+    let best = maybe 0 snd bestM
+    jsonCoins <- mapM (liftEither . toJsonCoin net best) coins
+    return $ ResponseCoins acc jsonCoins
+
+cmdSendTx :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdSendTx ctx nameM fp =
+  runDB . catchResponseError $ do
+    acc <- getAccountVal nameM
+    let pub = accountXPubKey ctx acc
+    tsd@(TxSignData signedTx _ _ _ idx signed net) <-
       liftEitherIO $ readMarshalFile ctx fp
-    unless signed $ throwError "The transaction is not signed"
+    -- Let's perform some sanity checks before sending
+    when (dBAccountIndex acc /= fromIntegral idx) $
+      throwError $
+        "Invalid account index. Expecting account " <> show idx
+    txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+    let txInfo = unsignedToTxInfo signedTx txInfoU
+        verify = verifyTxInfo net ctx signedTx txInfo
+    unless (signed && verify) $
+      throwError "The transaction is not signed"
     checkHealth ctx net
     Store.TxId netTxId <- liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
-    return $ ResponseSendTx netTxId
+    return $ ResponseSendTx acc txInfo netTxId
 
 cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx nameM full = do
@@ -695,7 +749,7 @@ cmdSyncAcc ctx nameM full = do
     Store.SerialList storeCoins <-
       liftExcept . apiBatch ctx coinBatch (conf net) $
         GetAddrsUnspent addrsToUpdate def
-    (coinCount, newCoins) <- lift $ updateCoins net accId storeCoins
+    (coinCount, newCoins) <- updateCoins net accId addrsToUpdate storeCoins
     -- Get the dependent tranactions of the new coins
     depTxsHash <-
       if full
@@ -832,9 +886,11 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust =
         _ -> return []
     let addrs = addrsArg <> addrsFile
     checkHealth ctx net
-    signDats <- buildSweepSignData net ctx accId acc addrs feeByte dust
+    (signDats, commitDB) <-
+      buildSweepSignData net ctx accId acc addrs feeByte dust
     let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
     !txInfosU <- liftEither $ mapM (parseTxSignData net ctx pub) signDats
+    commitDB
     paths <- mapM (writeDoc ctx (SweepFolder chksum)) signDats
     return $ ResponsePrepareSweep acc (cs <$> paths) txInfosU
 

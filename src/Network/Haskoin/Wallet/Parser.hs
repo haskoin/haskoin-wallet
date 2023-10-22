@@ -125,10 +125,12 @@ data Command
         commandSplitIn :: !Natural
       }
   | CommandCoins
-      { commandMaybeAcc :: !(Maybe Text)
+      { commandMaybeAcc :: !(Maybe Text),
+        commandPage :: !Page
       }
   | CommandSendTx
-      { commandFilePath :: !FilePath
+      { commandMaybeAcc :: !(Maybe Text),
+        commandFilePath :: !FilePath
       }
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
@@ -660,7 +662,10 @@ signTxParser =
 coinsParser :: ParserInfo Command
 coinsParser =
   info
-    (CommandCoins <$> accountOption)
+    ( CommandCoins
+        <$> accountOption
+        <*> (Page <$> limitOption <*> offsetOption)
+    )
     $ mconcat
       [progDesc "List all the coins in an account"]
 
@@ -668,8 +673,12 @@ coinsParser =
 
 sendTxParser :: ParserInfo Command
 sendTxParser =
-  info (CommandSendTx <$> fileArgument "Path of the transaction file") $
-    mconcat [progDesc "Broadcast a signed transaction file to the network"]
+  info
+    ( CommandSendTx
+        <$> accountOption
+        <*> fileArgument "Path of the transaction file"
+    )
+    $ mconcat [progDesc "Broadcast a signed transaction file to the network"]
 
 {- SyncAcc Parser -}
 

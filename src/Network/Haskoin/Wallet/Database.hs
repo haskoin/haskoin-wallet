@@ -148,6 +148,8 @@ DBCoin
   accountDerivation Text
   outpoint Text
   address Text
+  value Word64
+  blockRef ByteString
   blob ByteString
   confirmed Bool
   locked Bool
@@ -757,16 +759,24 @@ updateLabel nameM idx label = do
   return (acc, adr)
 
 getCoinDeriv ::
-  (MonadUnliftIO m) => Network -> Store.Unspent -> DB m (Either String SoftPath)
-getCoinDeriv net unspent =
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  Store.Unspent ->
+  DB m (Either String SoftPath)
+getCoinDeriv net accId unspent =
   runExceptT $ do
     addr <-
       liftEither . maybeToEither "getCoinDeriv: no address" $ unspent.address
-    liftEither <=< lift $ getAddrDeriv net addr
+    liftEither <=< lift $ getAddrDeriv net accId addr
 
 getAddrDeriv ::
-  (MonadUnliftIO m) => Network -> Address -> DB m (Either String SoftPath)
-getAddrDeriv net addr =
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  Address ->
+  DB m (Either String SoftPath)
+getAddrDeriv net (DBAccountKey wallet accDeriv) addr =
   runExceptT $ do
     addrT <-
       liftEither . maybeToEither "getAddrDeriv: no address" $ addrToText net addr
@@ -774,6 +784,8 @@ getAddrDeriv net addr =
       lift . selectOne . from $ \a -> do
         where_ $
           a ^. DBAddressAddress ==. val addrT
+            &&. a ^. DBAddressAccountWallet ==. val wallet
+            &&. a ^. DBAddressAccountDerivation ==. val accDeriv
         return $ a ^. DBAddressDerivation
     liftEither . maybeToEither "getAddrDeriv: no derivation" $
       parseSoft . cs . unValue =<< derivM
@@ -883,8 +895,82 @@ updateConfirmations best tif =
 
 {- Coins -}
 
+data JsonCoin = JsonCoin
+  { jsonCoinOutpoint :: !OutPoint,
+    jsonCoinAddress :: !Address,
+    jsonCoinValue :: !Word64,
+    jsonCoinBlock :: !Store.BlockRef,
+    jsonCoinConfirmations :: !Natural,
+    jsonCoinLocked :: !Bool
+  }
+  deriving (Eq, Show)
+
+instance MarshalJSON Network JsonCoin where
+  marshalValue net c =
+    object
+      [ "outpoint" .= jsonCoinOutpoint c,
+        "address" .= marshalValue net (jsonCoinAddress c),
+        "value" .= jsonCoinValue c,
+        "block" .= jsonCoinBlock c,
+        "confirmations" .= jsonCoinConfirmations c,
+        "locked" .= jsonCoinLocked c
+      ]
+  unmarshalValue net =
+    withObject "JsonCoin" $ \o ->
+      JsonCoin
+        <$> o .: "outpoint"
+        <*> (unmarshalValue net =<< o .: "address")
+        <*> o .: "value"
+        <*> o .: "block"
+        <*> o .: "confirmations"
+        <*> o .: "locked"
+
+toJsonCoin :: Network -> BlockHeight -> DBCoin -> Either String JsonCoin
+toJsonCoin net bestHeight dbCoin = do
+  op <- textToOutpoint $ dBCoinOutpoint dbCoin
+  ad <-
+    maybeToEither "toJsonCoin: Invalid address" $
+      textToAddr net $
+        dBCoinAddress dbCoin
+  br <- decode $ dBCoinBlockRef dbCoin
+  let confirmations =
+        case br of
+          Store.BlockRef h _ ->
+            if bestHeight < fromIntegral h
+              then 0
+              else fromIntegral bestHeight - fromIntegral h + 1
+          Store.MemRef _ -> 0
+  return $
+    JsonCoin
+      { jsonCoinOutpoint = op,
+        jsonCoinAddress = ad,
+        jsonCoinValue = dBCoinValue dbCoin,
+        jsonCoinBlock = br,
+        jsonCoinConfirmations = confirmations,
+        jsonCoinLocked = dBCoinLocked dbCoin
+      }
+
 outpointText :: OutPoint -> Text
 outpointText = encodeHex . encode
+
+textToOutpoint :: Text -> Either String OutPoint
+textToOutpoint t = do
+  bs <- maybeToEither "textToOutpoint: invalid input" $ decodeHex t
+  decode bs
+
+-- Get all coins in an account, spendable or not
+coinPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBCoin]
+coinPage (DBAccountKey wallet accDeriv) (Page lim off) = do
+  coins <-
+    select . from $ \c -> do
+      where_ $ do
+        c ^. DBCoinAccountWallet ==. val wallet
+          &&. c ^. DBCoinAccountDerivation ==. val accDeriv
+      orderBy [asc (c ^. DBCoinBlockRef)]
+      limit $ fromIntegral lim
+      offset $ fromIntegral off
+      return c
+  return $ entityVal <$> coins
 
 -- Spendable coins must be confirmed and not locked
 getSpendableCoins ::
@@ -914,6 +1000,8 @@ insertCoin (DBAccountKey wallet accDeriv) addr unspent = do
             dBCoinAccountDerivation = accDeriv,
             dBCoinOutpoint = outpointText unspent.outpoint,
             dBCoinAddress = addr,
+            dBCoinValue = unspent.value,
+            dBCoinBlockRef = encode unspent.block,
             dBCoinBlob = encode unspent,
             dBCoinConfirmed = Store.confirmed unspent.block,
             dBCoinLocked = False,
@@ -928,7 +1016,8 @@ updateCoin unspent = do
   P.update
     key
     [ DBCoinBlob P.=. encode unspent,
-      DBCoinConfirmed P.=. Store.confirmed unspent.block
+      DBCoinConfirmed P.=. Store.confirmed unspent.block,
+      DBCoinBlockRef P.=. encode unspent.block
     ]
 
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
@@ -950,21 +1039,25 @@ updateCoins ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
+  [Address] ->
   [Store.Unspent] ->
-  DB m (Int, [DBCoin])
-updateCoins net accId allUnspent = do
+  ExceptT String (DB m) (Int, [DBCoin])
+updateCoins net accId addrsToUpdate allUnspent = do
   let storeMap = groupCoins net allUnspent
-  res <- forM (Map.assocs storeMap) $ \(addr, storeCoins) -> do
-    localCoins <- getCoinsByAddr addr
+  addrsToUpdateE <-
+    mapM (liftEither . maybeToEither "Addr" . addrToText net) addrsToUpdate
+  res <- forM addrsToUpdateE $ \addr -> do
+    let storeCoins = fromMaybe [] $ Map.lookup addr storeMap
+    localCoins <- lift $ getCoinsByAddr addr
     let storeOps = outpointText . (.outpoint) <$> storeCoins
         localOps = dBCoinOutpoint <$> localCoins
         toDelete = filter ((`notElem` storeOps) . dBCoinOutpoint) localCoins
         toInsert =
           filter ((`notElem` localOps) . outpointText . (.outpoint)) storeCoins
         toUpdate = filter (f localCoins) storeCoins
-    forM_ toDelete deleteCoin
-    forM_ toUpdate updateCoin
-    newCoins <- forM toInsert $ insertCoin accId addr
+    lift $ forM_ toDelete deleteCoin
+    lift $ forM_ toUpdate updateCoin
+    newCoins <- lift $ forM toInsert $ insertCoin accId addr
     return (length toDelete + length toUpdate + length toInsert, newCoins)
   return (sum $ fst <$> res, concatMap snd res)
   where
