@@ -640,8 +640,9 @@ prepareTx ctx rcpTxt nameM unit feeByte dust rcptPay =
       buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
     txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
     commitDB
+    newAcc <- getAccountId accId
     path <- writeDoc ctx TxFolder signDat
-    return $ ResponsePrepareTx acc (cs path) txInfoU
+    return $ ResponsePrepareTx newAcc (cs path) txInfoU
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
@@ -892,10 +893,11 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust =
     (signDats, commitDB) <-
       buildSweepSignData net ctx accId acc addrs feeByte dust
     let chksum = cs $ txsChecksum $ txSignDataTx <$> signDats
-    !txInfosU <- liftEither $ mapM (parseTxSignData net ctx pub) signDats
+    txInfosU <- liftEither $ mapM (parseTxSignData net ctx pub) signDats
     commitDB
+    newAcc <- getAccountId accId
     paths <- mapM (writeDoc ctx (SweepFolder chksum)) signDats
-    return $ ResponsePrepareSweep acc (cs <$> paths) txInfosU
+    return $ ResponsePrepareSweep newAcc (cs <$> paths) txInfosU
 
 signSweep :: Ctx -> FilePath -> FilePath -> Maybe Text -> IO Response
 signSweep ctx sweepDir keyFile nameM =
@@ -914,7 +916,7 @@ signSweep ctx sweepDir keyFile nameM =
     secKeys <- parseSecKeysFile net <$> liftIO (readFileWords keyFile)
     when (null secKeys) $ throwError "No private keys to sign"
     -- Sign the transactions
-    !signRes <-
+    signRes <-
       forM tsds $ \tsd ->
         liftEither $ signTxWithKeys ctx tsd pub secKeys
     -- Checksum validation
