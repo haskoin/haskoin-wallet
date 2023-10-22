@@ -809,7 +809,7 @@ getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
         orderBy [asc (t ^. DBTxInfoBlockRef)]
         return $ t ^. DBTxInfoTxid
   forM ts $ \(Value t) ->
-    liftEither $ maybeToEither "getUnconfirmedTxs invalid TxHash" $ hexToTxHash t
+    liftEither $ maybeToEither "getConfirmedTxs invalid TxHash" $ hexToTxHash t
 
 -- Insert a new transaction or replace it, if it already exists
 -- Returns True if there was a change or an insert

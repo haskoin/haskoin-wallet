@@ -738,7 +738,10 @@ cmdSyncAcc ctx nameM full = do
     -- Use an empty list when doing a full sync
     confirmedTxs <- if full then return [] else getConfirmedTxs accId True
     -- Fetch the txids of the addresses to update
-    tids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
+    aTids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
+    -- We also want to check if there is any change in unconfirmed txs
+    uTids <- getConfirmedTxs accId False
+    let tids = nub $ uTids <> aTids
     -- Fetch the full transactions
     Store.SerialList txs <-
       liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)

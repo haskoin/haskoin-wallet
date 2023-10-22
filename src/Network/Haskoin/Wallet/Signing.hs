@@ -84,6 +84,7 @@ import Network.Haskoin.Wallet.Util
   )
 import Numeric.Natural (Natural)
 import System.Random (Random (randomR), StdGen, initStdGen, newStdGen)
+import Data.List (nub)
 
 {- Building Transactions -}
 
@@ -126,7 +127,7 @@ buildTxSignData net ctx accId acc rcpts feeByte dust rcptPay
       -- Return the result
       let idx = fromIntegral $ dBAccountIndex acc
       return
-        ( TxSignData tx depTxs inDerivs outDerivs idx False net,
+        ( TxSignData tx depTxs (nub inDerivs) (nub outDerivs) idx False net,
           do
             -- Commit the internal address if we used it
             unless noChange $ void $ commitInternalAddress accId 0
