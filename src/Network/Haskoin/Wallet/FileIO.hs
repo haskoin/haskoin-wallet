@@ -132,7 +132,7 @@ instance MarshalJSON Ctx TxSignData where
 checkPathFree :: (MonadIO m) => FilePath -> ExceptT String m ()
 checkPathFree path = do
   exist <- liftIO $ D.doesPathExist path
-  when exist $ throwError $ "Path " <> path <> " already exists"
+  when exist $ throwError $ "Path '" <> path <> "' already exists"
 
 txChecksum :: Tx -> Text
 txChecksum = Text.take 8 . txHashToHex . nosigTxHash

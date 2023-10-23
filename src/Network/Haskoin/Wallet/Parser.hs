@@ -51,6 +51,10 @@ data Command
   | CommandImportAcc
       { commandFilePath :: !FilePath
       }
+  | CommandExportAcc
+      { commandMaybeAcc :: !(Maybe Text),
+        commandFilePath :: !FilePath
+      }
   | CommandRenameAcc
       { commandOldName :: !Text,
         commandNewName :: !Text
@@ -92,9 +96,16 @@ data Command
       { commandMaybeAcc :: !(Maybe Text),
         commandFilePath :: !FilePath
       }
+  | CommandExportTx
+      { commandNoSigHash :: !TxHash,
+        commandFilePath :: !FilePath
+      }
+  | CommandDeleteTx
+      { commandNoSigHash :: !TxHash
+      }
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHash :: !(Maybe TxHash),
+        commandNoSigHashMaybe :: !(Maybe TxHash),
         commandInputFileMaybe :: !(Maybe FilePath),
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandSplitIn :: !Natural
@@ -105,7 +116,7 @@ data Command
       }
   | CommandSendTx
       { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHash :: !(Maybe TxHash),
+        commandNoSigHashMaybe :: !(Maybe TxHash),
         commandInputFileMaybe :: !(Maybe FilePath)
       }
   | CommandSyncAcc
@@ -161,7 +172,6 @@ commandParser =
             command "mnemonic" mnemonicParser,
             command "createacc" createAccParser,
             command "testacc" testAccParser,
-            command "importacc" importAccParser,
             command "renameacc" renameAccParser,
             command "accounts" accountsParser,
             metavar "COMMAND",
@@ -181,14 +191,23 @@ commandParser =
             command "txs" txsParser,
             command "preparetx" prepareTxParser,
             command "pendingtxs" pendingTxsParser,
-            command "reviewtx" reviewTxParser,
             command "signtx" signTxParser,
+            command "deletetx" deleteTxParser,
             command "coins" coinsParser,
             hidden
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Online commands",
+          [ commandGroup "Import/export commands",
+            command "importacc" importAccParser,
+            command "exportacc" exportAccParser,
+            command "reviewtx" reviewTxParser,
+            command "exporttx" exportTxParser,
+            hidden
+          ],
+      hsubparser $
+        mconcat
+          [ commandGroup "Network commands",
             command "sendtx" sendTxParser,
             command "syncacc" syncAccParser,
             command "discoveracc" discoverAccParser,
@@ -375,9 +394,12 @@ importAccParser = do
         CommandImportAcc
           <$> fileArgument "Path to the account file"
   info cmd $
-    progDesc "Import a public key account file"
-      <> footer
-        [r|
+    progDesc "Import an account file"
+      <> footer importExportFooter
+
+importExportFooter :: String
+importExportFooter =
+  [r|
 When working in an online/offline environment, you can `importacc` a public key
 file (on an online computer) that was exported with `exportacc` (on an offline
 computer). This will allow the online computer to monitor transactions without
@@ -386,6 +408,18 @@ derivation M/44'/coin'/account' along with the account name, the network and a
 wallet identifier. The wallet identifier is a fingerprint of the first public
 account derivation M/44'/coin'/0'.
 |]
+
+{- ExportAcc Parser -}
+
+exportAccParser :: ParserInfo Command
+exportAccParser = do
+  let cmd =
+        CommandExportAcc
+          <$> accountOption
+          <*> fileArgument "File where the account data will be saved"
+  info cmd $
+    progDesc "Export account data to a file"
+      <> footer importExportFooter
 
 {- RenameAcc Parser -}
 
@@ -652,6 +686,46 @@ of the `preparetx` command or the `exporttx` command. You can review a
 transaction file this way before signing it on an offline computer for example.
 |]
 
+{- ExportTx Parser -}
+
+exportTxParser :: ParserInfo Command
+exportTxParser = do
+  let cmd =
+        CommandExportTx
+          <$> nosigHashArg
+          <*> fileArgument "File where the transaction data will be saved"
+  info cmd $
+    progDesc "Export pending transaction data to a file"
+      <> footer
+        [r|
+A transaction that has been prepared with `preparetx` can be exported to a file
+so that it can be signed on an offline computer. The transaction is identified
+by its nosigHash (a hash of the transaction without its signatures) as this
+identifier doesn't change when the transaction is unsigned or signed.
+|]
+
+nosigHashArg :: Parser TxHash
+nosigHashArg =
+  argument (maybeReader $ hexToTxHash . cs) $
+    metavar "TXHASH"
+      <> help "The hash (nosigHash) of the transaction"
+
+{- DeleteTx Parser -}
+
+deleteTxParser :: ParserInfo Command
+deleteTxParser = do
+  let cmd = CommandDeleteTx <$> nosigHashArg
+  info cmd $
+    progDesc "Delete a pending transaction"
+      <> footer
+        [r|
+A transaction that has been prepared with `preparetx` will lock the coins that
+it has spent to prevent double-spending them. A pending transaction can be
+deleted with `deletetx` to permanently remove it from the database. This will
+also free any coins that have been locked by it. This will only be possible as
+long as the transaction hasn't been signed and sent to the network.
+|]
+
 {- SignTx Parser -}
 
 signTxParser :: ParserInfo Command
@@ -659,7 +733,7 @@ signTxParser = do
   let cmd =
         CommandSignTx
           <$> accountOption
-          <*> nosigHashArg
+          <*> nosigHashArgMaybe
           <*> inputFileMaybeOption
           <*> outputFileMaybeOption
           <*> splitInOption
@@ -678,8 +752,8 @@ uploaded to the network. You may inspect it using either the `reviewtx` or the
 `sendtx` or deleted with `deletetx`.
 |]
 
-nosigHashArg :: Parser (Maybe TxHash)
-nosigHashArg =
+nosigHashArgMaybe :: Parser (Maybe TxHash)
+nosigHashArgMaybe =
   optional . argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXHASH"
       <> help "The hash (nosigHash) of the transaction"
@@ -717,7 +791,7 @@ sendTxParser = do
   let cmd =
         CommandSendTx
           <$> accountOption
-          <*> nosigHashArg
+          <*> nosigHashArgMaybe
           <*> inputFileMaybeOption
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
@@ -838,7 +912,7 @@ signSweepParser = do
           <*> dirArgument "Folder containing the sweep transactions"
           <*> fileArgument "Path to the file containing the private keys"
   info cmd $
-    progDesc "Sign all the transactions contained in a sweep folder"
+    progDesc "Sign the transactions contained in a sweep folder"
       <> footer
         [r|
 Sign the sweep transactions that have been created by the `preparesweep`

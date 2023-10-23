@@ -123,6 +123,7 @@ DBAddress
   balanceTxs Word64
   balanceReceived Word64
   internal Bool
+  free Bool
   created UTCTime default=CURRENT_TIME
   Primary accountWallet accountDerivation derivation
   UniqueAddress address
@@ -171,6 +172,7 @@ DBPendingTx
   accountDerivation Text
   nosigHash Text
   blob ByteString
+  usedAddrs [Text]
   created UTCTime default=CURRENT_TIME
   Primary nosigHash
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
@@ -466,6 +468,7 @@ instance ToJSON DBAddress where
             (dBAddressBalanceTxs addr)
             (dBAddressBalanceReceived addr),
         "internal" .= dBAddressInternal addr,
+        "free" .= dBAddressFree addr,
         "created" .= dBAddressCreated addr
       ]
 
@@ -486,6 +489,7 @@ instance FromJSON DBAddress where
         <*> bal .: "txs"
         <*> bal .: "received"
         <*> o .: "internal"
+        <*> o .: "free"
         <*> o .: "created"
 
 data AddressBalance = AddressBalance
@@ -542,7 +546,7 @@ updateAddressBalances net storeBals =
         ]
       where_ $ a ^. DBAddressAddress ==. val addrT
 
--- Insert an address into the database. Does nothing if it already exists.
+-- Insert an address into the database. Set free=false if it already exists.
 insertAddress ::
   (MonadUnliftIO m) =>
   Network ->
@@ -557,6 +561,7 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr label = do
   (isInternal, idx) <- parseDeriv
   let label' = if isInternal then "Internal Address" else label
       derivS = cs $ pathToStr deriv
+      addrKey = DBAddressKey wallet accDeriv derivS
       dbAddr =
         DBAddress
           (fromIntegral idx)
@@ -571,10 +576,13 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr label = do
           0
           0
           isInternal
+          False
           time
-  addrM <- lift $ P.get (DBAddressKey wallet accDeriv derivS)
+  addrM <- lift $ P.get addrKey
   case addrM of
-    Just a -> return a
+    Just a -> do
+      lift $ P.update addrKey [DBAddressFree P.=. False]
+      return a {dBAddressFree = False}
     Nothing -> do
       lift $ P.insert_ dbAddr
       return dbAddr
@@ -1083,10 +1091,12 @@ groupCoins net =
         Just a -> (,[x]) <$> addrToText net a
         _ -> Nothing
 
-setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m ()
+setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m Natural
 setLockCoin op locked = do
-  let key = DBCoinKey $ outpointText op
-  P.update key [DBCoinLocked P.=. locked]
+  cnt <- updateCount $ \c -> do
+    set c [DBCoinLocked =. val locked]
+    where_ $ c ^. DBCoinOutpoint ==. val (outpointText op)
+  return $ fromIntegral cnt
 
 {- Raw Transactions -}
 
@@ -1108,16 +1118,20 @@ getRawTx hash = do
 
 repsertPendingTx ::
   (MonadUnliftIO m) =>
+  Network ->
   DBAccountId ->
   TxSignData ->
+  [Address] -> -- List of addresses used by this transaction (mostly change)
   ExceptT String (DB m) TxHash
-repsertPendingTx (DBAccountKey wallet accDeriv) tsd = do
+repsertPendingTx net (DBAccountKey wallet accDeriv) tsd usedAddrs = do
   time <- liftIO getCurrentTime
+  usedAddrsT <-
+    mapM (liftEither . maybeToEither "Address" . addrToText net) usedAddrs
   let nosigHash = nosigTxHash $ txSignDataTx tsd
       nosigHashT = txHashToHex nosigHash
       key = DBPendingTxKey nosigHashT
       bs = BS.toStrict $ Json.encode tsd
-      ptx = DBPendingTx wallet accDeriv nosigHashT bs time
+      ptx = DBPendingTx wallet accDeriv nosigHashT bs usedAddrsT time
   prevM <- lift $ getPendingTx nosigHash
   case prevM of
     Just prev -> do
@@ -1159,6 +1173,72 @@ pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
           hexToTxHash $
             dBPendingTxNosigHash res
     return (nosigHash, tsd)
+
+-- Returns the TxHash (not the NoSigTxHash) of the pending transactions.
+-- They are compared during a sync in order to delete pending transactions that
+-- are now online.
+pendingTxHashes ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  ExceptT String (DB m) [(TxHash, DBPendingTxId)]
+pendingTxHashes (DBAccountKey wallet accDeriv) = do
+  blobs <-
+    lift . select . from $ \p -> do
+      where_ $ do
+        p ^. DBPendingTxAccountWallet ==. val wallet
+          &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
+      return $ (p ^. DBPendingTxBlob, p ^. DBPendingTxId)
+  res <- forM blobs $ \(Value blob, Value key) -> do
+    tsd <- liftEither . Json.eitherDecode $ BS.fromStrict blob
+    if txSignDataSigned tsd
+      then return [(txHash $ txSignDataTx tsd, key)]
+      else return []
+  return $ concat res
+
+-- Delete a pending transaction and unlock any coins that it was spending
+-- if the unlock option is set. Also tries to free any addresses used by this
+-- transaction.
+deletePendingTx ::
+  (MonadUnliftIO m) =>
+  DBPendingTxId ->
+  Bool -> -- Unlock coins and addresses
+  ExceptT String (DB m) (Natural, Natural)
+deletePendingTx key False = lift (P.delete key) >> return (0,0)
+deletePendingTx key True = do
+  dbPtxM <- lift $ P.get key
+  case dbPtxM of
+    Just (DBPendingTx wallet accDeriv _ blob usedAddrs _) -> do
+      tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ blob
+      let inputs = (txSignDataTx tsd).inputs
+          outpoints = (.outpoint) <$> inputs
+          accKey = DBAccountKey wallet accDeriv
+      freedCoins <- forM outpoints $ \op -> lift $ setLockCoin op False
+      freedAddresses <- freeAddresses accKey usedAddrs
+      lift $ P.delete key
+      return (sum freedCoins, freedAddresses)
+    _ -> throwError "The pending transaction does not exist"
+
+freeAddresses ::
+  (MonadUnliftIO m) => DBAccountId -> [Text] -> ExceptT String (DB m) Natural
+freeAddresses accId@(DBAccountKey wallet accDeriv) addrs = do
+  acc <- getAccountId accId
+  lift . update $ \a -> do
+    set a [DBAddressFree =. val True]
+    where_ $ a ^. DBAddressAddress `in_` valList addrs
+  let intIdx = dBAccountInternal acc
+  go 0 intIdx
+  where
+    go cnt 0 = return cnt
+    go cnt accIdx = do
+      let addrIdx = accIdx - 1
+          path = cs $ pathToStr $ intDeriv :/ fromIntegral addrIdx
+          key = DBAddressKey wallet accDeriv path
+      dbAddrM <- lift $ P.get key
+      case dBAddressFree <$> dbAddrM of
+        Just True -> do
+          lift $ P.update accId [DBAccountInternal P.=. addrIdx]
+          go (cnt + 1) $ accIdx - 1
+        _ -> return cnt
 
 {- Helpers -}
 

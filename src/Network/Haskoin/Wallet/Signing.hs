@@ -97,7 +97,7 @@ buildTxSignData ::
   Natural ->
   Natural ->
   Bool ->
-  ExceptT String (DB m) (TxSignData, ExceptT String (DB m) ())
+  ExceptT String (DB m) (TxSignData, Maybe Address, ExceptT String (DB m) ())
 buildTxSignData net ctx accId rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
@@ -126,6 +126,7 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       -- Return the result
       return
         ( TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False,
+          if noChange then Nothing else Just change,
           do
             -- Commit the internal address if we used it
             unless noChange $ void $ commitInternalAddress accId 0
