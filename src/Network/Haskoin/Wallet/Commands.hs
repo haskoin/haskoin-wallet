@@ -485,17 +485,17 @@ commandResponse ctx =
       cmdPrepareTx ctx rcpts nameM unit fee dust rcptPay o
     CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
     CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
-    CommandSignTx nameM h s -> cmdSignTx ctx nameM h s
+    CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
     CommandCoins nameM p -> cmdCoins nameM p
     -- Online commands
-    CommandSendTx nameM file -> cmdSendTx ctx nameM file
+    CommandSendTx nameM h file -> cmdSendTx ctx nameM h file
     CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
     -- Utilities
     CommandVersion -> cmdVersion
     CommandPrepareSweep as fileM nameM fee dust dir ->
       prepareSweep ctx as fileM nameM fee dust dir
-    CommandSignSweep dir keyFile nameM -> signSweep ctx dir keyFile nameM
+    CommandSignSweep nameM dir keyFile -> signSweep ctx nameM dir keyFile
     CommandRollDice n -> rollDice n
 
 -- runDB . catchResponseError Monad Stack:
@@ -662,10 +662,17 @@ cmdReviewTx ctx nameM fp =
           then NoSigSigned nosigHash txInfo
           else NoSigUnsigned nosigHash txInfoU
 
-cmdSignTx :: Ctx -> Maybe Text -> TxHash -> Natural -> IO Response
-cmdSignTx ctx nameM nosigHash splitIn =
+cmdSignTx ::
+     Ctx
+  -> Maybe Text
+  -> Maybe TxHash
+  -> Maybe FilePath
+  -> Maybe FilePath
+  -> Natural
+  -> IO Response
+cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
   runDB . catchResponseError $ do
-    txSignDataM <- lift $ getPendingTx nosigHash
+    txSignDataM <- lift $ getPendingTx $ fromJust nosigHash
     case txSignDataM of
       Nothing -> throwError "The transaction does not exist in the wallet"
       Just tsd -> do
@@ -696,8 +703,8 @@ cmdCoins nameM page =
     jsonCoins <- mapM (liftEither . toJsonCoin net best) coins
     return $ ResponseCoins acc jsonCoins
 
-cmdSendTx :: Ctx -> Maybe Text -> FilePath -> IO Response
-cmdSendTx ctx nameM fp =
+cmdSendTx :: Ctx -> Maybe Text -> Maybe TxHash -> Maybe FilePath -> IO Response
+cmdSendTx ctx nameM nosigHM fpM =
   runDB . catchResponseError $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc
@@ -903,8 +910,8 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
     newAcc <- getAccountId accId
     return $ ResponsePrepareSweep newAcc (cs <$> files) txInfosU
 
-signSweep :: Ctx -> FilePath -> FilePath -> Maybe Text -> IO Response
-signSweep ctx sweepDir keyFile nameM =
+signSweep :: Ctx -> Maybe Text -> FilePath -> FilePath -> IO Response
+signSweep ctx nameM sweepDir keyFile =
   runDB . catchResponseError $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc

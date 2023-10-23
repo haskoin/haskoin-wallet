@@ -1,13 +1,15 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE QuasiQuotes #-}
 
 module Network.Haskoin.Wallet.Parser where
 
 import Control.Monad.Except (runExceptT)
 import Data.Either (fromRight)
-import Data.List (isPrefixOf, nub, sort)
+import Data.List (intercalate, isPrefixOf, nub, sort)
 import Data.String.Conversions (cs)
-import Data.Text (Text)
+import Data.Text (Text, toCaseFold)
+import Haskoin (bech32Const)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network (Network (name), allNets, btc, netByName)
 import Haskoin.Transaction (TxHash, hexToTxHash)
@@ -19,50 +21,14 @@ import Network.Haskoin.Wallet.Database
 import Network.Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
-  ( Alternative (many, some, (<|>)),
-    Parser,
-    ParserInfo,
-    action,
-    argument,
-    asum,
-    command,
-    commandGroup,
-    completeWith,
-    completer,
-    eitherReader,
-    flag,
-    footer,
-    fullDesc,
-    help,
-    helper,
-    hidden,
-    hsubparser,
-    info,
-    long,
-    maybeReader,
-    metavar,
-    mkCompleter,
-    option,
-    optional,
-    progDesc,
-    progDescDoc,
-    short,
-    showDefault,
-    showDefaultWith,
-    str,
-    strArgument,
-    strOption,
-    style,
-    switch,
-    value,
-    (<**>),
-  )
 import Options.Applicative.Help.Pretty
   ( Color (Red),
     Doc,
     annotate,
     color,
+    parens,
   )
+import Text.RawString.QQ
 
 {- Command Parsers -}
 
@@ -128,7 +94,9 @@ data Command
       }
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHash :: !TxHash,
+        commandNoSigHash :: !(Maybe TxHash),
+        commandInputFileMaybe :: !(Maybe FilePath),
+        commandOutputFileMaybe :: !(Maybe FilePath),
         commandSplitIn :: !Natural
       }
   | CommandCoins
@@ -137,7 +105,8 @@ data Command
       }
   | CommandSendTx
       { commandMaybeAcc :: !(Maybe Text),
-        commandFilePath :: !FilePath
+        commandNoSigHash :: !(Maybe TxHash),
+        commandInputFileMaybe :: !(Maybe FilePath)
       }
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
@@ -149,34 +118,39 @@ data Command
   | CommandVersion
   | CommandPrepareSweep
       { commandSweepAddrs :: ![Text],
-        commandMaybeFilePath :: !(Maybe FilePath),
+        commandInputFileMaybe :: !(Maybe FilePath),
         commandMaybeAcc :: !(Maybe Text),
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
         commandOutputDir :: !FilePath
       }
   | CommandSignSweep
-      { commandSweepPath :: !FilePath,
-        commandSecKeyPath :: !FilePath,
-        commandMaybeAcc :: !(Maybe Text)
+      { commandMaybeAcc :: !(Maybe Text),
+        commandSweepPath :: !FilePath,
+        commandSecKeyPath :: !FilePath
       }
   | CommandRollDice
       { commandCount :: !Natural
       }
   deriving (Eq, Show)
 
+parserMain :: IO Command
+parserMain =
+  customExecParser
+    (prefs $ showHelpOnEmpty <> helpIndent 25)
+    programParser
+
 programParser :: ParserInfo Command
-programParser =
-  info (commandParser <**> helper) $
-    mconcat
-      [ fullDesc,
-        progDesc
-          "hw is a lightweight BIP44 wallet for bitcoin and bitcoin-cash. \
-          \ It is designed so that mnemonic generation, account creation and\
-          \ transaction signing can happen on an offline, air-gapped computer.\
-          \ It will always ask for the mnemonic when signing and never store\
-          \ private keys on disk."
-      ]
+programParser = do
+  let cmd = commandParser <**> helper
+  info cmd $
+    fullDesc
+      <> progDesc
+        [r|
+hw is a BIP-44 command-line wallet for bitcoin and bitcoin-cash. It allows
+sensitive commands (!) to be run on a separate offline computer. For more
+information on a command, type "hw COMMAND --help".
+|]
 
 commandParser :: Parser Command
 commandParser =
@@ -214,7 +188,7 @@ commandParser =
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Online (Blockchain) commands",
+          [ commandGroup "Online commands",
             command "sendtx" sendTxParser,
             command "syncacc" syncAccParser,
             command "discoveracc" discoverAccParser,
@@ -232,42 +206,45 @@ commandParser =
     ]
 
 offline :: Doc -> Maybe Doc
-offline s = Just $ s <> annotate (color Red) " (Offline)"
+offline s = Just $ annotate (color Red) "! " <> s
 
 {- Mnemonic Parser -}
 
 mnemonicParser :: ParserInfo Command
-mnemonicParser =
-  info (CommandMnemonic <$> entropyOption <*> diceOption <*> splitInOption) $
-    mconcat
-      [ progDescDoc $ offline "Generate a mnemonic",
-        footer
-          "Generate a mnemonic using the systems entropy pool.\
-          \ By default it should be /dev/random on linux machines.\
-          \ If you use the --dice option, the additional dice entropy will be\
-          \ mixed with the system entropy. You should ideally run this\
-          \ command on an offline (air-gapped) computer. The mnemonic will NOT\
-          \ be stored on disk. It will only be printed to the screen and you\
-          \ should write it down and keep it in a secure location. If you\
-          \ choose to use the --split option, the mnemonic will be split into\
-          \ different pieces that you can write down and store in separate\
-          \ locations. ALL the pieces will be required for signing so make\
-          \ sure you have copies of all of them."
-      ]
+mnemonicParser = do
+  let cmd =
+        CommandMnemonic
+          <$> entropyOption
+          <*> diceOption
+          <*> splitInOption
+  info cmd $
+    progDescDoc (offline "Generate a mnemonic")
+      <> footer
+        [r|
+Generate a mnemonic using the systems entropy pool. By default it should be
+/dev/random on linux machines. If you use the --dice option, the additional dice
+entropy will be mixed with the system entropy. You should ideally run this
+command on an offline (air-gapped) computer. The mnemonic will NOT be stored on
+disk. It will only be printed to the screen and you should write it down and
+keep it in a secure location. Make multiple copies of your mnemonic. Do not
+store your mnemonic on a digital medium. If you lose your mnemonic, you lose
+your funds. If you choose to use the --split option, the mnemonic will be split
+into different pieces such that ALL the pieces will be required for signing.
+|]
 
 entropyOption :: Parser Natural
 entropyOption =
   option (maybeReader f) $
-    mconcat
-      [ short 'e',
-        long "entropy",
-        help
-          "Amount of entropy to use in bytes. Valid values are [16,20..32]",
-        metavar "BYTES",
-        value 16,
-        showDefault,
-        completeWith valid
-      ]
+    short 'e'
+      <> long "entropy"
+      <> metavar "BYTES"
+      <> value 16
+      <> showDefault
+      <> completeWith valid
+      <> help
+        [r|
+Amount of entropy to use in bytes. Valid values are 16, 20, 24, 28 or 32.
+|]
   where
     valid = ["16", "20", "24", "28", "32"]
     f s
@@ -277,151 +254,155 @@ entropyOption =
 diceOption :: Parser Bool
 diceOption =
   switch $
-    mconcat
-      [ short 'd',
-        long "dice",
-        help "Provide additional entropy using 6-sided dice",
-        showDefault
-      ]
+    short 'd'
+      <> long "dice"
+      <> help
+        [r|
+Provide additional entropy using 6-sided dice. The entropy will be mixed with
+the system entropy.
+|]
 
 splitInOption :: Parser Natural
 splitInOption =
   option (eitherReader $ f . cs) $
-    mconcat
-      [ short 's',
-        long "split",
-        help
-          "Split the mnemonic into different pieces using an xor algorithm.\
-          \ All the pieces will be required for signing.",
-        metavar "INT",
-        value 1
-      ]
+    short 's'
+      <> long "split"
+      <> metavar "INT"
+      <> value 1
+      <> help
+        [r|
+The mnemonic is split in different pieces and reconstructed using bitwise xor.
+All the pieces are required for signing. The ordering of the pieces is not
+important.
+|]
   where
     f s =
       case readNatural s of
         Just n ->
           if n >= 2 && n <= 12
             then Right n
-            else Left "Split value has to be in the range [2-12]"
-        Nothing -> Left "Could not parse the split option"
+            else Left "The --split value has to be between 2 and 12"
+        Nothing -> Left "Could not parse the --split option"
 
 {- CreateAcc Parser -}
 
 createAccParser :: ParserInfo Command
-createAccParser =
-  info
-    ( CommandCreateAcc
-        <$> textArg "Name of the new account"
-        <*> networkOption
-        <*> derivationOption
-        <*> splitInOption
-    )
-    $ mconcat
-      [ progDescDoc $ offline "Create a new account",
-        footer
-          "Create a new account with a given name. This command requires you\
-          \ to type your mnemonic and should ideally be run on an offline\
-          \ computer. If you have a split mnemonic, you will need to use the\
-          \ --split option. This command will derive the public component of\
-          \ the account and store it on disk. No private keys will be stored\
-          \ on disk. You will be asked for the mnemonic again when you will\
-          \ sign transactions. The public key file for the account will be\
-          \ stored in ~/.hw/pubkeys which can be imported on an online\
-          \ computer."
-      ]
+createAccParser = do
+  let cmd =
+        CommandCreateAcc
+          <$> textArg "Name of the new account"
+          <*> networkOption
+          <*> derivationOption
+          <*> splitInOption
+  info cmd $
+    progDescDoc (offline "Create a new account")
+      <> footer
+        [r|
+An account corresponds to the BIP-32 extended key derivation
+m/44'/coin'/account'. For example, the bitcoin account 0 would be m/44'/0'/0'.
+An account is tied to a private key and thus to a mnemonic. The derived account
+m/44'/0'/0' would be different given two different mnemonics. To help manage
+your accounts in hw, they are identified by a name. The command `createacc` will
+ask for a mnemonic and save the derived public key M/44'/coin'/account' on disk.
+The private keys are never stored anywhere while using hw. If you are using an
+offline computer, you can then export your account and import it on an online
+computer.
+|]
 
 networkOption :: Parser Network
 networkOption =
   option (eitherReader (f . netByName)) $
-    mconcat
-      [ short 'n',
-        long "network",
-        help $
-          unwords $
-            "Specify which coin network to use: " : ((.name) <$> allNets),
-        metavar "TEXT",
-        value btc,
-        showDefaultWith (.name),
-        completeWith ((.name) <$> allNets)
-      ]
+    short 'n'
+      <> long "network"
+      <> metavar "TEXT"
+      <> value btc
+      <> showDefaultWith (.name)
+      <> completeWith ((.name) <$> allNets)
+      <> help ("Specify one of the following networks to use: " <> nets)
   where
+    nets = intercalate ", " ((.name) <$> allNets)
     f :: Maybe Network -> Either String Network
     f Nothing =
-      Left $
-        unwords $
-          "Invalid network name. Select one of the following:"
-            : ((.name) <$> allNets)
+      Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
 
 derivationOption :: Parser (Maybe Natural)
 derivationOption =
-  optional $
-    option (maybeReader $ readNatural . cs) $
-      mconcat
-        [ short 'd',
-          long "derivation",
-          help "Specify a different bip44 account derivation",
-          metavar "INT"
-        ]
+  optional . option (maybeReader $ readNatural . cs) $
+    short 'd'
+      <> long "derivation"
+      <> metavar "INT"
+      <> help
+        [r|
+Specify a different account derivation to use (the last part of
+m/44'/coin'/account'). By default, account derivations are chosen sequentially
+starting from 0.
+|]
 
 {- TestAcc Parser -}
 
 testAccParser :: ParserInfo Command
-testAccParser =
-  info (CommandTestAcc <$> accountOption <*> splitInOption) $
-    mconcat
-      [ progDescDoc $ offline "Test your mnemonic and passphrase",
-        footer
-          "You should test regularly the mnemonic and passphrase of your account.\
-          \ This command will derive the public key associated with the account\
-          \ and make sure that it matches the account on file."
-      ]
+testAccParser = do
+  let cmd =
+        CommandTestAcc
+          <$> accountOption
+          <*> splitInOption
+  info cmd $
+    progDescDoc (offline "Check the validity of your mnemonic/passphrase")
+      <> footer
+        [r|
+`testacc` will prompt for your mnemonic/passphrase and check that the derived
+public key M/44'/coin'/account' matches with the account stored on disk.
+|]
 
 accountOption :: Parser (Maybe Text)
 accountOption =
-  optional $
-    strOption $
-      mconcat
-        [ short 'a',
-          long "account",
-          help "Specify an account to use for this command",
-          metavar "TEXT",
-          completer (mkCompleter accountCompleter)
-        ]
+  optional . strOption $
+    short 'a'
+      <> long "account"
+      <> metavar "TEXT"
+      <> completer (mkCompleter accountCompleter)
+      <> help
+        [r|
+Specify the account name if the wallet has more than one account.
+|]
 
 {- ImportAcc Parser -}
 
 importAccParser :: ParserInfo Command
-importAccParser =
-  info (CommandImportAcc <$> fileArgument "Path of the account file") $
-    mconcat
-      [ progDesc "Import a public key account file",
-        footer
-          "When creating a new account using the createacc command, a\
-          \ public key account file will be generated in ~/.hw/pubkeys\
-          \ which can be imported into a different computer with importacc.\
-          \ This will allow you to monitor the transactions of that account."
-      ]
+importAccParser = do
+  let cmd =
+        CommandImportAcc
+          <$> fileArgument "Path to the account file"
+  info cmd $
+    progDesc "Import a public key account file"
+      <> footer
+        [r|
+When working in an online/offline environment, you can `importacc` a public key
+file (on an online computer) that was exported with `exportacc` (on an offline
+computer). This will allow the online computer to monitor transactions without
+requiring access to the private keys. The file contains the public key
+derivation M/44'/coin'/account' along with the account name, the network and a
+wallet identifier. The wallet identifier is a fingerprint of the first public
+account derivation M/44'/coin'/0'.
+|]
 
 {- RenameAcc Parser -}
 
 renameAccParser :: ParserInfo Command
-renameAccParser =
-  info
-    ( CommandRenameAcc
-        <$> accountArg "Old account name"
-        <*> textArg "New account name"
-    )
-    $ mconcat [progDesc "Rename an account"]
+renameAccParser = do
+  let cmd =
+        CommandRenameAcc
+          <$> accountArg "Old account name"
+          <*> textArg "New account name"
+  info cmd $ progDesc "Rename an account"
 
 accountArg :: String -> Parser Text
 accountArg desc =
   argument str $
-    mconcat
-      [ help desc,
-        metavar "TEXT",
-        completer (mkCompleter accountCompleter)
-      ]
+    metavar "TEXT"
+      <> completer (mkCompleter accountCompleter)
+      <> help desc
 
 accountCompleter :: String -> IO [String]
 accountCompleter pref = do
@@ -431,155 +412,177 @@ accountCompleter pref = do
 {- Accounts Parser -}
 
 accountsParser :: ParserInfo Command
-accountsParser =
-  info (CommandAccounts <$> accountOption) $
-    mconcat [progDesc "Display account information"]
+accountsParser = do
+  let cmd = CommandAccounts <$> accountOption
+  info cmd $ progDesc "Display account information"
 
 {- Receive Parser -}
 
 receiveParser :: ParserInfo Command
-receiveParser =
-  info
-    (CommandReceive <$> accountOption <*> labelOption)
-    $ mconcat [progDesc "Get a new address for receiving a payment"]
+receiveParser = do
+  let cmd =
+        CommandReceive <$> accountOption <*> labelOption
+  info cmd $
+    progDesc "Get a new address for receiving a payment"
+      <> footer
+        [r|
+There are two types of addresses in a BIP-44 wallet: internal and external addresses.
+Internal addresses are not exposed to the user and are managed internally by the
+wallet (mostly for producing change outputs in transactions). The `receive` command
+produces external addresses that are meant for receiving payments. Internal addresses
+are derived under the BIP-32 path M/44'/coin'/account'/1/address. External addresses
+use the path M/44'/coin'/account'/0/address.
+|]
 
 labelOption :: Parser (Maybe Text)
 labelOption =
-  optional $
-    strOption $
-      mconcat
-        [ short 'l',
-          long "label",
-          help "Specify a label for the address",
-          metavar "TEXT"
-        ]
+  optional . strOption $
+    short 'l'
+      <> long "label"
+      <> metavar "TEXT"
+      <> help "Specify a label for the address"
 
 {- Addrs Parser -}
 
 addrsParser :: ParserInfo Command
-addrsParser =
-  info
-    ( CommandAddrs
-        <$> accountOption
-        <*> (Page <$> limitOption <*> offsetOption)
-    )
-    $ mconcat [progDesc "List the latest receiving addresses in the account"]
+addrsParser = do
+  let cmd =
+        CommandAddrs
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+  info cmd $
+    progDesc "List the receiving addresses of an account"
 
 offsetOption :: Parser Natural
 offsetOption =
   option (maybeReader $ readNatural . cs) $
-    mconcat
-      [ short 'o',
-        long "offset",
-        help "Offset the result set",
-        metavar "INT",
-        value 0,
-        showDefault
-      ]
+    short 'o'
+      <> long "offset"
+      <> metavar "INT"
+      <> value 0
+      <> showDefault
+      <> help "Offset the result set"
 
 limitOption :: Parser Natural
 limitOption =
   option (maybeReader $ readNatural . cs) $
-    mconcat
-      [ short 'l',
-        long "limit",
-        help "Limit the result set",
-        metavar "INT",
-        value 5,
-        showDefault
-      ]
+    short 'l'
+      <> long "limit"
+      <> metavar "INT"
+      <> value 5
+      <> showDefault
+      <> help
+        [r|
+Limit the result set. If the result set is very large, you can specify the
+--limit and --offset options to view the required data. For example, to skip the
+first 20 values and then display the following 10, use --limit=10 and
+--offset=20.
+|]
 
 {- Label Parser-}
 
 labelParser :: ParserInfo Command
-labelParser =
-  info
-    ( CommandLabel
-        <$> accountOption
-        <*> addrIndexArg
-        <*> textArg "The new address label"
-    )
-    $ mconcat [progDesc "Set the label of an address"]
+labelParser = do
+  let cmd =
+        CommandLabel
+          <$> accountOption
+          <*> addrIndexArg
+          <*> textArg "The new label for the address"
+  info cmd $ progDesc "Set the label of an address"
 
 addrIndexArg :: Parser Natural
 addrIndexArg =
   argument (maybeReader $ readNatural . cs) $
-    mconcat
-      [ help "The index of the address to update",
-        metavar "INT"
-      ]
+    metavar "INT"
+      <> help
+        [r|
+The index of the external address to update. The first address has an index of
+0.
+|]
 
 {- Txs Parser -}
 
 txsParser :: ParserInfo Command
-txsParser =
-  info
-    ( CommandTxs
-        <$> accountOption
-        <*> (Page <$> limitOption <*> offsetOption)
-    )
-    $ mconcat [progDesc "Display the transactions in an account"]
+txsParser = do
+  let cmd =
+        CommandTxs
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+  info cmd $ progDesc "Display the transactions of an account"
 
 {- PrepareTx Parser -}
 
 prepareTxParser :: ParserInfo Command
-prepareTxParser =
-  info
-    ( CommandPrepareTx
-        <$> some recipientArg
-        <*> accountOption
-        <*> unitOption
-        <*> feeOption
-        <*> dustOption
-        <*> rcptPayOption
-        <*> outputFileMaybeOption
-    )
-    $ mconcat
-      [progDesc "Prepare a new unsigned transaction"]
+prepareTxParser = do
+  let cmd =
+        CommandPrepareTx
+          <$> some recipientArg
+          <*> accountOption
+          <*> unitOption
+          <*> feeOption
+          <*> dustOption
+          <*> rcptPayOption
+          <*> outputFileMaybeOption
+  info cmd $
+    progDesc "Prepare an unsigned transaction for making a payment"
+      <> footer
+        [r|
+In hw, sending a transaction happens in separate steps. First, an unsigned
+transaction is prepared using `preparetx`. No mnemonic or private keys are
+required for this step and `preparetx` can be run on an online computer. The new
+transaction will be stored in the local wallet database as a "pending"
+transaction but it can also be exported as a file using the --output option. The
+pending transactions can be inspected either with `reviewtx` or `pendingtxs`.
+The new transaction is not signed. The next step will be to sign it. Any coins
+spent by it will be locked to prevent spending them twice. If you change your
+mind about sending this transaction, you can call `deletetx` to remove it and
+free up the locked coins. All the pending transactions are referenced by their
+noSigHash (a hash of the transaction without its signatures).
+|]
 
 recipientArg :: Parser (Text, Text)
-recipientArg =
-  (,) <$> addressArg "Recipient address" <*> amountArg
+recipientArg = (,) <$> addressArg <*> amountArg
 
-addressArg :: String -> Parser Text
-addressArg desc =
+addressArg :: Parser Text
+addressArg =
   strArgument $
-    mconcat
-      [ help desc,
-        metavar "ADDRESS"
-      ]
+    metavar "ADDRESS"
+      <> help
+        [r|
+Recipient address. By can provide multiple "ADDRESS AMOUNT" pairs. 
+|]
 
 amountArg :: Parser Text
 amountArg =
   strArgument $
-    mconcat
-      [ help "Recipient amount",
-        metavar "AMOUNT"
-      ]
+    metavar "AMOUNT"
+      <> help
+        [r|
+Recipient amount. By default, amounts are parsed as bitcoins. You can also use the
+--satoshi or --bit option to specify amounts in satoshis or bits. For example,
+"0.00001" bitcoins is equivalent to "10.00" bits or "1000" satoshi. Bitcoins can
+have up to 8 decimal places, bits up to 2 and satoshi are whole numbers.
+|]
 
 feeOption :: Parser Natural
 feeOption =
   option (maybeReader $ readNatural . cs) $
-    mconcat
-      [ short 'f',
-        long "fee",
-        help "Fee to pay in satoshi/bytes",
-        metavar "INT",
-        value 200,
-        showDefault
-      ]
+    short 'f'
+      <> long "fee"
+      <> metavar "INT"
+      <> value 200
+      <> showDefault
+      <> help "Fee to pay in satoshi/bytes"
 
 dustOption :: Parser Natural
 dustOption =
   option (maybeReader $ readNatural . cs) $
-    mconcat
-      [ short 'd',
-        long "dust",
-        help "Smallest allowed satoshi value for change outputs",
-        metavar "INT",
-        value 5430,
-        showDefault
-      ]
+    short 'd'
+      <> long "dust"
+      <> metavar "INT"
+      <> value 5430
+      <> showDefault
+      <> help "Amount (in satoshi) below which an output is considered dust"
 
 unitOption :: Parser AmountUnit
 unitOption = satoshiOption <|> bitOption
@@ -587,246 +590,300 @@ unitOption = satoshiOption <|> bitOption
 satoshiOption :: Parser AmountUnit
 satoshiOption =
   flag UnitBitcoin UnitSatoshi $
-    mconcat
-      [ short 's',
-        long "satoshi",
-        help "Use satoshis for parsing amounts (default: bitcoin)"
-      ]
+    short 's'
+      <> long "satoshi"
+      <> help "Use satoshis for parsing amounts (default: bitcoin)"
 
 bitOption :: Parser AmountUnit
 bitOption =
   flag UnitBitcoin UnitBit $
-    mconcat
-      [ short 'b',
-        long "bit",
-        help "Use bits for parsing amounts (default: bitcoin)"
-      ]
+    short 'b'
+      <> long "bit"
+      <> help "Use bits for parsing amounts (default: bitcoin)"
 
 rcptPayOption :: Parser Bool
 rcptPayOption =
   switch $
-    mconcat
-      [ short 'r',
-        long "recipientpay",
-        help "The transaction fee will be deducted from the recipient amounts",
-        showDefault
-      ]
+    short 'r'
+      <> long "recipientpay"
+      <> showDefault
+      <> help "The transaction fee will be deducted from the recipient amounts"
 
 outputFileMaybeOption :: Parser (Maybe FilePath)
 outputFileMaybeOption =
-  optional $
-    strOption $
-      mconcat
-        [ short 'o',
-          long "output",
-          help "Write the results to this file",
-          metavar "FILENAME",
-          action "file"
-        ]
+  optional . strOption $
+    short 'o'
+      <> long "output"
+      <> metavar "FILENAME"
+      <> action "file"
+      <> help "Write the result to this file"
 
 {- PendingTxs Parser -}
 
 pendingTxsParser :: ParserInfo Command
-pendingTxsParser =
-  info
-    ( CommandPendingTxs
-        <$> accountOption
-        <*> (Page <$> limitOption <*> offsetOption)
-    )
-    $ mconcat
-      [progDesc "Display the pending transactions in an account"]
+pendingTxsParser = do
+  let cmd =
+        CommandPendingTxs
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+  info cmd $
+    progDesc "Display the pending transactions of an account"
+      <> footer
+        [r|
+Pending transactions have been created with the `preparetx` command. They are
+either unsigned and waiting to be signed, or signed and waiting to be sent to
+the network.
+|]
 
 {- ReviewTx Parser -}
 
 reviewTxParser :: ParserInfo Command
-reviewTxParser =
-  info
-    ( CommandReviewTx
-        <$> accountOption
-        <*> fileArgument "Path to the transaction file to review"
-    )
-    $ mconcat
-      [progDesc "Review a transaction file"]
+reviewTxParser = do
+  let cmd =
+        CommandReviewTx
+          <$> accountOption
+          <*> fileArgument "Path to the transaction file to review"
+  info cmd $
+    progDesc "Review a transaction file"
+      <> footer
+        [r|
+Review a pending transaction file that has been created with the --output option
+of the `preparetx` command or the `exporttx` command. You can review a
+transaction file this way before signing it on an offline computer for example.
+|]
 
 {- SignTx Parser -}
 
 signTxParser :: ParserInfo Command
-signTxParser =
-  info
-    ( CommandSignTx <$> accountOption <*> noSigHashArg <*> splitInOption
-    )
-    $ mconcat
-      [progDescDoc $ offline "Sign a transaction"]
+signTxParser = do
+  let cmd =
+        CommandSignTx
+          <$> accountOption
+          <*> nosigHashArg
+          <*> inputFileMaybeOption
+          <*> outputFileMaybeOption
+          <*> splitInOption
+  info cmd $
+    progDescDoc (offline "Sign a transaction")
+      <> footer
+        [r|
+The next step after preparing a transaction is to sign it. This step can happen
+on an offline computer if you export the unsigned transaction to a file. If the
+transaction is stored in the wallet, it can be signed by using its nosigHash
+(TXHASH). This will sign and replace the transaction in-place. Otherwise, you
+must specify the --input file of the unsigned transaction and the --output file
+where the signed transaction will be saved. The transaction still hasn't been
+uploaded to the network. You may inspect it using either the `reviewtx` or the
+`pendingtxs` command. The transaction can then be sent to the network with
+`sendtx` or deleted with `deletetx`.
+|]
 
-noSigHashArg :: Parser TxHash
-noSigHashArg =
-  argument (maybeReader $ hexToTxHash . cs) $
-    mconcat
-      [ help "The hash (nosigHash) of the transaction",
-        metavar "TXHASH"
-      ]
+nosigHashArg :: Parser (Maybe TxHash)
+nosigHashArg =
+  optional . argument (maybeReader $ hexToTxHash . cs) $
+    metavar "TXHASH"
+      <> help "The hash (nosigHash) of the transaction"
+
+inputFileMaybeOption :: Parser (Maybe FilePath)
+inputFileMaybeOption =
+  optional . strOption $
+    short 'i'
+      <> long "input"
+      <> metavar "FILENAME"
+      <> action "file"
+      <> help "Read the input from this file"
 
 {- Coins Parser -}
 
 coinsParser :: ParserInfo Command
-coinsParser =
-  info
-    ( CommandCoins
-        <$> accountOption
-        <*> (Page <$> limitOption <*> offsetOption)
-    )
-    $ mconcat
-      [progDesc "List all the coins in an account"]
+coinsParser = do
+  let cmd =
+        CommandCoins
+          <$> accountOption
+          <*> (Page <$> limitOption <*> offsetOption)
+  info cmd $
+    progDesc "List the account coins (unspent outputs)"
+      <> footer
+        [r|
+Coins can be locked when preparing new transactions. When sending those
+transactions to the network, the locked coins will be spent and removed. Calling
+`deletetx` will remove a pending transaction and free up any locked coins.
+|]
 
 {- SendTx Parser -}
 
 sendTxParser :: ParserInfo Command
-sendTxParser =
-  info
-    ( CommandSendTx
-        <$> accountOption
-        <*> fileArgument "Path of the transaction file"
-    )
-    $ mconcat [progDesc "Broadcast a signed transaction file to the network"]
+sendTxParser = do
+  let cmd =
+        CommandSendTx
+          <$> accountOption
+          <*> nosigHashArg
+          <*> inputFileMaybeOption
+  info cmd $
+    progDesc "Send (upload) a signed transaction to the network"
+      <> footer
+        [r|
+Once a transaction is signed, it can be sent to the network. This step is
+irreversible and the transaction will become effective. Make sure everything is
+correct with your transaction before sending it. If the transaction is stored in
+the wallet, you can send it using its nosigHash (TXHASH). Otherwise, you can
+specify a --input file containing the signed transaction.
+|]
 
 {- SyncAcc Parser -}
 
 syncAccParser :: ParserInfo Command
-syncAccParser =
-  info (CommandSyncAcc <$> accountOption <*> fullOption) $
-    mconcat
-      [progDesc "Download new transactions, balances and coins"]
+syncAccParser = do
+  let cmd = CommandSyncAcc <$> accountOption <*> fullOption
+  info cmd $
+    progDesc "Download account data from the network"
+      <> footer
+        [r|
+The `syncacc` command will download the latest address balances, transactions
+and coins from the network. It will also update the account balances.
+|]
 
 fullOption :: Parser Bool
 fullOption =
   switch $
-    mconcat
-      [ long "full",
-        help "Perform a full sync instead of a regular sync",
-        showDefault
-      ]
+    long "full"
+      <> showDefault
+      <> help
+        [r|
+Force the syncacc command to re-download all the account data instead of only
+the deltas (the data that has changed). This should normally not be required
+unless some information is wrong, for example, when a previous syncacc was
+called on a partially discovered account (the account was missing some
+addresses).
+|]
 
 {- DiscoverAcc Parser -}
 
 discoverAccParser :: ParserInfo Command
-discoverAccParser =
-  info (CommandDiscoverAcc <$> accountOption) $
-    mconcat
-      [ progDesc "Scan the blockchain to generate missing addresses",
-        footer
-          "If you are recovering an account or there are addresses missing in\
-          \ your account, you can call discoveracc to search the blockchain for\
-          \ missing addresses. Addresses will be scanned and generated until\
-          \ a gap (default = 20) of unused addresses is found."
-      ]
+discoverAccParser = do
+  let cmd = CommandDiscoverAcc <$> accountOption
+  info cmd $
+    progDesc "Scan the blockchain to generate missing addresses"
+      <> footer
+        [r|
+`discoveracc` is typically called when restoring an account on a new wallet.
+Initially, there will be no addresses stored in the account. `discoveracc` will
+scan the blockchain and generate all the addresses (both external and internal)
+that have received coins at some point. The search is stopped when a gap
+(default = 20) of empty addresses is found.
+|]
 
 {- Version Parser -}
 
 versionParser :: ParserInfo Command
-versionParser =
-  info (pure CommandVersion) $
-    mconcat
-      [progDesc "Display the version of hw"]
+versionParser = do
+  let cmd = pure CommandVersion
+  info cmd $ progDesc "Display the version of hw"
 
 {- PrepareSweep Parser -}
 
 prepareSweepParser :: ParserInfo Command
-prepareSweepParser =
-  info
-    ( CommandPrepareSweep
-        <$> many (addressArg "List of addresses to sweep")
-        <*> addressFileOption
-        <*> accountOption
-        <*> feeOption
-        <*> dustOption
-        <*> outputDirOption
-    )
-    $ mconcat
-      [ progDesc "Sweep funds into this wallet",
-        footer
-          "This utility command will prepare a set of unsigned transactions\
-          \ that will send all the funds available in the given addresses to\
-          \ your account. The typical use case for this command is to\
-          \ migrate an old wallet to hw. You can pass the addresses on the\
-          \ command line or they can be parsed from a file. The preparesweep\
-          \ command will randomize all the coins and create a number of transactions\
-          \ containing between 1 and 5 inputs and 2 outputs."
-      ]
+prepareSweepParser = do
+  let cmd =
+        CommandPrepareSweep
+          <$> many sweepAddrsArg
+          <*> addressFileOption
+          <*> accountOption
+          <*> feeOption
+          <*> dustOption
+          <*> outputDirOption
+  info cmd $
+    progDesc "Sweep funds into this wallet"
+      <> footer
+        [r|
+This utility command will prepare a set of unsigned transactions that will send
+all the funds available in the given addresses to your account. The typical use
+case for this command is to migrate an old wallet to a new mnemonic. You can
+pass the addresses on the command line or they can be parsed from a file. The
+preparesweep command will randomize all the coins and create a number of
+transactions containing between 1 and 5 inputs and 2 outputs. The results will
+be written as a set of files in a directory specified with --outputdir.
+|]
+
+sweepAddrsArg :: Parser Text
+sweepAddrsArg =
+  strArgument $
+    metavar "ADDRESS"
+      <> help "List of addresses to sweep"
 
 addressFileOption :: Parser (Maybe FilePath)
 addressFileOption =
-  optional $
-    strOption $
-      mconcat
-        [ long "addrs",
-          help "File containing addresses to sweep",
-          metavar "FILENAME",
-          action "file"
-        ]
+  optional . strOption $
+    long "addrfile"
+      <> metavar "FILENAME"
+      <> action "file"
+      <> help "File containing addresses to sweep"
 
 outputDirOption :: Parser FilePath
 outputDirOption =
   strOption $
-    mconcat
-      [ short 'o',
-        long "output",
-        help "Directory where the results will be written to",
-        metavar "DIRNAME",
-        action "file"
-      ]
+    short 'o'
+      <> long "outputdir"
+      <> metavar "DIRNAME"
+      <> action "file"
+      <> help "Directory where the results will be written to"
 
 {- SignSweep Parser -}
 
 signSweepParser :: ParserInfo Command
-signSweepParser =
-  info
-    ( CommandSignSweep
-        <$> dirArgument "Folder containing the sweep transactions"
-        <*> fileArgument "Path to the file containing the private keys"
-        <*> accountOption
-    )
-    $ mconcat
-      [ progDesc "Sign all the transactions contained in a sweep folder",
-        footer
-          "The private keys have to be provided in a separate file.\
-          \ The currently supported formats are WIF and MiniKey."
-      ]
+signSweepParser = do
+  let cmd =
+        CommandSignSweep
+          <$> accountOption
+          <*> dirArgument "Folder containing the sweep transactions"
+          <*> fileArgument "Path to the file containing the private keys"
+  info cmd $
+    progDesc "Sign all the transactions contained in a sweep folder"
+      <> footer
+        [r|
+Sign the sweep transactions that have been created by the `preparesweep`
+command. The private keys have to be provided in a separate file. The currently
+supported formats are WIF and MiniKey.
+|]
 
 {- RollDice Parser -}
 
 rollDiceParser :: ParserInfo Command
-rollDiceParser =
-  info (CommandRollDice <$> diceCountArg) $
-    mconcat
-      [progDesc "Roll dice with the systems internal entropy"]
+rollDiceParser = do
+  let cmd = CommandRollDice <$> diceCountArg
+  info cmd $
+    progDesc "Roll 6-sided dice using the systems internal entropy"
+      <> footer
+        [r|
+By default, /dev/random is used on linux machines. The mapping from a byte to
+dice rolls ensures that all dice rolls have the same probability of occuring.
+Bytes 0x00 to 0xfb are used and anything above is dropped.
+|]
 
 diceCountArg :: Parser Natural
 diceCountArg =
   argument (maybeReader $ readNatural . cs) $
-    mconcat
-      [ help "Number of dice to roll",
-        metavar "INT"
-      ]
+    metavar "INT"
+      <> help "Number of 6-sided dice to roll"
 
 {- Argument parser helpers -}
 
 textArg :: String -> Parser Text
-textArg desc = argument str $ mconcat [help desc, metavar "TEXT"]
+textArg desc =
+  argument str $
+    metavar "TEXT"
+      <> help desc
 
 fileArgument :: String -> Parser FilePath
 fileArgument desc =
   strArgument $
-    mconcat
-      [ help desc,
-        metavar "FILENAME",
-        action "file"
-      ]
+    metavar "FILENAME"
+      <> action "file"
+      <> help desc
 
 dirArgument :: String -> Parser FilePath
 dirArgument desc =
   strArgument $
-    mconcat
-      [ help desc,
-        metavar "DIRNAME",
-        action "file"
-      ]
+    metavar "DIRNAME"
+      <> action "file"
+      <> help desc

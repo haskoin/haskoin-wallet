@@ -4,23 +4,15 @@ module Network.Haskoin.Wallet where
 
 import qualified Data.ByteString.Char8 as C8
 import Haskoin.Crypto (Ctx, withContext)
-import Haskoin.Util (MarshalJSON (marshalValue))
+import Haskoin.Util (MarshalJSON (..))
 import Network.Haskoin.Wallet.Commands
-  ( Response,
-    commandResponse,
-  )
-import Network.Haskoin.Wallet.Parser (programParser)
+import Network.Haskoin.Wallet.Parser
 import Network.Haskoin.Wallet.Util (encodeJsonPretty)
-import Options.Applicative
-  ( customExecParser,
-    prefs,
-    showHelpOnEmpty,
-  )
 
 clientMain :: IO ()
 clientMain =
   withContext $ \ctx -> do
-    cmd <- customExecParser (prefs showHelpOnEmpty) programParser
+    cmd <- parserMain
     res <- commandResponse ctx cmd
     jsonPrinter ctx res
 

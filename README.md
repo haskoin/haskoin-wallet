@@ -23,6 +23,7 @@ stack install
 
 ```console
 hw --help
+hw COMMAND --help
 ```
 
 ## Verify release binaries
