@@ -49,7 +49,8 @@ import Data.Bits (Bits (clearBit))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
 import Data.Char (GeneralCategory (OtherNumber))
-import Data.Either (fromRight)
+import Data.Either (fromRight, lefts, rights)
+import Data.Foldable (for_)
 import Data.Int (Int64)
 import Data.List (find)
 import Data.Map.Strict (Map)
@@ -172,7 +173,7 @@ DBPendingTx
   accountDerivation Text
   nosigHash Text
   blob ByteString
-  usedAddrs [Text]
+  online Bool
   created UTCTime default=CURRENT_TIME
   Primary nosigHash
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
@@ -188,14 +189,6 @@ DBBest
 |]
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
-
-runDB :: (MonadUnliftIO m) => DB m a -> m a
-runDB action = do
-  dir <- liftIO hwDataDirectory
-  let dbFile = dir </> "accounts.sqlite"
-  runSqlite (cs dbFile) $ do
-    _ <- runMigrationQuiet migrateAll
-    action
 
 {- Meta -}
 
@@ -595,7 +588,7 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr label = do
 
 -- Set external or internal account derivation
 -- Will also generate and insert the relevant addresses
-updateDeriv ::
+discoverAccSetDeriv ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
@@ -603,7 +596,7 @@ updateDeriv ::
   SoftPath ->
   Natural ->
   ExceptT String (DB m) DBAccount
-updateDeriv net ctx accId path deriv = do
+discoverAccSetDeriv net ctx accId path deriv = do
   acc <- getAccountId accId
   internal <-
     case pathToList path of
@@ -679,27 +672,6 @@ peekInternalAddress ctx accId offset'
           (addr, _) = derivePathAddr ctx xpub intDeriv idxW
       _ <- insertAddress net accId (intDeriv :/ idxW) addr ""
       return (addr, intDeriv :/ idxW)
-
-commitInternalAddress ::
-  (MonadUnliftIO m) =>
-  DBAccountId ->
-  Natural -> -- Offset
-  ExceptT String (DB m) DBAccount
-commitInternalAddress accId@(DBAccountKey wallet accDeriv) offset' = do
-  acc <- getAccountId accId
-  let accIdx = dBAccountInternal acc
-      idx = fromIntegral accIdx + fromIntegral offset'
-  addrM <- lift . selectOne . from $ \a -> do
-    where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
-        &&. a ^. DBAddressInternal ==. val True
-        &&. a ^. DBAddressIndex ==. val idx
-    return a
-  case addrM of
-    Just _ -> do
-      lift $ P.updateGet accId [DBAccountInternal P.=. idx + 1]
-    Nothing -> throwError "commitInternalAddress: Invalid offset"
 
 lastUsedAddress :: (MonadUnliftIO m) => DBAccountId -> Bool -> DB m Natural
 lastUsedAddress (DBAccountKey wallet accDeriv) internal = do
@@ -1116,39 +1088,16 @@ getRawTx hash = do
 
 {- Pending Transactions -}
 
-repsertPendingTx ::
-  (MonadUnliftIO m) =>
-  Network ->
-  DBAccountId ->
-  TxSignData ->
-  [Address] -> -- List of addresses used by this transaction (mostly change)
-  ExceptT String (DB m) TxHash
-repsertPendingTx net (DBAccountKey wallet accDeriv) tsd usedAddrs = do
-  time <- liftIO getCurrentTime
-  usedAddrsT <-
-    mapM (liftEither . maybeToEither "Address" . addrToText net) usedAddrs
-  let nosigHash = nosigTxHash $ txSignDataTx tsd
-      nosigHashT = txHashToHex nosigHash
-      key = DBPendingTxKey nosigHashT
-      bs = BS.toStrict $ Json.encode tsd
-      ptx = DBPendingTx wallet accDeriv nosigHashT bs usedAddrsT time
-  prevM <- lift $ getPendingTx nosigHash
-  case prevM of
-    Just prev -> do
-      when (not (txSignDataSigned tsd) && txSignDataSigned prev) $
-        throwError
-          "There is already a signed copy of this transaction in the database"
-      lift $ P.update key [DBPendingTxBlob P.=. bs]
-    Nothing -> lift $ P.insert_ ptx
-  return nosigHash
-
-getPendingTx ::
-  (MonadUnliftIO m) => TxHash -> DB m (Maybe TxSignData)
+getPendingTx :: (MonadUnliftIO m) => TxHash -> DB m (Maybe (TxSignData, Bool))
 getPendingTx nosigHash = do
   let hashT = txHashToHex nosigHash
       key = DBPendingTxKey hashT
-      f = Json.decode . BS.fromStrict . dBPendingTxBlob
-  (f =<<) <$> P.get key
+  resM <- P.get key
+  case resM of
+    Just (DBPendingTx _ _ _ blob online _) -> do
+      let tsdM = Json.decode $ BS.fromStrict blob
+      return $ (,online) <$> tsdM
+    _ -> return Nothing
 
 pendingTxPage ::
   (MonadUnliftIO m) =>
@@ -1174,7 +1123,7 @@ pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
             dBPendingTxNosigHash res
     return (nosigHash, tsd)
 
--- Returns the TxHash (not the NoSigTxHash) of the pending transactions.
+-- Returns the TxHash and NoSigHash of pending transactions.
 -- They are compared during a sync in order to delete pending transactions that
 -- are now online.
 pendingTxHashes ::
@@ -1187,7 +1136,7 @@ pendingTxHashes (DBAccountKey wallet accDeriv) = do
       where_ $ do
         p ^. DBPendingTxAccountWallet ==. val wallet
           &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
-      return $ (p ^. DBPendingTxBlob, p ^. DBPendingTxId)
+      return (p ^. DBPendingTxBlob, p ^. DBPendingTxId)
   res <- forM blobs $ \(Value blob, Value key) -> do
     tsd <- liftEither . Json.eitherDecode $ BS.fromStrict blob
     if txSignDataSigned tsd
@@ -1195,33 +1144,136 @@ pendingTxHashes (DBAccountKey wallet accDeriv) = do
       else return []
   return $ concat res
 
+-- Import a pending transaction and locks coins, commits addresses 
+-- and updates the account internal index
+importPendingTx ::
+  (MonadUnliftIO m) =>
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  TxSignData ->
+  ExceptT String (DB m) TxHash
+importPendingTx net ctx accId tsd@(TxSignData _ _ _ _ signed) = do
+  acc <- getAccountId accId
+  let nosigHash = nosigTxHash $ txSignDataTx tsd
+      bs = BS.toStrict $ Json.encode tsd
+  prevM <- lift $ getPendingTx nosigHash
+  case prevM of
+    Just (TxSignData _ _ _ _ prevSigned, online) -> do
+      when online $
+        throwError "The transaction is already online"
+      when (prevSigned && not signed) $
+        throwError "Can not replace a signed transaction with an unsigned one"
+      when (not prevSigned && signed) $ do
+        let key = DBPendingTxKey $ txHashToHex nosigHash
+        lift $ P.update key [DBPendingTxBlob P.=. bs]
+      return nosigHash
+    Nothing -> do
+      let (outpoints, addrsE) = findTxSignData ctx acc tsd
+      -- Verify coins and lock them
+      forM_ outpoints $ \outpoint -> do
+        c <- lift $ setLockCoin outpoint True
+        when (c == 0) $
+          throwError "A coin referenced by the transaction does not exist"
+      -- Verify addresses
+      let intAddrs = lefts addrsE
+          extAddrs = rights addrsE
+      intAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) intAddrs
+      extAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) extAddrs
+      res <- lift . select . from $ \a -> do
+        where_ $ a ^. DBAddressAddress `in_` valList (intAddrsT <> extAddrsT)
+        return a
+      when (length res /= length (intAddrsT <> extAddrsT)) $
+        throwError "Some of the transactions addresses do not exist"
+      -- Remove the free status of internal addresses
+      lift . update $ \a -> do
+        set a [DBAddressFree =. val False]
+        where_ $ a ^. DBAddressAddress `in_` valList intAddrsT
+      -- Update account index
+      let accIdx = dBAccountInternal acc
+          maxM =
+            if null intAddrs
+              then Nothing
+              else Just $ fromIntegral $ maximum $ snd <$> intAddrs
+      for_ maxM $ \maxIdx ->
+        when (maxIdx >= accIdx) $ do
+          let newIdx = maxIdx + 1
+          -- check the gap
+          usedIdx <- lift $ lastUsedAddress accId True
+          when (fromIntegral newIdx > usedIdx + gap) $
+            throwError $
+              "Can not generate internal addresses beyond the gap of "
+                <> show gap
+          lift $ P.update accId [DBAccountInternal P.=. newIdx]
+      -- Insert the pending transaction
+      time <- liftIO getCurrentTime
+      let ptx =
+            DBPendingTx
+              (dBAccountWallet acc)
+              (dBAccountDerivation acc)
+              (txHashToHex nosigHash)
+              bs
+              False
+              time
+      lift $ P.insert_ ptx
+      return nosigHash
+
+findTxSignData ::
+  Ctx ->
+  DBAccount ->
+  TxSignData ->
+  ([OutPoint], [Either (Address, Word32) (Address, Word32)])
+findTxSignData ctx acc (TxSignData tx _ _ op _) =
+  let xpub = accountXPubKey ctx acc
+      outpoints = (.outpoint) <$> tx.inputs
+      f p =
+        case pathToList p of
+          [0, i] -> Right (fst $ derivePathAddr ctx xpub extDeriv i, i)
+          [1, i] -> Left (fst $ derivePathAddr ctx xpub intDeriv i, i)
+          _ -> error "Invalid path"
+   in (outpoints, f <$> op)
+
 -- Delete a pending transaction and unlock any coins that it was spending
 -- if the unlock option is set. Also tries to free any addresses used by this
 -- transaction.
 deletePendingTx ::
   (MonadUnliftIO m) =>
-  DBPendingTxId ->
-  Bool -> -- Unlock coins and addresses
+  Network ->
+  Ctx ->
+  DBAccountId ->
+  TxHash ->
   ExceptT String (DB m) (Natural, Natural)
-deletePendingTx key False = lift (P.delete key) >> return (0,0)
-deletePendingTx key True = do
-  dbPtxM <- lift $ P.get key
-  case dbPtxM of
-    Just (DBPendingTx wallet accDeriv _ blob usedAddrs _) -> do
-      tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ blob
-      let inputs = (txSignDataTx tsd).inputs
-          outpoints = (.outpoint) <$> inputs
-          accKey = DBAccountKey wallet accDeriv
+deletePendingTx net ctx accId nosigHash = do
+  let key = DBPendingTxKey $ txHashToHex nosigHash
+  tsdM <- lift $ getPendingTx nosigHash
+  case tsdM of
+    Just (_, True) -> do
+      lift $ P.delete key -- The transaction is online. Just delete it.
+      return (0,0)
+    Just (tsd, _) -> do
+      acc <- getAccountId accId
+      let (outpoints, addrsE) = findTxSignData ctx acc tsd
+      intAddrsT <-
+        mapM (liftMaybe "Address" . addrToText net) $
+          fst <$> lefts addrsE
+      -- We only free coins and addresses if the transaction is offline
       freedCoins <- forM outpoints $ \op -> lift $ setLockCoin op False
-      freedAddresses <- freeAddresses accKey usedAddrs
+      freedAddresses <- freeAddresses accId acc intAddrsT
       lift $ P.delete key
       return (sum freedCoins, freedAddresses)
     _ -> throwError "The pending transaction does not exist"
 
+-- When the pending transaction is online, we just delete it
+pendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
+pendingTxOnline = P.delete
+
 freeAddresses ::
-  (MonadUnliftIO m) => DBAccountId -> [Text] -> ExceptT String (DB m) Natural
-freeAddresses accId@(DBAccountKey wallet accDeriv) addrs = do
-  acc <- getAccountId accId
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  DBAccount ->
+  [Text] ->
+  ExceptT String (DB m) Natural
+freeAddresses accId@(DBAccountKey wallet accDeriv) acc addrs = do
   lift . update $ \a -> do
     set a [DBAddressFree =. val True]
     where_ $ a ^. DBAddressAddress `in_` valList addrs
@@ -1239,6 +1291,14 @@ freeAddresses accId@(DBAccountKey wallet accDeriv) addrs = do
           lift $ P.update accId [DBAccountInternal P.=. addrIdx]
           go (cnt + 1) $ accIdx - 1
         _ -> return cnt
+
+setPendingTxOnline :: (MonadUnliftIO m) => TxHash -> DB m Natural
+setPendingTxOnline nosigH = do
+  let nosigHT = txHashToHex nosigH
+  cnt <- updateCount $ \p -> do
+    set p [DBPendingTxOnline =. val True]
+    where_ $ p ^. DBPendingTxNosigHash  ==. val nosigHT
+  return $ fromIntegral cnt
 
 {- Helpers -}
 

@@ -25,6 +25,7 @@ import qualified Data.Aeson as Json
 import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
+import Data.Foldable (for_)
 import Data.List (nub, sort, (\\))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
@@ -34,7 +35,9 @@ import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as T
+import Data.Traversable (for)
 import Data.Word (Word32)
+import Database.Persist.Sqlite (runMigrationQuiet, runSqlite, transactionUndo)
 import Haskoin.Address (Address, addrToText, textToAddr)
 import Haskoin.Block (BlockHash (..), headerHash)
 import Haskoin.Crypto
@@ -68,11 +71,12 @@ import Haskoin.Store.WebClient
     apiBatch,
     apiCall,
   )
-import Haskoin.Transaction (OutPoint (..), TxHash (..), nosigTxHash, txHashToHex)
+import Haskoin.Transaction (OutPoint (..), TxHash (..), hexToTxHash, nosigTxHash, txHashToHex)
 import Haskoin.Util
   ( MarshalJSON (marshalValue, unmarshalValue),
     decodeHex,
     eitherToMaybe,
+    liftMaybe,
     maybeToEither,
     snd3,
   )
@@ -497,6 +501,19 @@ instance MarshalJSON Ctx Response where
             <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
 
+runDB :: (MonadUnliftIO m) => ExceptT String (DB m) Response -> m Response
+runDB action = do
+  dir <- liftIO hwDataDirectory
+  let dbFile = dir </> "accounts.sqlite"
+  runSqlite (cs dbFile) $ do
+    _ <- runMigrationQuiet migrateAll
+    resE <- runExceptT action
+    case resE of
+      Left err -> do
+        transactionUndo -- Roll back the current sqlite transaction
+        return $ ResponseError $ cs err
+      Right res -> return res
+
 catchResponseError :: (Monad m) => ExceptT String m Response -> m Response
 catchResponseError m = do
   resE <- runExceptT m
@@ -523,7 +540,7 @@ commandResponse ctx =
       cmdPrepareTx ctx rcpts nameM unit fee dust rcptPay o
     CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
-    CommandDeleteTx h -> cmdDeleteTx h
+    CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
     CommandCoins nameM p -> cmdCoins nameM p
     -- Import/export commands
     CommandImportAcc f -> cmdImportAcc ctx f
@@ -531,7 +548,7 @@ commandResponse ctx =
     CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
     CommandExportTx h f -> cmdExportTx h f
     -- Online commands
-    CommandSendTx nameM h file -> cmdSendTx ctx nameM h file
+    CommandSendTx nameM h -> cmdSendTx ctx nameM h
     CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
     -- Utilities
@@ -541,7 +558,7 @@ commandResponse ctx =
     CommandSignSweep nameM dir keyFile -> signSweep ctx nameM dir keyFile
     CommandRollDice n -> rollDice n
 
--- runDB . catchResponseError Monad Stack:
+-- runDB Monad Stack:
 -- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT IO)))
 
 liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
@@ -555,7 +572,7 @@ cmdMnemonic ent useDice splitIn =
 
 cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
 cmdCreateAcc ctx name net derivM splitIn =
-  runDB . catchResponseError $ do
+  runDB $ do
     (mnem, walletFP) <- askMnemonicPass net ctx splitIn
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
     prvKey <- liftEither $ signingKey net ctx mnem d
@@ -565,7 +582,7 @@ cmdCreateAcc ctx name net derivM splitIn =
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx nameM splitIn =
-  runDB . catchResponseError $ do
+  runDB $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc
         xPubKey = accountXPubKey ctx acc
@@ -591,14 +608,14 @@ cmdTestAcc ctx nameM splitIn =
 
 cmdImportAcc :: Ctx -> FilePath -> IO Response
 cmdImportAcc ctx fp =
-  runDB . catchResponseError $ do
+  runDB $ do
     (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
     acc <- insertAccount net ctx wallet name xpub
     return $ ResponseImportAcc acc
 
 cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx nameM file =
-  runDB . catchResponseError $ do
+  runDB $ do
     acc <- getAccountVal nameM
     checkPathFree file
     let xpub = accountXPubKey ctx acc
@@ -609,21 +626,23 @@ cmdExportAcc ctx nameM file =
     liftIO $ writeMarshalFile ctx file doc
     return $ ResponseExportAcc acc file
 
-cmdDeleteTx :: TxHash -> IO Response
-cmdDeleteTx nosigH =
-  runDB . catchResponseError $ do
-    (coins, addrs) <- deletePendingTx (DBPendingTxKey $ txHashToHex nosigH) True
+cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
+cmdDeleteTx ctx nameM nosigH =
+  runDB $ do
+    (accId, acc) <- getAccount nameM
+    let net = accountNetwork acc
+    (coins, addrs) <- deletePendingTx net ctx accId nosigH
     return $ ResponseDeleteTx coins addrs
 
 cmdRenameAcc :: Text -> Text -> IO Response
 cmdRenameAcc oldName newName =
-  runDB . catchResponseError $ do
+  runDB $ do
     acc <- renameAccount oldName newName
     return $ ResponseRenameAcc oldName newName acc
 
 cmdAccounts :: Maybe Text -> IO Response
 cmdAccounts nameM =
-  runDB . catchResponseError $ do
+  runDB $ do
     case nameM of
       Just _ -> do
         acc <- getAccountVal nameM
@@ -634,26 +653,26 @@ cmdAccounts nameM =
 
 cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx nameM labelM =
-  runDB . catchResponseError $ do
+  runDB $ do
     (acc, addr) <- receiveAddress ctx nameM $ fromMaybe "" labelM
     return $ ResponseReceive acc addr
 
 cmdAddrs :: Maybe Text -> Page -> IO Response
 cmdAddrs nameM page =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     as <- lift $ addressPage accId page
     return $ ResponseAddresses acc as
 
 cmdLabel :: Maybe Text -> Natural -> Text -> IO Response
 cmdLabel nameM idx lab =
-  runDB . catchResponseError $ do
+  runDB $ do
     (acc, adr) <- updateLabel nameM (fromIntegral idx) lab
     return $ ResponseLabel acc adr
 
 cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdTxs ctx nameM page =
-  runDB . catchResponseError $ do
+  runDB $ do
     (acc, txInfos) <- txsPage ctx nameM page
     return $ ResponseTxs acc txInfos
 
@@ -668,21 +687,16 @@ cmdPrepareTx ::
   Maybe FilePath ->
   IO Response
 cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
-    (signDat, changeM, commitDB) <-
-      buildTxSignData net ctx accId rcpts feeByte dust rcptPay
+    signDat <- buildTxSignData net ctx accId rcpts feeByte dust rcptPay
     txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
-    nosigHash <- repsertPendingTx net accId signDat (maybeToList changeM)
-    case fileM of
-      Just file -> do
-        checkPathFree file
-        liftIO $ writeJsonFile file $ Json.toJSON signDat
-      _ -> return ()
-    commitDB
+    for_ fileM checkPathFree
+    nosigHash <- importPendingTx net ctx accId signDat
+    for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountId accId
     return $ ResponsePrepareTx newAcc $ NoSigUnsigned nosigHash txInfoU
   where
@@ -695,7 +709,7 @@ cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
 
 cmdPendingTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx nameM page =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -710,7 +724,7 @@ cmdPendingTxs ctx nameM page =
 
 cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx nameM fp =
-  runDB . catchResponseError $ do
+  runDB $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -726,7 +740,7 @@ cmdReviewTx ctx nameM fp =
 
 cmdExportTx :: TxHash -> FilePath -> IO Response
 cmdExportTx nosigH fp =
-  runDB . catchResponseError $ do
+  runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
       Just tsd -> do
@@ -744,14 +758,17 @@ cmdSignTx ::
   Natural ->
   IO Response
 cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
-  runDB . catchResponseError $ do
-    tsd <- getInput
+  runDB $ do
+    (tsd, online) <- getInput
+    when online $
+      throwError "The transaction is already online"
     when (txSignDataSigned tsd) $
       throwError "The transaction is already signed"
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
+    for_ outputM checkPathFree
     (mnem, _) <- askMnemonicPass net ctx splitIn
     prvKey <- liftEither $ signingKey net ctx mnem idx
     let pubKey = deriveXPubKey ctx prvKey
@@ -759,14 +776,10 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
       throwError "The mnemonic did not match the provided account"
     (newSignData, txInfo) <- liftEither $ signWalletTx net ctx tsd prvKey
     let nosigH = nosigTxHash $ txSignDataTx newSignData
-    unless (Just nosigH == nosigHM) $
+    when (isJust nosigHM && Just nosigH /= nosigHM) $
       throwError "The nosigHash did not match"
-    case outputM of
-      Just o -> do
-        checkPathFree o
-        liftIO $ writeJsonFile o $ Json.toJSON newSignData
-      _ -> return ()
-    when (isJust nosigHM) $ void $ repsertPendingTx net accId newSignData []
+    when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
+    for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
     return $ ResponseSignTx acc (NoSigSigned nosigH txInfo)
   where
     getInput =
@@ -790,7 +803,7 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
 
 cmdCoins :: Maybe Text -> Page -> IO Response
 cmdCoins nameM page =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
     coins <- lift $ coinPage accId page
@@ -799,40 +812,29 @@ cmdCoins nameM page =
     jsonCoins <- mapM (liftEither . toJsonCoin net best) coins
     return $ ResponseCoins acc jsonCoins
 
-cmdSendTx :: Ctx -> Maybe Text -> Maybe TxHash -> Maybe FilePath -> IO Response
-cmdSendTx ctx nameM nosigHM inputM =
-  runDB . catchResponseError $ do
+cmdSendTx :: Ctx -> Maybe Text -> TxHash -> IO Response
+cmdSendTx ctx nameM nosigH =
+  runDB $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    tsd@(TxSignData signedTx _ _ _ signed) <- getInput
-    txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
-    let txInfo = unsignedToTxInfo signedTx txInfoU
-        verify = verifyTxInfo net ctx signedTx txInfo
-    unless (signed && verify) $ throwError "The transaction is not signed"
-    checkHealth ctx net
-    Store.TxId netTxId <- liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
-    return $ ResponseSendTx acc txInfo netTxId
-  where
-    getInput =
-      case (nosigHM, inputM) of
-        (Nothing, Nothing) ->
-          throwError "Provide either a TXHASH or a --input file"
-        (Just _, Just _) ->
-          throwError "Can not provide both a TXHASH and a --input file"
-        (Just h, _) -> do
-          resM <- lift $ getPendingTx h
-          case resM of
-            Just res -> return res
-            _ -> throwError "The nosigHash does not exist in the wallet"
-        (_, Just i) -> do
-          exist <- liftIO $ D.doesFileExist i
-          unless exist $ throwError "Input file does not exist"
-          liftEitherIO $ readJsonFile i
+    tsdM <- lift $ getPendingTx nosigH
+    case tsdM of
+      Just (tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+        txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+        let txInfo = unsignedToTxInfo signedTx txInfoU
+            verify = verifyTxInfo net ctx signedTx txInfo
+        unless (signed && verify) $ throwError "The transaction is not signed"
+        checkHealth ctx net
+        Store.TxId netTxId <-
+          liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
+        _ <- lift $ setPendingTxOnline nosigH
+        return $ ResponseSendTx acc txInfo netTxId
+      _ -> throwError "The nosigHash does not exist in the wallet"
 
 cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx nameM full = do
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
     -- Check API health
@@ -886,7 +888,7 @@ cmdSyncAcc ctx nameM full = do
     -- Remove pending transactions if they are online
     pendingTids <- pendingTxHashes accId
     let toRemove = filter ((`elem` tids) . fst) pendingTids
-    forM_ toRemove $ \(_, key) -> deletePendingTx key False
+    forM_ toRemove $ \(_, key) -> lift $ pendingTxOnline key
     -- Update the best block for this network
     lift $ updateBest net (headerHash best.header) best.height
     return $
@@ -963,15 +965,15 @@ searchAddrTxs net ctx confirmedTxs as
 
 cmdDiscoverAccount :: Ctx -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx nameM =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     checkHealth ctx net
     e <- go net pub extDeriv 0 (Page recoveryGap 0)
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
-    _ <- updateDeriv net ctx accId extDeriv e
-    newAcc <- updateDeriv net ctx accId intDeriv i
+    _ <- discoverAccSetDeriv net ctx accId extDeriv e
+    newAcc <- discoverAccSetDeriv net ctx accId intDeriv i
     return $ ResponseDiscoverAcc newAcc
   where
     go net pub path d page@(Page lim off) = do
@@ -1003,7 +1005,7 @@ prepareSweep ::
   FilePath ->
   IO Response
 prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
-  runDB . catchResponseError $ do
+  runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -1014,20 +1016,18 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
         _ -> return []
     let addrs = addrsArg <> addrsFile
     checkHealth ctx net
-    (tsds, commitDB) <- buildSweepSignData net ctx accId addrs feeByte dust
+    tsds <- buildSweepSignData net ctx accId addrs feeByte dust
     let f tsd@(TxSignData tx _ _ _ _) = do
           infoU <- parseTxSignData net ctx pub tsd
           return $ NoSigUnsigned (nosigTxHash tx) infoU
     txInfosU <- liftEither $ mapM f tsds
     sweepDir <- initSweepDir tsds dir
     files <- writeSweepFiles tsds sweepDir
-    commitDB
-    newAcc <- getAccountId accId
-    return $ ResponsePrepareSweep newAcc (cs <$> files) txInfosU
+    return $ ResponsePrepareSweep acc (cs <$> files) txInfosU
 
 signSweep :: Ctx -> Maybe Text -> FilePath -> FilePath -> IO Response
 signSweep ctx nameM sweepDir keyFile =
-  runDB . catchResponseError $ do
+  runDB $ do
     acc <- getAccountVal nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc

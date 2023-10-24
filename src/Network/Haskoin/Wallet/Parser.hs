@@ -101,7 +101,8 @@ data Command
         commandFilePath :: !FilePath
       }
   | CommandDeleteTx
-      { commandNoSigHash :: !TxHash
+      { commandMaybeAcc :: !(Maybe Text),
+        commandNoSigHash :: !TxHash
       }
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
@@ -116,8 +117,7 @@ data Command
       }
   | CommandSendTx
       { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHashMaybe :: !(Maybe TxHash),
-        commandInputFileMaybe :: !(Maybe FilePath)
+        commandNoSigHash :: !TxHash
       }
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
@@ -439,9 +439,14 @@ accountArg desc =
       <> help desc
 
 accountCompleter :: String -> IO [String]
+accountCompleter _ = return []
+
+{- TODO: Fix this
+accountCompleter :: String -> IO [String]
 accountCompleter pref = do
   names <- runDB getAccountNames
   return $ sort $ nub $ filter (pref `isPrefixOf`) (cs <$> names)
+-}
 
 {- Accounts Parser -}
 
@@ -701,7 +706,9 @@ exportTxParser = do
 A transaction that has been prepared with `preparetx` can be exported to a file
 so that it can be signed on an offline computer. The transaction is identified
 by its nosigHash (a hash of the transaction without its signatures) as this
-identifier doesn't change when the transaction is unsigned or signed.
+identifier doesn't change when the transaction is unsigned or signed. Once
+signed, you can `importtx` the transaction back into the computer that
+prepared the transaction. 
 |]
 
 nosigHashArg :: Parser TxHash
@@ -714,7 +721,10 @@ nosigHashArg =
 
 deleteTxParser :: ParserInfo Command
 deleteTxParser = do
-  let cmd = CommandDeleteTx <$> nosigHashArg
+  let cmd =
+        CommandDeleteTx
+          <$> accountOption
+          <*> nosigHashArg
   info cmd $
     progDesc "Delete a pending transaction"
       <> footer
@@ -791,17 +801,15 @@ sendTxParser = do
   let cmd =
         CommandSendTx
           <$> accountOption
-          <*> nosigHashArgMaybe
-          <*> inputFileMaybeOption
+          <*> nosigHashArg
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
         [r|
 Once a transaction is signed, it can be sent to the network. This step is
 irreversible and the transaction will become effective. Make sure everything is
-correct with your transaction before sending it. If the transaction is stored in
-the wallet, you can send it using its nosigHash (TXHASH). Otherwise, you can
-specify a --input file containing the signed transaction.
+correct with your transaction before sending it. You must `importtx` the
+transaction before sending it if you have it in a file.
 |]
 
 {- SyncAcc Parser -}

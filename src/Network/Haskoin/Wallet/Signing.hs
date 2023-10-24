@@ -97,7 +97,7 @@ buildTxSignData ::
   Natural ->
   Natural ->
   Bool ->
-  ExceptT String (DB m) (TxSignData, Maybe Address, ExceptT String (DB m) ())
+  ExceptT String (DB m) TxSignData
 buildTxSignData net ctx accId rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
@@ -124,15 +124,7 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       let depTxHash = (.hash) . (.outpoint) <$> tx.inputs
       depTxs <- mapM getRawTx depTxHash
       -- Return the result
-      return
-        ( TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False,
-          if noChange then Nothing else Just change,
-          do
-            -- Commit the internal address if we used it
-            unless noChange $ void $ commitInternalAddress accId 0
-            -- Lock the coins that we used
-            lift $ mapM_ (\c -> setLockCoin c.outpoint True) pickedCoins
-        )
+      return $ TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
 
 buildWalletTx ::
   Network ->
@@ -272,7 +264,7 @@ buildSweepSignData ::
   [Address] ->
   Natural ->
   Natural ->
-  ExceptT String (DB m) ([TxSignData], ExceptT String (DB m) ())
+  ExceptT String (DB m) [TxSignData]
 buildSweepSignData net ctx accId addrs feeByte dust
   | null addrs = throwError "No addresses provided to sweep"
   | otherwise = do
@@ -284,7 +276,7 @@ buildSweepSignData net ctx accId addrs feeByte dust
         throwError "There are no coins to sweep in those addresses"
       -- Build a set of sweep transactions
       gen <- liftIO initStdGen
-      (txs, intCount) <-
+      txs <-
         evalStateT (buildSweepTxs net ctx accId coins feeByte dust) gen
       -- For each sweep transaction
       res <- forM txs $ \(tx, pickedCoins, outDerivs) -> do
@@ -298,32 +290,23 @@ buildSweepSignData net ctx accId addrs feeByte dust
         let inDerivs = rights resE
         return $
           TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
-      return
-        ( res,
-          -- Commit the internal addresses used
-          when (intCount > 0) $
-            void $
-              commitInternalAddress accId (intCount - 1)
-        )
+      return res
 
 buildSweepTxs ::
-  (MonadUnliftIO m) =>
-  Network ->
-  Ctx ->
-  DBAccountId ->
-  [Store.Unspent] ->
-  Natural ->
-  Natural ->
-  StateT
-    StdGen
-    (ExceptT String (DB m))
-    ([(Tx, [Store.Unspent], [SoftPath])], Natural)
+     (MonadUnliftIO m)
+  => Network
+  -> Ctx
+  -> DBAccountId
+  -> [Store.Unspent]
+  -> Natural
+  -> Natural
+  -> StateT StdGen (ExceptT String (DB m)) [(Tx, [Store.Unspent], [SoftPath])]
 buildSweepTxs net ctx accId allCoins feeByte dust = do
   liftEither <=< retryEither 10 $ do
     shuffledCoins <- randomShuffle allCoins
     runExceptT $ go shuffledCoins [] 0
   where
-    go [] acc offset' = return (acc, fromIntegral offset')
+    go [] acc _ = return acc
     go coins acc offset' = do
       nIns <- randomRange 1 5
       let (pickedCoins, restCoins) = splitAt nIns coins
