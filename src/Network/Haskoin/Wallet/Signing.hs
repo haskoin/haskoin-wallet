@@ -104,7 +104,7 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       -- Get all spendable coins in the account
       allCoins <- getSpendableCoins accId
       -- Get a change address
-      (change, changeDeriv) <- peekInternalAddress ctx accId 0
+      (change, changeDeriv) <- getFreeInternalAddress net ctx accId 0
       -- Build a transaction and pick the coins
       gen <- liftIO newStdGen
       (tx, pickedCoins) <-
@@ -276,10 +276,9 @@ buildSweepSignData net ctx accId addrs feeByte dust
         throwError "There are no coins to sweep in those addresses"
       -- Build a set of sweep transactions
       gen <- liftIO initStdGen
-      txs <-
-        evalStateT (buildSweepTxs net ctx accId coins feeByte dust) gen
+      txs <- evalStateT (buildSweepTxs net ctx accId coins feeByte dust) gen
       -- For each sweep transaction
-      res <- forM txs $ \(tx, pickedCoins, outDerivs) -> do
+      forM txs $ \(tx, pickedCoins, outDerivs) -> do
         -- Get the dependent transactions
         let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
         Store.RawResultList depTxs <-
@@ -290,7 +289,6 @@ buildSweepSignData net ctx accId addrs feeByte dust
         let inDerivs = rights resE
         return $
           TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
-      return res
 
 buildSweepTxs ::
      (MonadUnliftIO m)
@@ -306,8 +304,8 @@ buildSweepTxs net ctx accId allCoins feeByte dust = do
     shuffledCoins <- randomShuffle allCoins
     runExceptT $ go shuffledCoins [] 0
   where
-    go [] acc _ = return acc
-    go coins acc offset' = do
+    go [] accum _ = return accum
+    go coins accum offset' = do
       nIns <- randomRange 1 5
       let (pickedCoins, restCoins) = splitAt nIns coins
           coinsTot = toInteger $ sum $ (.value) <$> pickedCoins
@@ -320,15 +318,16 @@ buildSweepTxs net ctx accId allCoins feeByte dust = do
       let amnt2 = amntTot - amnt1
       when (amnt1 < amntMin || amnt2 < amntMin) $
         throwError "Could not find a sweep solution"
-      (addr1, deriv1) <- lift . lift $ peekInternalAddress ctx accId offset'
+      (addr1, deriv1) <-
+        lift . lift $ getFreeInternalAddress net ctx accId offset'
       (addr2, deriv2) <-
-        lift . lift $ peekInternalAddress ctx accId (offset' + 1)
+        lift . lift $ getFreeInternalAddress net ctx accId (offset' + 1)
       rcpts <-
         randomShuffle [(addr1, fromIntegral amnt1), (addr2, fromIntegral amnt2)]
       rcptsTxt <- liftEither $ mapM (addrToText2 net) rcpts
       tx <-
         liftEither $ buildAddrTx net ctx ((.outpoint) <$> pickedCoins) rcptsTxt
-      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : acc) (offset' + 2)
+      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : accum) (offset' + 2)
 
 -- Utilities --
 

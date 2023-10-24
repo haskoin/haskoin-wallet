@@ -1005,8 +1005,7 @@ cmdDiscoverAccount ctx nameM =
     checkHealth ctx net
     e <- go net pub extDeriv 0 (Page recoveryGap 0)
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
-    _ <- discoverAccSetDeriv net ctx accId extDeriv e
-    newAcc <- discoverAccSetDeriv net ctx accId intDeriv i
+    newAcc <- discoverAccSetDeriv net ctx accId e i
     return $ ResponseDiscoverAcc newAcc
   where
     go net pub path d page@(Page lim off) = do
@@ -1056,7 +1055,8 @@ prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
     txInfosU <- liftEither $ mapM f tsds
     sweepDir <- initSweepDir tsds dir
     files <- writeSweepFiles tsds sweepDir
-    return $ ResponsePrepareSweep acc (cs <$> files) txInfosU
+    newAcc <- getAccountId accId
+    return $ ResponsePrepareSweep newAcc (cs <$> files) txInfosU
 
 signSweep :: Ctx -> Maybe Text -> FilePath -> FilePath -> IO Response
 signSweep ctx nameM sweepDir keyFile =
