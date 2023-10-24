@@ -594,14 +594,19 @@ discoverAccSetDeriv net ctx accId extCnt intCnt = do
   let pub = accountXPubKey ctx acc
       accExt = dBAccountExternal acc
       accInt = dBAccountInternal acc
-  when (accInt < fromIntegral intCnt) $ go pub DBAccountInternal intDeriv intCnt
-  when (accExt < fromIntegral extCnt) $ go pub DBAccountExternal extDeriv extCnt
+  go pub intDeriv intCnt
+  go pub extDeriv extCnt
+  when (accInt < fromIntegral intCnt) $
+    lift $ P.update accId [DBAccountInternal P.=. fromIntegral intCnt]
+  when (accExt < fromIntegral extCnt) $
+    lift $ P.update accId [DBAccountExternal P.=. fromIntegral extCnt]
   getAccountId accId
   where
-    go pub label deriv cnt = do
+    go pub deriv cnt = do
       let as = take (fromIntegral cnt) $ derivePathAddrs ctx pub deriv 0
       forM_ as $ \(a, _, i) -> insertAddress net accId (deriv :/ i) a "" False
-      lift $ P.update accId [label P.=. fromIntegral cnt]
+      at <- mapM (liftMaybe "addr" . addrToText net . fst3) as
+      void $ lift $ setFreeAddrs False at
 
 receiveAddress ::
   (MonadUnliftIO m) =>
@@ -653,6 +658,7 @@ getFreeInternalAddress net ctx accId@(DBAccountKey wallet accDeriv) offset' = do
         &&. a ^. DBAddressAccountDerivation ==. val accDeriv
         &&. a ^. DBAddressInternal ==. val True
         &&. a ^. DBAddressFree ==. val True
+        &&. a ^. DBAddressBalanceTxs ==. val 0
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
     offset $ fromIntegral offset'
