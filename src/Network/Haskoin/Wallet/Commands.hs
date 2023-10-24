@@ -175,6 +175,10 @@ data Response
   | ResponseExportTx
       { responseTxFile :: !FilePath
       }
+  | ResponseImportTx
+      { responseAccount :: !DBAccount,
+        responsePendingTx :: !NoSigTxInfo
+      }
   | ResponseDeleteTx
       { responseFreedCoins :: !Natural,
         responseFreedAddrs :: !Natural
@@ -319,6 +323,13 @@ instance MarshalJSON Ctx Response where
           [ "type" .= Json.String "exporttx",
             "txfile" .= f
           ]
+      ResponseImportTx a tx -> do
+        let net = accountNetwork a
+        object
+          [ "type" .= Json.String "importtx",
+            "account" .= a,
+            "pendingtx" .= marshalValue (net, ctx) tx
+          ]
       ResponseDeleteTx c a ->
         object
           [ "type" .= Json.String "deletetx",
@@ -450,6 +461,11 @@ instance MarshalJSON Ctx Response where
         "exporttx" ->
           ResponseExportTx
             <$> o .: "txfile"
+        "importtx" -> do
+          a <- o .: "account"
+          let net = accountNetwork a
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
+          return $ ResponseImportTx a t
         "deletetx" ->
           ResponseDeleteTx
             <$> o .: "freedcoins"
@@ -543,10 +559,11 @@ commandResponse ctx =
     CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
     CommandCoins nameM p -> cmdCoins nameM p
     -- Import/export commands
-    CommandImportAcc f -> cmdImportAcc ctx f
     CommandExportAcc nameM f -> cmdExportAcc ctx nameM f
+    CommandImportAcc f -> cmdImportAcc ctx f
     CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
     CommandExportTx h f -> cmdExportTx h f
+    CommandImportTx nameM file -> cmdImportTx ctx nameM file
     -- Online commands
     CommandSendTx nameM h -> cmdSendTx ctx nameM h
     CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
@@ -748,6 +765,22 @@ cmdExportTx nosigH fp =
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseExportTx fp
       _ -> throwError "The pending transaction does not exist"
+
+cmdImportTx :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdImportTx ctx nameM fp =
+  runDB $ do
+    (accId, acc) <- getAccount nameM
+    let net = accountNetwork acc
+        pub = accountXPubKey ctx acc
+    tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
+    txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+    let txInfo = unsignedToTxInfo tx txInfoU
+    nosigHash <- importPendingTx net ctx accId tsd
+    return $
+      ResponseReviewTx acc $
+        if signed
+          then NoSigSigned nosigHash txInfo
+          else NoSigUnsigned nosigHash txInfoU
 
 cmdSignTx ::
   Ctx ->

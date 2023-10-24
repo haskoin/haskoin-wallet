@@ -96,6 +96,10 @@ data Command
       { commandMaybeAcc :: !(Maybe Text),
         commandFilePath :: !FilePath
       }
+  | CommandImportTx
+      { commandMaybeAcc :: !(Maybe Text),
+        commandFilePath :: !FilePath
+      }
   | CommandExportTx
       { commandNoSigHash :: !TxHash,
         commandFilePath :: !FilePath
@@ -199,10 +203,11 @@ commandParser =
       hsubparser $
         mconcat
           [ commandGroup "Import/export commands",
-            command "importacc" importAccParser,
             command "exportacc" exportAccParser,
+            command "importacc" importAccParser,
             command "reviewtx" reviewTxParser,
             command "exporttx" exportTxParser,
+            command "importtx" importTxParser,
             hidden
           ],
       hsubparser $
@@ -395,10 +400,10 @@ importAccParser = do
           <$> fileArgument "Path to the account file"
   info cmd $
     progDesc "Import an account file"
-      <> footer importExportFooter
+      <> footer importExportAccFooter
 
-importExportFooter :: String
-importExportFooter =
+importExportAccFooter :: String
+importExportAccFooter =
   [r|
 When working in an online/offline environment, you can `importacc` a public key
 file (on an online computer) that was exported with `exportacc` (on an offline
@@ -419,7 +424,7 @@ exportAccParser = do
           <*> fileArgument "File where the account data will be saved"
   info cmd $
     progDesc "Export account data to a file"
-      <> footer importExportFooter
+      <> footer importExportAccFooter
 
 {- RenameAcc Parser -}
 
@@ -701,8 +706,10 @@ exportTxParser = do
           <*> fileArgument "File where the transaction data will be saved"
   info cmd $
     progDesc "Export pending transaction data to a file"
-      <> footer
-        [r|
+      <> footer importExportTxFooter
+
+importExportTxFooter :: String
+importExportTxFooter = [r|
 A transaction that has been prepared with `preparetx` can be exported to a file
 so that it can be signed on an offline computer. The transaction is identified
 by its nosigHash (a hash of the transaction without its signatures) as this
@@ -716,6 +723,18 @@ nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
     metavar "TXHASH"
       <> help "The hash (nosigHash) of the transaction"
+
+{- ImportTx Parser -}
+
+importTxParser :: ParserInfo Command
+importTxParser = do
+  let cmd =
+        CommandImportTx
+          <$> accountOption
+          <*> fileArgument "Path to the transaction file to import"
+  info cmd $
+    progDesc "Import a pending transaction"
+      <> footer importExportTxFooter
 
 {- DeleteTx Parser -}
 
