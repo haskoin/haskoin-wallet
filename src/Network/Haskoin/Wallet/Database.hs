@@ -21,12 +21,13 @@
 module Network.Haskoin.Wallet.Database where
 
 import Conduit (MonadUnliftIO, ResourceT)
-import Control.Arrow ((&&&))
+import Control.Arrow (Arrow (second), (&&&))
 import Control.Exception (try)
 import Control.Monad
   ( MonadPlus (mzero),
     forM,
     forM_,
+    guard,
     unless,
     void,
     when,
@@ -52,10 +53,10 @@ import Data.Char (GeneralCategory (OtherNumber))
 import Data.Either (fromRight, lefts, rights)
 import Data.Foldable (for_)
 import Data.Int (Int64)
-import Data.List (find)
+import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, mapMaybe, isNothing)
+import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, isNothing, mapMaybe)
 import Data.Serialize (decode, encode)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -537,6 +538,8 @@ updateAddressBalances net storeBals =
           DBAddressBalanceReceived =. val s.received
         ]
       where_ $ a ^. DBAddressAddress ==. val addrT
+    -- An address is not free if it receives a balance
+    when (s.txs > 0) $ void $ lift $ setFreeAddrs False [addrT]
 
 insertAddress ::
   (MonadUnliftIO m) =>
@@ -597,9 +600,11 @@ discoverAccSetDeriv net ctx accId extCnt intCnt = do
   go pub intDeriv intCnt
   go pub extDeriv extCnt
   when (accInt < fromIntegral intCnt) $
-    lift $ P.update accId [DBAccountInternal P.=. fromIntegral intCnt]
+    lift $
+      P.update accId [DBAccountInternal P.=. fromIntegral intCnt]
   when (accExt < fromIntegral extCnt) $
-    lift $ P.update accId [DBAccountExternal P.=. fromIntegral extCnt]
+    lift $
+      P.update accId [DBAccountExternal P.=. fromIntegral extCnt]
   getAccountId accId
   where
     go pub deriv cnt = do
@@ -607,6 +612,12 @@ discoverAccSetDeriv net ctx accId extCnt intCnt = do
       forM_ as $ \(a, _, i) -> insertAddress net accId (deriv :/ i) a "" False
       at <- mapM (liftMaybe "addr" . addrToText net . fst3) as
       void $ lift $ setFreeAddrs False at
+
+setFreeAddrs :: (MonadUnliftIO m) => Bool -> [Text] -> DB m Natural
+setFreeAddrs free addrs = do
+  (fromIntegral <$>) . updateCount $ \a -> do
+    set a [DBAddressFree =. val free]
+    where_ $ a ^. DBAddressAddress `in_` valList addrs
 
 receiveAddress ::
   (MonadUnliftIO m) =>
@@ -638,7 +649,7 @@ genInternalAddress net ctx accId = do
   acc <- getAccountId accId
   let accInt = fromIntegral $ dBAccountInternal acc
       pub = accountXPubKey ctx acc
-      (addr,_) = derivePathAddr ctx pub intDeriv accInt
+      (addr, _) = derivePathAddr ctx pub intDeriv accInt
   _ <- insertAddress net accId (intDeriv :/ accInt) addr "" True
   lift $ P.update accId [DBAccountInternal P.=. fromIntegral accInt + 1]
   return (addr, intDeriv :/ accInt)
@@ -651,6 +662,8 @@ getFreeInternalAddress ::
   Natural -> -- Offset
   ExceptT String (DB m) (Address, SoftPath)
 getFreeInternalAddress net ctx accId@(DBAccountKey wallet accDeriv) offset' = do
+  lastUsedM <- lift $ lastUsedAddress accId True
+  let validIdx = fromIntegral $ maybe 0 (+1) lastUsedM
   -- List the free addresses in ascending index order
   resM <- lift . selectOne . from $ \a -> do
     where_ $
@@ -658,7 +671,7 @@ getFreeInternalAddress net ctx accId@(DBAccountKey wallet accDeriv) offset' = do
         &&. a ^. DBAddressAccountDerivation ==. val accDeriv
         &&. a ^. DBAddressInternal ==. val True
         &&. a ^. DBAddressFree ==. val True
-        &&. a ^. DBAddressBalanceTxs ==. val 0
+        &&. a ^. DBAddressIndex >=. val validIdx
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
     offset $ fromIntegral offset'
@@ -672,6 +685,7 @@ getFreeInternalAddress net ctx accId@(DBAccountKey wallet accDeriv) offset' = do
       _ <- genInternalAddress net ctx accId
       getFreeInternalAddress net ctx accId offset'
 
+-- Highest address with a positive transaction count
 lastUsedAddress ::
   (MonadUnliftIO m) => DBAccountId -> Bool -> DB m (Maybe Natural)
 lastUsedAddress (DBAccountKey wallet accDeriv) internal = do
@@ -1101,6 +1115,7 @@ getRawTx hash = do
 
 {- Pending Transactions -}
 
+-- Returns (TxSignData, isOnline)
 getPendingTx :: (MonadUnliftIO m) => TxHash -> DB m (Maybe (TxSignData, Bool))
 getPendingTx nosigHash = do
   let hashT = txHashToHex nosigHash
@@ -1166,23 +1181,27 @@ importPendingTx ::
   DBAccountId ->
   TxSignData ->
   ExceptT String (DB m) TxHash
-importPendingTx net ctx accId tsd@(TxSignData _ _ _ _ signed) = do
+importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
   acc <- getAccountId accId
-  let nosigHash = nosigTxHash $ txSignDataTx tsd
+  let pub = accountXPubKey ctx acc
+      nosigHash = nosigTxHash $ txSignDataTx tsd
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx nosigHash
   case prevM of
-    Just (TxSignData _ _ _ _ prevSigned, online) -> do
+    Just (TxSignData prevTx _ _ _ prevSigned, online) -> do
       when online $
         throwError "The transaction is already online"
       when (prevSigned && not signed) $
         throwError "Can not replace a signed transaction with an unsigned one"
+      when (prevTx == tx) $
+        throwError "The transaction already exists"
       when (not prevSigned && signed) $ do
         let key = DBPendingTxKey $ txHashToHex nosigHash
         lift $ P.update key [DBPendingTxBlob P.=. bs]
       return nosigHash
     Nothing -> do
-      let (outpoints, addrsE) = findTxSignData ctx acc tsd
+      txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+      let (outpoints, outIntAddrs, restAddrs) = parseTxInfoU txInfoU
       -- Verify coins and lock them
       forM_ outpoints $ \outpoint -> do
         coinM <- lift $ P.get $ DBCoinKey $ outpointText outpoint
@@ -1192,29 +1211,28 @@ importPendingTx net ctx accId tsd@(TxSignData _ _ _ _ signed) = do
               throwError "A coin referenced by the transaction is locked"
             lift $ setLockCoin outpoint True
           _ -> throwError "A coin referenced by the transaction does not exist"
-      -- Verify addresses
-      let intAddrs = lefts addrsE
-          extAddrs = rights addrsE
-      intAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) intAddrs
-      extAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) extAddrs
-      intAddrsEnt <- lift . select . from $ \a -> do
-        where_ $ a ^. DBAddressAddress `in_` valList intAddrsT
+      -- Outputs: verify addresses
+      outIntAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) outIntAddrs
+      restAddrsT <- mapM (liftMaybe "Addrs" . addrToText net) restAddrs
+      outIntAddrsE <- lift . select . from $ \a -> do
+        where_ $ a ^. DBAddressAddress `in_` valList outIntAddrsT
         return a
-      extAddrsEnt <- lift . select . from $ \a -> do
-        where_ $ a ^. DBAddressAddress `in_` valList extAddrsT
+      restAddrsE <- lift . select . from $ \a -> do
+        where_ $ a ^. DBAddressAddress `in_` valList restAddrsT
         return a
-      when (length intAddrsT /= length intAddrsEnt) $
-        throwError "Some of the internal addresses do not exist"
-      when (length extAddrsT /= length extAddrsEnt) $
-        throwError "Some of the external addresses do not exist"
-      unless (all (dBAddressFree . entityVal) intAddrsEnt) $
-        throwError "Some of the internal addresses are not free"
+      when
+        ( length (outIntAddrsT <> restAddrsT)
+            /= length (outIntAddrsE <> restAddrsE)
+        )
+        $ throwError "Some referenced addresses do not exist"
+      unless (all (dBAddressFree . entityVal) outIntAddrsE) $
+        throwError "Some of the internal output addresses are not free"
       -- Remove the free status of internal addresses
-      _ <- lift $ setFreeAddrs False intAddrsT
+      _ <- lift $ setFreeAddrs False outIntAddrsT
       -- Check the internal address gap
       let maxM
-            | null intAddrs = Nothing
-            | otherwise = Just $ maximum $ snd <$> intAddrs
+            | null outIntAddrs = Nothing
+            | otherwise = Just $ maximum $ snd <$> outIntAddrs
       for_ maxM $ \maxIdx -> checkGap accId (fromIntegral maxIdx) True
       -- Insert the pending transaction
       time <- liftIO getCurrentTime
@@ -1229,20 +1247,20 @@ importPendingTx net ctx accId tsd@(TxSignData _ _ _ _ signed) = do
       lift $ P.insert_ ptx
       return nosigHash
 
-findTxSignData ::
-  Ctx ->
-  DBAccount ->
-  TxSignData ->
-  ([OutPoint], [Either (Address, Word32) (Address, Word32)])
-findTxSignData ctx acc (TxSignData tx _ _ op _) =
-  let xpub = accountXPubKey ctx acc
-      outpoints = (.outpoint) <$> tx.inputs
-      f p =
-        case pathToList p of
-          [0, i] -> Right (fst $ derivePathAddr ctx xpub extDeriv i, i)
-          [1, i] -> Left (fst $ derivePathAddr ctx xpub intDeriv i, i)
-          _ -> error "Invalid path"
-   in (outpoints, f <$> op)
+-- (Outpoints, external addrs, internal addrs)
+parseTxInfoU :: UnsignedTxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
+parseTxInfoU (UnsignedTxInfo _ _ myOps _ myIps _ _ _ _) =
+  (outpoints, nub $ f <$> outIntAddrs, nub $ fst <$> restAddrs)
+  where
+    outpoints = (.outpoint) <$> concatMap myInputsSigInput (Map.elems myIps)
+    outAddrs = second myOutputsPath <$> Map.assocs myOps
+    inAddrs = second myInputsPath <$> Map.assocs myIps
+    (outIntAddrs, outExtAddrs) = partition (isIntPath . snd) outAddrs
+    restAddrs = outExtAddrs <> inAddrs
+    f (a,p) =
+      case pathToList p of
+        (_:i:_) -> (a,i)
+        _ -> error "parseTxInfoU"
 
 -- Delete a pending transaction, unlocks coins and frees internal addresses
 deletePendingTx ::
@@ -1259,15 +1277,20 @@ deletePendingTx net ctx accId nosigHash = do
     Just (_, True) -> do
       lift $ P.delete key -- The transaction is online. Just delete it.
       return (0, 0)
-    Just (tsd, _) -> do
+    -- We only free coins and addresses if the transaction is offline
+    Just (tsd, False) -> do
       acc <- getAccountId accId
-      let (outpoints, addrsE) = findTxSignData ctx acc tsd
-      intAddrsT <-
-        mapM (liftMaybe "Address" . addrToText net) $
-          fst <$> lefts addrsE
-      -- We only free coins and addresses if the transaction is offline
+      let pub = accountXPubKey ctx acc
+      txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
+      let (outpoints, outIntAddrs, _) = parseTxInfoU txInfoU
+      -- Only free addresses greater than the last used address
+      lastUsedM <- lift $ lastUsedAddress accId True
+      let validIdx = fromIntegral $ maybe 0 (+1) lastUsedM
+          outIntAddrs' = filter ((>= validIdx) . snd) outIntAddrs
+      outIntAddrsT <-
+        mapM (liftMaybe "Address" . addrToText net . fst) outIntAddrs'
       freedCoins <- forM outpoints $ \op -> lift $ setLockCoin op False
-      freedAddresses <- lift $ setFreeAddrs True intAddrsT
+      freedAddresses <- lift $ setFreeAddrs True outIntAddrsT
       lift $ P.delete key
       return (sum freedCoins, fromIntegral freedAddresses)
     _ -> throwError "The pending transaction does not exist"
@@ -1275,12 +1298,6 @@ deletePendingTx net ctx accId nosigHash = do
 -- When the pending transaction is online, we just delete it
 pendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
 pendingTxOnline = P.delete
-
-setFreeAddrs :: (MonadUnliftIO m) => Bool -> [Text] -> DB m Natural
-setFreeAddrs free addrs = do
-  (fromIntegral <$>) . updateCount $ \a -> do
-    set a [DBAddressFree =. val free]
-    where_ $ a ^. DBAddressAddress `in_` valList addrs
 
 setPendingTxOnline :: (MonadUnliftIO m) => TxHash -> DB m Natural
 setPendingTxOnline nosigH = do
@@ -1297,6 +1314,18 @@ extDeriv = Deriv :/ 0
 
 intDeriv :: SoftPath
 intDeriv = Deriv :/ 1
+
+isExtPath :: SoftPath -> Bool
+isExtPath p =
+  case pathToList p of
+    [0, _] -> True
+    _ -> False
+
+isIntPath :: SoftPath -> Bool
+isIntPath p =
+  case pathToList p of
+    [1, _] -> True
+    _ -> False
 
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a

@@ -760,7 +760,7 @@ cmdExportTx nosigH fp =
   runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
-      Just tsd -> do
+      Just (tsd,_) -> do
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseExportTx fp

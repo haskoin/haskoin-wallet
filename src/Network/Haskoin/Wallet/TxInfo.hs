@@ -476,7 +476,8 @@ txSignDataCoins (TxSignData tx depTxs _ _ _) =
   maybeToEither "Referenced input transactions are missing" $ mapM f ops
   where
     ops = (.outpoint) <$> tx.inputs :: [OutPoint]
-    txMap = Map.fromList $ (txHash &&& (.outputs)) <$> depTxs :: Map TxHash [TxOut]
+    txMap =
+      Map.fromList $ (txHash &&& (.outputs)) <$> depTxs :: Map TxHash [TxOut]
     f :: OutPoint -> Maybe (OutPoint, TxOut)
     f op@(OutPoint h i) =
       (op,) <$> ((!!? fromIntegral i) =<< Map.lookup h txMap)
