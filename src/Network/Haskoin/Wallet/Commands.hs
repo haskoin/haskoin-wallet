@@ -204,7 +204,11 @@ data Response
         responseCoinCount :: !Natural
       }
   | ResponseDiscoverAcc
-      { responseAccount :: !DBAccount
+      { responseAccount :: !DBAccount,
+        responseBestBlock :: !BlockHash,
+        responseBestHeight :: !Natural,
+        responseTxCount :: !Natural,
+        responseCoinCount :: !Natural
       }
   | ResponseVersion
       {responseVersion :: !Text}
@@ -367,10 +371,14 @@ instance MarshalJSON Ctx Response where
             "txupdates" .= tc,
             "coinupdates" .= cc
           ]
-      ResponseDiscoverAcc a ->
+      ResponseDiscoverAcc as bb bh tc cc ->
         object
           [ "type" .= Json.String "discoveracc",
-            "account" .= a
+            "account" .= as,
+            "bestblock" .= bb,
+            "bestheight" .= bh,
+            "txupdates" .= tc,
+            "coinupdates" .= cc
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
@@ -496,6 +504,10 @@ instance MarshalJSON Ctx Response where
         "discoveracc" ->
           ResponseDiscoverAcc
             <$> o .: "account"
+            <*> o .: "bestblock"
+            <*> o .: "bestheight"
+            <*> o .: "txupdates"
+            <*> o .: "coinupdates"
         "version" ->
           ResponseVersion
             <$> o .: "version"
@@ -570,9 +582,9 @@ commandResponse ctx =
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
     -- Utilities
     CommandVersion -> cmdVersion
-    CommandPrepareSweep as fileM nameM fee dust dir ->
-      prepareSweep ctx as fileM nameM fee dust dir
-    CommandSignSweep nameM dir keyFile -> signSweep ctx nameM dir keyFile
+    -- CommandPrepareSweep as fileM nameM fee dust dir ->
+    --   prepareSweep ctx as fileM nameM fee dust dir
+    -- CommandSignSweep nameM dir keyFile -> signSweep ctx nameM dir keyFile
     CommandRollDice n -> rollDice n
 
 -- runDB Monad Stack:
@@ -671,7 +683,8 @@ cmdAccounts nameM =
 cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx nameM labelM =
   runDB $ do
-    (acc, addr) <- receiveAddress ctx nameM $ fromMaybe "" labelM
+    (accId, acc) <- getAccount nameM
+    addr <- genExtAddress ctx accId $ fromMaybe "" labelM
     return $ ResponseReceive acc addr
 
 cmdAddrs :: Maybe Text -> Page -> IO Response
@@ -684,7 +697,8 @@ cmdAddrs nameM page =
 cmdLabel :: Maybe Text -> Natural -> Text -> IO Response
 cmdLabel nameM idx lab =
   runDB $ do
-    (acc, adr) <- updateLabel nameM (fromIntegral idx) lab
+    (accId, acc) <- getAccount nameM
+    adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseLabel acc adr
 
 cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
@@ -714,7 +728,7 @@ cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
     for_ fileM checkPathFree
     nosigHash <- importPendingTx net ctx accId signDat
     for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
-    newAcc <- getAccountId accId
+    newAcc <- getAccountById accId
     return $ ResponsePrepareTx newAcc $ NoSigUnsigned nosigHash txInfoU
   where
     toRecipient net (a, v) = do
@@ -921,7 +935,7 @@ cmdSyncAcc ctx nameM full = do
     -- Remove pending transactions if they are online
     pendingTids <- pendingTxHashes accId
     let toRemove = filter ((`elem` tids) . fst) pendingTids
-    forM_ toRemove $ \(_, key) -> lift $ pendingTxOnline key
+    forM_ toRemove $ \(_, key) -> lift $ deletePendingTxOnline key
     -- Update the best block for this network
     lift $ updateBest net (headerHash best.header) best.height
     return $
@@ -997,16 +1011,20 @@ searchAddrTxs net ctx confirmedTxs as
           return $ tids <> rest
 
 cmdDiscoverAccount :: Ctx -> Maybe Text -> IO Response
-cmdDiscoverAccount ctx nameM =
-  runDB $ do
+cmdDiscoverAccount ctx nameM = do
+  _ <- runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     checkHealth ctx net
     e <- go net pub extDeriv 0 (Page recoveryGap 0)
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
-    newAcc <- discoverAccSetDeriv net ctx accId e i
-    return $ ResponseDiscoverAcc newAcc
+    discoverAccGenAddrs ctx accId AddrExternal e
+    discoverAccGenAddrs ctx accId AddrInternal i
+    return $ ResponseDiscoverAcc acc "" 0 0 0
+  -- Perform a full sync after discovery
+  ResponseSyncAcc a bb bh tc cc <- cmdSyncAcc ctx nameM True
+  return $ ResponseDiscoverAcc a bb bh tc cc
   where
     go net pub path d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx path page pub
@@ -1019,7 +1037,7 @@ cmdDiscoverAccount ctx nameM =
           let dMax = findMax addrs $ (.address) <$> vBals
           go net pub path (dMax + 1) (Page lim (off + lim))
     -- Find the largest ID amongst the addresses that have a positive balance
-    findMax :: [(Address, SoftPath)] -> [Address] -> Natural
+    findMax :: [(Address, SoftPath)] -> [Address] -> Int
     findMax addrs balAddrs =
       let fAddrs = filter ((`elem` balAddrs) . fst) addrs
        in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
@@ -1027,6 +1045,7 @@ cmdDiscoverAccount ctx nameM =
 cmdVersion :: IO Response
 cmdVersion = return $ ResponseVersion versionString
 
+{-
 prepareSweep ::
   Ctx ->
   [Text] ->
@@ -1084,6 +1103,7 @@ signSweep ctx nameM sweepDir keyFile =
     -- Write the signed transactions to JSON files
     signedFiles <- writeSweepFiles (fst <$> signRes) sweepDir
     return $ ResponseSignSweep acc (cs <$> signedFiles) (snd <$> signRes)
+-}
 
 rollDice :: Natural -> IO Response
 rollDice n = do

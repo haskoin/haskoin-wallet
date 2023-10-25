@@ -28,6 +28,8 @@ import Control.Monad
     forM,
     forM_,
     guard,
+    replicateM,
+    replicateM_,
     unless,
     void,
     when,
@@ -379,9 +381,9 @@ getAccount Nothing = do
     [] -> throwError "There are no accounts in the wallet"
     _ -> throwError "Specify which account to use"
 
-getAccountId ::
+getAccountById ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
-getAccountId accId = liftMaybe "Invalid account" =<< lift (P.get accId)
+getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)
 
 getAccountVal ::
   (MonadUnliftIO m) => Maybe Text -> ExceptT String (DB m) DBAccount
@@ -443,6 +445,32 @@ updateAccountBalances accId@(DBAccountKey wallet accDeriv) = do
         return $ sum_ $ a ^. field
 
 {- Addresses -}
+
+data AddrType = AddrInternal | AddrExternal
+  deriving (Eq, Show)
+
+isInternal :: AddrType -> Bool
+isInternal AddrInternal = True
+isInternal AddrExternal = False
+
+dBAccountCount :: AddrType -> DBAccount -> Int
+dBAccountCount AddrInternal = dBAccountInternal
+dBAccountCount AddrExternal = dBAccountExternal
+
+dBAccountField :: AddrType -> EntityField DBAccount Int
+dBAccountField AddrInternal = DBAccountInternal
+dBAccountField AddrExternal = DBAccountExternal
+
+addrDeriv :: AddrType -> SoftPath
+addrDeriv AddrInternal = intDeriv
+addrDeriv AddrExternal = extDeriv
+
+data AddrFree = AddrFree | AddrBusy
+  deriving (Eq, Show)
+
+isAddrFree :: AddrFree -> Bool
+isAddrFree AddrFree = True
+isAddrFree AddrBusy = False
 
 instance ToJSON DBAddress where
   toJSON addr =
@@ -538,8 +566,6 @@ updateAddressBalances net storeBals =
           DBAddressBalanceReceived =. val s.received
         ]
       where_ $ a ^. DBAddressAddress ==. val addrT
-    -- An address is not free if it receives a balance
-    when (s.txs > 0) $ void $ lift $ setFreeAddrs False [addrT]
 
 insertAddress ::
   (MonadUnliftIO m) =>
@@ -547,169 +573,144 @@ insertAddress ::
   DBAccountId ->
   SoftPath ->
   Address ->
-  Text ->
-  Bool ->
+  AddrFree ->
   ExceptT String (DB m) DBAddress
-insertAddress net (DBAccountKey wallet accDeriv) deriv addr label free = do
+insertAddress net (DBAccountKey wallet accDeriv) deriv addr free = do
   time <- liftIO getCurrentTime
   addrT <- liftEither $ maybeToEither "Invalid Address" (addrToText net addr)
-  (isInternal, idx) <- parseDeriv
-  let label' = if isInternal then "Internal Address" else label
+  let label = if isIntPath deriv then "Internal Address" else ""
       derivS = cs $ pathToStr deriv
       dbAddr =
         DBAddress
-          (fromIntegral idx)
+          (fromIntegral $ pathIndex deriv)
           wallet
           accDeriv
           derivS
           addrT
-          label'
+          label
           0
           0
           0
           0
           0
-          isInternal
-          free
+          (isIntPath deriv)
+          (isAddrFree free)
           time
-  let key = DBAddressKey wallet accDeriv derivS
-  prevM <- lift $ P.get key
-  when (isNothing prevM) $ lift $ P.insert_ dbAddr
+  lift $ P.insert_ dbAddr
   return dbAddr
-  where
-    parseDeriv =
-      case pathToList deriv of
-        [0, x] -> return (False, x) -- Not an internal address
-        [1, x] -> return (True, x) -- Internal address
-        _ -> throwError "Invalid address SoftPath"
 
--- Generate the discovered external and internal addresses
-discoverAccSetDeriv ::
+genNextAddress ::
   (MonadUnliftIO m) =>
-  Network ->
   Ctx ->
   DBAccountId ->
-  Natural ->
-  Natural ->
-  ExceptT String (DB m) DBAccount
-discoverAccSetDeriv net ctx accId extCnt intCnt = do
-  acc <- getAccountId accId
-  let pub = accountXPubKey ctx acc
-      accExt = dBAccountExternal acc
-      accInt = dBAccountInternal acc
-  go pub intDeriv intCnt
-  go pub extDeriv extCnt
-  when (accInt < fromIntegral intCnt) $
-    lift $
-      P.update accId [DBAccountInternal P.=. fromIntegral intCnt]
-  when (accExt < fromIntegral extCnt) $
-    lift $
-      P.update accId [DBAccountExternal P.=. fromIntegral extCnt]
-  getAccountId accId
-  where
-    go pub deriv cnt = do
-      let as = take (fromIntegral cnt) $ derivePathAddrs ctx pub deriv 0
-      forM_ as $ \(a, _, i) -> insertAddress net accId (deriv :/ i) a "" False
-      at <- mapM (liftMaybe "addr" . addrToText net . fst3) as
-      void $ lift $ setFreeAddrs False at
-
-setFreeAddrs :: (MonadUnliftIO m) => Bool -> [Text] -> DB m Natural
-setFreeAddrs free addrs = do
-  (fromIntegral <$>) . updateCount $ \a -> do
-    set a [DBAddressFree =. val free]
-    where_ $ a ^. DBAddressAddress `in_` valList addrs
-
-receiveAddress ::
-  (MonadUnliftIO m) =>
-  Ctx ->
-  Maybe Text ->
-  Text ->
-  ExceptT String (DB m) (DBAccount, DBAddress)
-receiveAddress ctx nameM label = do
-  (accId, acc) <- getAccount nameM
+  AddrType ->
+  AddrFree ->
+  ExceptT String (DB m) ((DBAccount, DBAddress), (Address, SoftPath))
+genNextAddress ctx accId addrType addrFree = do
+  acc <- getAccountById accId
   let net = accountNetwork acc
       pub = accountXPubKey ctx acc
-      accExt = dBAccountExternal acc
-  -- Verify that we respect the gap
-  checkGap accId (fromIntegral accExt) False
-  -- Create the address and update the account index
-  let (addr, _) = derivePathAddr ctx pub extDeriv (fromIntegral accExt)
+      nextIdx = dBAccountCount addrType acc
+      deriv = addrDeriv addrType
+  checkGap accId nextIdx addrType
+  let (addr, _) = derivePathAddr ctx pub deriv (fromIntegral nextIdx)
   dbAddr <-
-    insertAddress net accId (extDeriv :/ fromIntegral accExt) addr label False
-  newAcc <- lift $ P.updateGet accId [DBAccountExternal P.=. accExt + 1]
-  return (newAcc, dbAddr)
+    insertAddress net accId (deriv :/ fromIntegral nextIdx) addr addrFree
+  newAcc <- lift $ P.updateGet accId [dBAccountField addrType P.=. nextIdx + 1]
+  return ((newAcc, dbAddr), (addr, deriv :/ fromIntegral nextIdx))
 
-genInternalAddress ::
+checkGap ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Int ->
+  AddrType ->
+  ExceptT String (DB m) ()
+checkGap accId addrIdx addrType = do
+  usedIdxM <- lift $ bestAddrWithFunds accId addrType
+  for_ usedIdxM $ \usedIdx ->
+    when (addrIdx > usedIdx + gap) $
+      throwError $
+        "Can not generate addresses beyond the gap of " <> show gap
+
+-- Highest address with a positive transaction count
+bestAddrWithFunds ::
+  (MonadUnliftIO m) => DBAccountId -> AddrType -> DB m (Maybe Int)
+bestAddrWithFunds (DBAccountKey wallet accDeriv) addrType = do
+  resM <- (flatMaybe <$>) . selectOne . from $ \a -> do
+    where_ $
+      a ^. DBAddressAccountWallet ==. val wallet
+        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+        &&. a ^. DBAddressInternal ==. val (isInternal addrType)
+        &&. a ^. DBAddressBalanceTxs >. val 0
+    return $ max_ $ a ^. DBAddressIndex
+  return $ fromIntegral <$> resM
+
+-- Generate the discovered external and internal addresses
+discoverAccGenAddrs ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  DBAccountId ->
+  AddrType ->
+  Int ->
+  ExceptT String (DB m) ()
+discoverAccGenAddrs ctx accId addrType newAddrCnt = do
+  acc <- getAccountById accId
+  let oldAddrCnt = dBAccountCount addrType acc
+      cnt = max 0 $ newAddrCnt - oldAddrCnt
+  replicateM_ cnt $ genNextAddress ctx accId addrType AddrBusy
+
+genExtAddress ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  DBAccountId ->
+  Text ->
+  ExceptT String (DB m) DBAddress
+genExtAddress ctx accId label = do
+  ((_, addr),_) <- genNextAddress ctx accId AddrExternal AddrBusy
+  setAddrLabel accId (dBAddressIndex addr) label
+
+setAddrLabel ::
+  (MonadUnliftIO m) =>
+  DBAccountId ->
+  Int ->
+  Text ->
+  ExceptT String (DB m) DBAddress
+setAddrLabel accId@(DBAccountKey wallet accDeriv) idx label = do
+  acc <- getAccountById accId
+  let path = cs $ pathToStr $ extDeriv :/ fromIntegral idx
+      aKey = DBAddressKey wallet accDeriv path
+  unless (fromIntegral idx < dBAccountExternal acc) $
+    throwError $
+      "Address " <> show idx <> " does not exist"
+  lift $ P.updateGet aKey [DBAddressLabel P.=. label]
+
+nextFreeIntAddr ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   DBAccountId ->
   ExceptT String (DB m) (Address, SoftPath)
-genInternalAddress net ctx accId = do
-  acc <- getAccountId accId
-  let accInt = fromIntegral $ dBAccountInternal acc
-      pub = accountXPubKey ctx acc
-      (addr, _) = derivePathAddr ctx pub intDeriv accInt
-  _ <- insertAddress net accId (intDeriv :/ accInt) addr "" True
-  lift $ P.update accId [DBAccountInternal P.=. fromIntegral accInt + 1]
-  return (addr, intDeriv :/ accInt)
-
-getFreeInternalAddress ::
-  (MonadUnliftIO m) =>
-  Network ->
-  Ctx ->
-  DBAccountId ->
-  Natural -> -- Offset
-  ExceptT String (DB m) (Address, SoftPath)
-getFreeInternalAddress net ctx accId@(DBAccountKey wallet accDeriv) offset' = do
-  lastUsedM <- lift $ lastUsedAddress accId True
-  let validIdx = fromIntegral $ maybe 0 (+1) lastUsedM
-  -- List the free addresses in ascending index order
+nextFreeIntAddr net ctx accId@(DBAccountKey wallet accDeriv) = do
   resM <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAccountWallet ==. val wallet
         &&. a ^. DBAddressAccountDerivation ==. val accDeriv
         &&. a ^. DBAddressInternal ==. val True
         &&. a ^. DBAddressFree ==. val True
-        &&. a ^. DBAddressIndex >=. val validIdx
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
-    offset $ fromIntegral offset'
     return (a ^. DBAddressAddress, a ^. DBAddressIndex)
   case resM of
     Just (Value addrT, Value idx) -> do
       addr <- liftMaybe "Address" $ textToAddr net addrT
       return (addr, intDeriv :/ fromIntegral idx)
-    Nothing -> do
-      -- Generate an address and try again
-      _ <- genInternalAddress net ctx accId
-      getFreeInternalAddress net ctx accId offset'
+    Nothing -> snd <$> genNextAddress ctx accId AddrInternal AddrFree
 
--- Highest address with a positive transaction count
-lastUsedAddress ::
-  (MonadUnliftIO m) => DBAccountId -> Bool -> DB m (Maybe Natural)
-lastUsedAddress (DBAccountKey wallet accDeriv) internal = do
-  resM <- (flatMaybe <$>) . selectOne . from $ \a -> do
-    where_ $
-      a ^. DBAddressAccountWallet ==. val wallet
-        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
-        &&. a ^. DBAddressInternal ==. val internal
-        &&. a ^. DBAddressBalanceTxs >. val 0
-    return $ max_ $ a ^. DBAddressIndex
-  return $ fromIntegral <$> resM
-
-checkGap ::
-  (MonadUnliftIO m) =>
-  DBAccountId ->
-  Natural ->
-  Bool ->
-  ExceptT String (DB m) ()
-checkGap accId adrIdx internal = do
-  usedIdxM <- lift $ lastUsedAddress accId internal
-  for_ usedIdxM $ \usedIdx ->
-    when (fromIntegral adrIdx > usedIdx + gap) $
-      throwError $
-        "Can not generate addresses beyond the gap of " <> show gap
+setAddrsFree :: (MonadUnliftIO m) => AddrFree -> [Text] -> DB m Natural
+setAddrsFree free addrs = do
+  (fromIntegral <$>) . updateCount $ \a -> do
+    set a [DBAddressFree =. val (isAddrFree free)]
+    where_ $ a ^. DBAddressAddress `in_` valList addrs
 
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
 addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
@@ -755,22 +756,6 @@ allAddressesMap net (DBAccountKey wallet accDeriv) = do
               (dBAddressBalanceReceived dbAddr)
       return ((a, d), (a, b))
   return (Map.fromList $ fst <$> res, Map.fromList $ snd <$> res)
-
-updateLabel ::
-  (MonadUnliftIO m) =>
-  Maybe Text ->
-  Word32 ->
-  Text ->
-  ExceptT String (DB m) (DBAccount, DBAddress)
-updateLabel nameM idx label = do
-  (DBAccountKey wallet accDeriv, acc) <- getAccount nameM
-  let path = cs $ pathToStr $ extDeriv :/ idx
-      aKey = DBAddressKey wallet accDeriv path
-  unless (fromIntegral idx < dBAccountExternal acc) $
-    throwError $
-      "Address " <> show idx <> " does not exist"
-  adr <- lift $ P.updateGet aKey [DBAddressLabel P.=. label]
-  return (acc, adr)
 
 getCoinDeriv ::
   (MonadUnliftIO m) =>
@@ -1182,7 +1167,7 @@ importPendingTx ::
   TxSignData ->
   ExceptT String (DB m) TxHash
 importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
-  acc <- getAccountId accId
+  acc <- getAccountById accId
   let pub = accountXPubKey ctx acc
       nosigHash = nosigTxHash $ txSignDataTx tsd
       bs = BS.toStrict $ Json.encode tsd
@@ -1227,13 +1212,8 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
         $ throwError "Some referenced addresses do not exist"
       unless (all (dBAddressFree . entityVal) outIntAddrsE) $
         throwError "Some of the internal output addresses are not free"
-      -- Remove the free status of internal addresses
-      _ <- lift $ setFreeAddrs False outIntAddrsT
-      -- Check the internal address gap
-      let maxM
-            | null outIntAddrs = Nothing
-            | otherwise = Just $ maximum $ snd <$> outIntAddrs
-      for_ maxM $ \maxIdx -> checkGap accId (fromIntegral maxIdx) True
+      -- Set the output internal addresses to not free
+      _ <- lift $ setAddrsFree AddrBusy outIntAddrsT
       -- Insert the pending transaction
       time <- liftIO getCurrentTime
       let ptx =
@@ -1257,9 +1237,9 @@ parseTxInfoU (UnsignedTxInfo _ _ myOps _ myIps _ _ _ _) =
     inAddrs = second myInputsPath <$> Map.assocs myIps
     (outIntAddrs, outExtAddrs) = partition (isIntPath . snd) outAddrs
     restAddrs = outExtAddrs <> inAddrs
-    f (a,p) =
+    f (a, p) =
       case pathToList p of
-        (_:i:_) -> (a,i)
+        (_ : i : _) -> (a, i)
         _ -> error "parseTxInfoU"
 
 -- Delete a pending transaction, unlocks coins and frees internal addresses
@@ -1279,25 +1259,21 @@ deletePendingTx net ctx accId nosigHash = do
       return (0, 0)
     -- We only free coins and addresses if the transaction is offline
     Just (tsd, False) -> do
-      acc <- getAccountId accId
+      acc <- getAccountById accId
       let pub = accountXPubKey ctx acc
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
       let (outpoints, outIntAddrs, _) = parseTxInfoU txInfoU
-      -- Only free addresses greater than the last used address
-      lastUsedM <- lift $ lastUsedAddress accId True
-      let validIdx = fromIntegral $ maybe 0 (+1) lastUsedM
-          outIntAddrs' = filter ((>= validIdx) . snd) outIntAddrs
       outIntAddrsT <-
-        mapM (liftMaybe "Address" . addrToText net . fst) outIntAddrs'
+        mapM (liftMaybe "Address" . addrToText net . fst) outIntAddrs
       freedCoins <- forM outpoints $ \op -> lift $ setLockCoin op False
-      freedAddresses <- lift $ setFreeAddrs True outIntAddrsT
+      freedAddresses <- lift $ setAddrsFree AddrFree outIntAddrsT
       lift $ P.delete key
       return (sum freedCoins, fromIntegral freedAddresses)
     _ -> throwError "The pending transaction does not exist"
 
 -- When the pending transaction is online, we just delete it
-pendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
-pendingTxOnline = P.delete
+deletePendingTxOnline :: (MonadUnliftIO m) => DBPendingTxId -> DB m ()
+deletePendingTxOnline = P.delete
 
 setPendingTxOnline :: (MonadUnliftIO m) => TxHash -> DB m Natural
 setPendingTxOnline nosigH = do
@@ -1326,6 +1302,12 @@ isIntPath p =
   case pathToList p of
     [1, _] -> True
     _ -> False
+
+pathIndex :: SoftPath -> KeyIndex
+pathIndex p =
+  case pathToList p of
+    [_, i] -> i
+    _ -> error "Invalid pathIndex"
 
 bip44Deriv :: Network -> Natural -> HardPath
 bip44Deriv net a = Deriv :| 44 :| net.bip44Coin :| fromIntegral a

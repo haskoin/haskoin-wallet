@@ -104,7 +104,7 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       -- Get all spendable coins in the account
       allCoins <- getSpendableCoins accId
       -- Get a change address
-      (change, changeDeriv) <- getFreeInternalAddress net ctx accId 0
+      (change, changeDeriv) <- nextFreeIntAddr net ctx accId
       -- Build a transaction and pick the coins
       gen <- liftIO newStdGen
       (tx, pickedCoins) <-
@@ -256,6 +256,7 @@ noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 
 {- Transaction Sweeping -}
 
+{-
 buildSweepSignData ::
   (MonadUnliftIO m) =>
   Network ->
@@ -328,7 +329,7 @@ buildSweepTxs net ctx accId allCoins feeByte dust = do
       tx <-
         liftEither $ buildAddrTx net ctx ((.outpoint) <$> pickedCoins) rcptsTxt
       go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : accum) (offset' + 2)
-
+-}
 -- Utilities --
 
 randomRange :: (Random a, MonadState StdGen m) => a -> a -> m a

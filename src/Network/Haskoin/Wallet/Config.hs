@@ -36,7 +36,7 @@ hwDataDirectory = do
 conf :: Network -> ApiConfig
 conf net = ApiConfig net (def :: ApiConfig).host
 
-gap :: Natural
+gap :: Int
 gap = 20
 
 recoveryGap :: Natural
