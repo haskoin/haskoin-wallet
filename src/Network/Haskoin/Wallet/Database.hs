@@ -1255,8 +1255,9 @@ deletePendingTx net ctx accId nosigHash = do
   tsdM <- lift $ getPendingTx nosigHash
   case tsdM of
     Just (_, True) -> do
-      lift $ P.delete key -- The transaction is online. Just delete it.
-      return (0, 0)
+      throwError
+        "This pending transaction has been sent to the network.\
+        \ Run syncacc to refresh your database."
     -- We only free coins and addresses if the transaction is offline
     Just (tsd, False) -> do
       acc <- getAccountById accId

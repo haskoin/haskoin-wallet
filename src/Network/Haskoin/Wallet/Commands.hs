@@ -6,6 +6,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE TupleSections #-}
 
 module Network.Haskoin.Wallet.Commands where
 
@@ -214,13 +215,11 @@ data Response
       {responseVersion :: !Text}
   | ResponsePrepareSweep
       { responseAccount :: !DBAccount,
-        responseTxFiles :: ![Text],
-        responsePendingTxs :: ![NoSigTxInfo]
+        responsePendingTx :: !NoSigTxInfo
       }
   | ResponseSignSweep
       { responseAccount :: !DBAccount,
-        responseTxFiles :: ![Text],
-        responsePendingTxs :: ![NoSigTxInfo]
+        responsePendingTx :: !NoSigTxInfo
       }
   | ResponseRollDice
       { responseRollDice :: ![Natural],
@@ -382,21 +381,19 @@ instance MarshalJSON Ctx Response where
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
-      ResponsePrepareSweep a fs ts -> do
+      ResponsePrepareSweep a t -> do
         let net = accountNetwork a
         object
           [ "type" .= Json.String "preparesweep",
             "account" .= a,
-            "txfiles" .= fs,
-            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
+            "pendingtxs" .= marshalValue (net, ctx) t
           ]
-      ResponseSignSweep a fs ts -> do
+      ResponseSignSweep a t -> do
         let net = accountNetwork a
         object
           [ "type" .= Json.String "signsweep",
             "account" .= a,
-            "txfiles" .= fs,
-            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
+            "pendingtx" .= marshalValue (net, ctx) t
           ]
       ResponseRollDice ns e ->
         object
@@ -514,15 +511,13 @@ instance MarshalJSON Ctx Response where
         "preparesweep" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          fs <- o .: "txfiles"
-          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
-          return $ ResponsePrepareSweep a fs ts
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtxs"
+          return $ ResponsePrepareSweep a t
         "signsweep" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          fs <- o .: "txfiles"
-          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
-          return $ ResponseSignSweep a fs ts
+          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
+          return $ ResponseSignSweep a t
         "rolldice" ->
           ResponseRollDice
             <$> o .: "dice"
@@ -582,9 +577,9 @@ commandResponse ctx =
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
     -- Utilities
     CommandVersion -> cmdVersion
-    -- CommandPrepareSweep as fileM nameM fee dust dir ->
-    --   prepareSweep ctx as fileM nameM fee dust dir
-    -- CommandSignSweep nameM dir keyFile -> signSweep ctx nameM dir keyFile
+    CommandPrepareSweep nameM sf fileM st outputM f d ->
+      prepareSweep ctx nameM sf fileM st outputM f d
+    CommandSignSweep nameM h i o k -> signSweep ctx nameM h i o k
     CommandRollDice n -> rollDice n
 
 -- runDB Monad Stack:
@@ -774,7 +769,7 @@ cmdExportTx nosigH fp =
   runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
-      Just (tsd,_) -> do
+      Just (tsd, _) -> do
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseExportTx fp
@@ -806,7 +801,7 @@ cmdSignTx ::
   IO Response
 cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
   runDB $ do
-    (tsd, online) <- getInput
+    (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
       throwError "The transaction is already online"
     when (txSignDataSigned tsd) $
@@ -828,25 +823,31 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
     return $ ResponseSignTx acc (NoSigSigned nosigH txInfo)
-  where
-    getInput =
-      case (nosigHM, inputM, outputM) of
-        (Nothing, Nothing, _) ->
-          throwError
-            "Provide either a TXHASH or both a --input file and a --output file"
-        (Just _, Just _, _) ->
-          throwError "Can not specify both a TXHASH and a --input file"
-        (_, Just _, Nothing) ->
-          throwError "When using a --input file, also provide a --output file"
-        (Just h, _, _) -> do
-          resM <- lift $ getPendingTx h
-          case resM of
-            Just res -> return res
-            _ -> throwError "The nosigHash does not exist in the wallet"
-        (_, Just i, _) -> do
-          exist <- liftIO $ D.doesFileExist i
-          unless exist $ throwError "Input file does not exist"
-          liftEitherIO $ readJsonFile i
+
+parseSignInput ::
+  (MonadUnliftIO m) =>
+  Maybe TxHash ->
+  Maybe FilePath ->
+  Maybe FilePath ->
+  ExceptT String (DB m) (TxSignData, Bool)
+parseSignInput nosigHM inputM outputM =
+  case (nosigHM, inputM, outputM) of
+    (Nothing, Nothing, _) ->
+      throwError
+        "Provide either a TXHASH or both a --input file and a --output file"
+    (Just _, Just _, _) ->
+      throwError "Can not specify both a TXHASH and a --input file"
+    (_, Just _, Nothing) ->
+      throwError "When using a --input file, also provide a --output file"
+    (Just h, _, _) -> do
+      resM <- lift $ getPendingTx h
+      case resM of
+        Just res -> return res
+        _ -> throwError "The nosigHash does not exist in the wallet"
+    (_, Just i, _) -> do
+      exist <- liftIO $ D.doesFileExist i
+      unless exist $ throwError "Input file does not exist"
+      (,False) <$> liftEitherIO (readJsonFile i)
 
 cmdCoins :: Maybe Text -> Page -> IO Response
 cmdCoins nameM page =
@@ -1045,65 +1046,66 @@ cmdDiscoverAccount ctx nameM = do
 cmdVersion :: IO Response
 cmdVersion = return $ ResponseVersion versionString
 
-{-
 prepareSweep ::
   Ctx ->
+  Maybe Text ->
   [Text] ->
   Maybe FilePath ->
-  Maybe Text ->
+  [Text] ->
+  Maybe FilePath ->
   Natural ->
   Natural ->
-  FilePath ->
   IO Response
-prepareSweep ctx addrsTxt fileM nameM feeByte dust dir =
+prepareSweep ctx nameM sweepFromT sweepFromFileM sweepToT outputM feeByte dust =
   runDB $ do
     (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    addrsArg <- liftEither $ mapM (textToAddrE net) addrsTxt
+    sweepFromArg <- liftEither $ mapM (textToAddrE net) sweepFromT
+    sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     addrsFile <-
-      case fileM of
+      case sweepFromFileM of
         Just file -> parseAddrsFile net <$> liftIO (readFileWords file)
         _ -> return []
-    let addrs = addrsArg <> addrsFile
+    let sweepFrom = sweepFromArg <> addrsFile
     checkHealth ctx net
-    tsds <- buildSweepSignData net ctx accId addrs feeByte dust
-    let f tsd@(TxSignData tx _ _ _ _) = do
-          infoU <- parseTxSignData net ctx pub tsd
-          return $ NoSigUnsigned (nosigTxHash tx) infoU
-    txInfosU <- liftEither $ mapM f tsds
-    sweepDir <- initSweepDir tsds dir
-    files <- writeSweepFiles tsds sweepDir
-    newAcc <- getAccountId accId
-    return $ ResponsePrepareSweep newAcc (cs <$> files) txInfosU
+    tsd <- buildSweepSignData net ctx accId sweepFrom sweepTo feeByte dust
+    info <- liftEither $ parseTxSignData net ctx pub tsd
+    for_ outputM checkPathFree
+    nosigHash <- importPendingTx net ctx accId tsd
+    for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
+    return $ ResponsePrepareSweep acc (NoSigUnsigned nosigHash info)
 
-signSweep :: Ctx -> Maybe Text -> FilePath -> FilePath -> IO Response
-signSweep ctx nameM sweepDir keyFile =
+signSweep ::
+  Ctx ->
+  Maybe Text ->
+  Maybe TxHash ->
+  Maybe FilePath ->
+  Maybe FilePath ->
+  FilePath ->
+  IO Response
+signSweep ctx nameM nosigHM inputM outputM keyFile =
   runDB $ do
-    acc <- getAccountVal nameM
+    (tsd, online) <- parseSignInput nosigHM inputM outputM
+    when online $
+      throwError "The transaction is already online"
+    when (txSignDataSigned tsd) $
+      throwError "The transaction is already signed"
+    (accId, acc) <- getAccount nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    -- Read the files containing the transactions to sweep
-    sweepFiles <- fmap (sweepDir </>) <$> liftIO (D.listDirectory sweepDir)
-    tsdsU <- mapM (liftEitherIO . readMarshalFile ctx) sweepFiles
-    when (null tsdsU) $ throwError "No sweep transactions to sign"
+    for_ outputM checkPathFree
     -- Read the file containing the private keys
     secKeys <- parseSecKeysFile net <$> liftIO (readFileWords keyFile)
     when (null secKeys) $ throwError "No private keys to sign"
     -- Sign the transactions
-    signRes <-
-      forM tsdsU $ \tsdU -> do
-        (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsdU pub secKeys
-        return (newTsd, NoSigSigned (nosigTxHash $ txSignDataTx newTsd) txInfo)
-    -- Checksum validation
-    let oldChksum = txsChecksum $ txSignDataTx <$> tsdsU
-        newChksum = txsChecksum $ txSignDataTx . fst <$> signRes
-    when (oldChksum /= newChksum) $
-      throwError "The transactions checksum do not match"
-    -- Write the signed transactions to JSON files
-    signedFiles <- writeSweepFiles (fst <$> signRes) sweepDir
-    return $ ResponseSignSweep acc (cs <$> signedFiles) (snd <$> signRes)
--}
+    (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
+    let nosigH = nosigTxHash $ txSignDataTx newTsd
+    when (isJust nosigHM && Just nosigH /= nosigHM) $
+      throwError "The nosigHash did not match"
+    when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
+    for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
+    return $ ResponseSignSweep acc (NoSigSigned nosigH txInfo)
 
 rollDice :: Natural -> IO Response
 rollDice n = do

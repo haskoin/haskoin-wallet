@@ -132,16 +132,19 @@ data Command
       }
   | CommandVersion
   | CommandPrepareSweep
-      { commandSweepAddrs :: ![Text],
-        commandInputFileMaybe :: !(Maybe FilePath),
-        commandMaybeAcc :: !(Maybe Text),
+      { commandMaybeAcc :: !(Maybe Text),
+        commandSweepFrom :: ![Text],
+        commandSweepFileMaybe :: !(Maybe FilePath),
+        commandSweepTo :: ![Text],
+        commandOutputFileMaybe :: !(Maybe FilePath),
         commandFeeByte :: !Natural,
-        commandDust :: !Natural,
-        commandOutputDir :: !FilePath
+        commandDust :: !Natural
       }
   | CommandSignSweep
       { commandMaybeAcc :: !(Maybe Text),
-        commandSweepPath :: !FilePath,
+        commandNoSigHashMaybe :: !(Maybe TxHash),
+        commandInputFileMaybe :: !(Maybe FilePath),
+        commandOutputFileMaybe :: !(Maybe FilePath),
         commandSecKeyPath :: !FilePath
       }
   | CommandRollDice
@@ -721,8 +724,8 @@ prepared the transaction.
 nosigHashArg :: Parser TxHash
 nosigHashArg =
   argument (maybeReader $ hexToTxHash . cs) $
-    metavar "TXHASH"
-      <> help "The hash (nosigHash) of the transaction"
+    metavar "NOSIGHASH"
+      <> help "The nosigHash of the transaction"
 
 {- ImportTx Parser -}
 
@@ -762,7 +765,7 @@ signTxParser = do
   let cmd =
         CommandSignTx
           <$> accountOption
-          <*> nosigHashArgMaybe
+          <*> optional nosigHashArg
           <*> inputFileMaybeOption
           <*> outputFileMaybeOption
           <*> splitInOption
@@ -772,20 +775,14 @@ signTxParser = do
         [r|
 The next step after preparing a transaction is to sign it. This step can happen
 on an offline computer if you export the unsigned transaction to a file. If the
-transaction is stored in the wallet, it can be signed by using its nosigHash
-(TXHASH). This will sign and replace the transaction in-place. Otherwise, you
-must specify the --input file of the unsigned transaction and the --output file
-where the signed transaction will be saved. The transaction still hasn't been
-uploaded to the network. You may inspect it using either the `reviewtx` or the
-`pendingtxs` command. The transaction can then be sent to the network with
-`sendtx` or deleted with `deletetx`.
+transaction is stored in the wallet, it can be signed by using its nosigHash.
+This will sign and replace the transaction in-place. Otherwise, you must specify
+the --input file of the unsigned transaction and the --output file where the
+signed transaction will be saved. The transaction still hasn't been uploaded to
+the network. You may inspect it using either the `reviewtx` or the `pendingtxs`
+command. The transaction can then be sent to the network with `sendtx` or
+deleted with `deletetx`.
 |]
-
-nosigHashArgMaybe :: Parser (Maybe TxHash)
-nosigHashArgMaybe =
-  optional . argument (maybeReader $ hexToTxHash . cs) $
-    metavar "TXHASH"
-      <> help "The hash (nosigHash) of the transaction"
 
 inputFileMaybeOption :: Parser (Maybe FilePath)
 inputFileMaybeOption =
@@ -808,9 +805,10 @@ coinsParser = do
     progDesc "List the account coins (unspent outputs)"
       <> footer
         [r|
-Coins can be locked when preparing new transactions. When sending those
-transactions to the network, the locked coins will be spent and removed. Calling
-`deletetx` will remove a pending transaction and free up any locked coins.
+These are all the coins in the account. Coins can be locked when preparing new
+transactions. When sending those transactions to the network, the locked coins
+will be spent and removed. Calling `deletetx` will remove a pending transaction
+and free up any locked coins.
 |]
 
 {- SendTx Parser -}
@@ -867,11 +865,14 @@ discoverAccParser = do
     progDesc "Scan the blockchain to generate missing addresses"
       <> footer
         [r|
-`discoveracc` is typically called when restoring an account on a new wallet.
+`discoveracc` is typically called when restoring an account in a new wallet.
 Initially, there will be no addresses stored in the account. `discoveracc` will
 scan the blockchain and generate all the addresses (both external and internal)
 that have received coins at some point. The search is stopped when a gap
-(default = 20) of empty addresses is found.
+(default = 20) of empty addresses is found. A full sync (syncacc --full) is
+run automatically at the end of the `discoveracc` command. When restoring an
+old wallet, it is important to discover it first before generating addresses
+and receiving payments. Otherwise some addresses might be reused.
 |]
 
 {- Version Parser -}
@@ -887,30 +888,33 @@ prepareSweepParser :: ParserInfo Command
 prepareSweepParser = do
   let cmd =
         CommandPrepareSweep
-          <$> many sweepAddrsArg
+          <$> accountOption
+          <*> many sweepFromOption -- many: not optional
           <*> addressFileOption
-          <*> accountOption
+          <*> some sweepToOption -- some: optional
+          <*> outputFileMaybeOption
           <*> feeOption
           <*> dustOption
-          <*> outputDirOption
   info cmd $
-    progDesc "Sweep funds into this wallet"
+    progDesc "Prepare a transaction to sweep funds"
       <> footer
         [r|
-This utility command will prepare a set of unsigned transactions that will send
-all the funds available in the given addresses to your account. The typical use
-case for this command is to migrate an old wallet to a new mnemonic. You can
-pass the addresses on the command line or they can be parsed from a file. The
-preparesweep command will randomize all the coins and create a number of
-transactions containing between 1 and 5 inputs and 2 outputs. The results will
-be written as a set of files in a directory specified with --outputdir.
+`preparesweep` will prepare a transaction that sweeps the funds available in the
+given --sweepfrom addresses and sends them to the --sweepto addresses. The
+typical use case for this command is to migrate an old wallet to a new mnemonic.
+The addresses can also be parsed from a --addrfile. The best way to pass
+multiple addresses on the command line is with the shorthand -s ADDR1 -s ADDR2
+for --sweepfrom addresses and -t ADDR1 -t ADDR2 for --sweepto addresses. You
+can generate addresses to sweep to with the `receive` command.
 |]
 
-sweepAddrsArg :: Parser Text
-sweepAddrsArg =
-  strArgument $
-    metavar "ADDRESS"
-      <> help "List of addresses to sweep"
+sweepFromOption :: Parser Text
+sweepFromOption =
+  strOption $
+    short 's'
+      <> long "sweepfrom"
+      <> metavar "ADDRESS"
+      <> help "Addresses to sweep from"
 
 addressFileOption :: Parser (Maybe FilePath)
 addressFileOption =
@@ -918,16 +922,15 @@ addressFileOption =
     long "addrfile"
       <> metavar "FILENAME"
       <> action "file"
-      <> help "File containing addresses to sweep"
+      <> help "File containing addresses to sweep from"
 
-outputDirOption :: Parser FilePath
-outputDirOption =
+sweepToOption :: Parser Text
+sweepToOption =
   strOption $
-    short 'o'
-      <> long "outputdir"
-      <> metavar "DIRNAME"
-      <> action "file"
-      <> help "Directory where the results will be written to"
+    short 't'
+      <> long "sweepto"
+      <> metavar "ADDRESS"
+      <> help "Addresses to sweep to"
 
 {- SignSweep Parser -}
 
@@ -936,16 +939,29 @@ signSweepParser = do
   let cmd =
         CommandSignSweep
           <$> accountOption
-          <*> dirArgument "Folder containing the sweep transactions"
-          <*> fileArgument "Path to the file containing the private keys"
+          <*> optional nosigHashArg
+          <*> inputFileMaybeOption
+          <*> outputFileMaybeOption
+          <*> prvKeyFileOption
   info cmd $
-    progDesc "Sign the transactions contained in a sweep folder"
+    progDesc "Sign a sweep transaction"
       <> footer
         [r|
-Sign the sweep transactions that have been created by the `preparesweep`
-command. The private keys have to be provided in a separate file. The currently
-supported formats are WIF and MiniKey.
+Sign a transaction that was prepared with the `preparesweep` command. As the
+coins of this transaction are not from this wallet, the private keys for signing
+must be passed in a separate --prvkeys file. The sweep transaction can be
+referenced by its nosigHash if it exists in the wallet or you can pass it as a
+file --input.
 |]
+
+prvKeyFileOption :: Parser FilePath
+prvKeyFileOption =
+  strOption $
+    short 'k'
+      <> long "prvkeys"
+      <> metavar "FILENAME"
+      <> action "file"
+      <> help "File containing the private keys in WIF or MiniKey format"
 
 {- RollDice Parser -}
 
@@ -982,9 +998,3 @@ fileArgument desc =
       <> action "file"
       <> help desc
 
-dirArgument :: String -> Parser FilePath
-dirArgument desc =
-  strArgument $
-    metavar "DIRNAME"
-      <> action "file"
-      <> help desc

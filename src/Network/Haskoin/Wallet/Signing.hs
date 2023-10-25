@@ -31,7 +31,7 @@ import qualified Data.Map.Strict as Map
 import qualified Data.Set as Set
 import Data.Text (Text)
 import Data.Word (Word32, Word64)
-import Haskoin.Address (Address, textToAddr)
+import Haskoin.Address (Address, addrToText, textToAddr)
 import Haskoin.Crypto
   ( Ctx,
     Fingerprint,
@@ -84,7 +84,7 @@ import Network.Haskoin.Wallet.Util
     safeSubtract,
   )
 import Numeric.Natural (Natural)
-import System.Random (Random (randomR), StdGen, initStdGen, newStdGen)
+import System.Random (Random (randomR), StdGen, initStdGen)
 
 {- Building Transactions -}
 
@@ -106,7 +106,7 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       -- Get a change address
       (change, changeDeriv) <- nextFreeIntAddr net ctx accId
       -- Build a transaction and pick the coins
-      gen <- liftIO newStdGen
+      gen <- liftIO initStdGen
       (tx, pickedCoins) <-
         liftEither $
           buildWalletTx net ctx gen rcpts change allCoins feeByte dust rcptPay
@@ -256,80 +256,66 @@ noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 
 {- Transaction Sweeping -}
 
-{-
 buildSweepSignData ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
   DBAccountId ->
   [Address] ->
+  [Address] ->
   Natural ->
   Natural ->
-  ExceptT String (DB m) [TxSignData]
-buildSweepSignData net ctx accId addrs feeByte dust
-  | null addrs = throwError "No addresses provided to sweep"
+  ExceptT String (DB m) TxSignData
+buildSweepSignData net ctx accId sweepFrom sweepTo feeByte dust
+  | null sweepFrom = throwError "No addresses to sweep from"
+  | null sweepTo = throwError "No addresses to sweep to"
   | otherwise = do
-      -- Get the unspent coins of the addresses
+      -- Get the unspent coins of the sweepFrom addresses
       Store.SerialList coins <-
         liftExcept . apiBatch ctx coinBatch (conf net) $
-          GetAddrsUnspent addrs def {limit = Just 0}
+          GetAddrsUnspent sweepFrom def {limit = Just 0}
       when (null coins) $
         throwError "There are no coins to sweep in those addresses"
       -- Build a set of sweep transactions
       gen <- liftIO initStdGen
-      txs <- evalStateT (buildSweepTxs net ctx accId coins feeByte dust) gen
-      -- For each sweep transaction
-      forM txs $ \(tx, pickedCoins, outDerivs) -> do
-        -- Get the dependent transactions
-        let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
-        Store.RawResultList depTxs <-
-          liftExcept . apiBatch ctx txFullBatch (conf net) $
-            GetTxsRaw depTxHash
-        -- Check if any of the coins belong to us
-        resE <- lift $ mapM (getCoinDeriv net accId) pickedCoins
-        let inDerivs = rights resE
-        return $
-          TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
+      tx <- liftEither $ buildSweepTx net ctx gen coins sweepTo feeByte dust
+      -- Get the dependent transactions
+      let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
+      Store.RawResultList depTxs <-
+        liftExcept . apiBatch ctx txFullBatch (conf net) $
+          GetTxsRaw depTxHash
+      -- Check if any of the coins belong to us
+      inDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepFrom)
+      -- Check if any of the sweepTo addrs belong to us
+      outDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepTo)
+      return $ TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
 
-buildSweepTxs ::
-     (MonadUnliftIO m)
-  => Network
-  -> Ctx
-  -> DBAccountId
-  -> [Store.Unspent]
-  -> Natural
-  -> Natural
-  -> StateT StdGen (ExceptT String (DB m)) [(Tx, [Store.Unspent], [SoftPath])]
-buildSweepTxs net ctx accId allCoins feeByte dust = do
-  liftEither <=< retryEither 10 $ do
-    shuffledCoins <- randomShuffle allCoins
-    runExceptT $ go shuffledCoins [] 0
-  where
-    go [] accum _ = return accum
-    go coins accum offset' = do
-      nIns <- randomRange 1 5
-      let (pickedCoins, restCoins) = splitAt nIns coins
-          coinsTot = toInteger $ sum $ (.value) <$> pickedCoins
-          fee = guessTxFee (fromIntegral feeByte) 2 (length pickedCoins)
-          amntTot = coinsTot - toInteger fee
-          amntMin = toInteger dust + 1
-      when (amntTot < 2 * amntMin) $
-        throwError "Could not find a sweep solution"
-      amnt1 <- randomRange amntMin (amntTot - amntMin)
-      let amnt2 = amntTot - amnt1
-      when (amnt1 < amntMin || amnt2 < amntMin) $
-        throwError "Could not find a sweep solution"
-      (addr1, deriv1) <-
-        lift . lift $ getFreeInternalAddress net ctx accId offset'
-      (addr2, deriv2) <-
-        lift . lift $ getFreeInternalAddress net ctx accId (offset' + 1)
-      rcpts <-
-        randomShuffle [(addr1, fromIntegral amnt1), (addr2, fromIntegral amnt2)]
-      rcptsTxt <- liftEither $ mapM (addrToText2 net) rcpts
-      tx <-
-        liftEither $ buildAddrTx net ctx ((.outpoint) <$> pickedCoins) rcptsTxt
-      go restCoins ((tx, pickedCoins, [deriv1, deriv2]) : accum) (offset' + 2)
--}
+buildSweepTx ::
+  Network ->
+  Ctx ->
+  StdGen ->
+  [Store.Unspent] ->
+  [Address] ->
+  Natural ->
+  Natural ->
+  Either String Tx
+buildSweepTx net ctx gen coins sweepTo feeByte dust =
+  flip evalStateT gen $ do
+    rdmOutpoints <- ((.outpoint) <$>) <$> randomShuffle coins
+    rdmSweepTo <- randomShuffle sweepTo
+    let coinsTot = sum $ (.value) <$> coins
+        fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length coins)
+    when (coinsTot < fee) $
+      throwError "Could not find a sweep solution: fee is too large"
+    rdmAmntsM <-
+      randomSplitIn
+        (coinsTot - fee) -- will not overflow
+        (fromIntegral $ length sweepTo)
+        (fromIntegral $ dust + 1)
+    rdmAmnts <- lift $ maybeToEither "Could not find a sweep solution" rdmAmntsM
+    addrsT <- lift $ mapM (maybeToEither "Addr" . addrToText net) rdmSweepTo
+    lift $ buildAddrTx net ctx rdmOutpoints (zip addrsT rdmAmnts)
+
 -- Utilities --
 
 randomRange :: (Random a, MonadState StdGen m) => a -> a -> m a
@@ -348,12 +334,12 @@ randomShuffle xs = do
     (as, e : bs) -> (e :) <$> randomShuffle (as <> bs)
     _ -> error "randomShuffle"
 
-retryEither ::
-  (Monad m) => Natural -> m (Either String a) -> m (Either String a)
-retryEither 0 _ = error "Must retryEither at least 1 time"
-retryEither 1 m = m
-retryEither i m = do
-  resE <- m
-  case resE of
-    Left _ -> retryEither (i - 1) m
-    Right _ -> return resE
+-- Split the number a into n parts of minimum value d
+randomSplitIn ::
+  (Random a, Num a, Ord a, MonadState StdGen m) => a -> a -> a -> m (Maybe [a])
+randomSplitIn a n d
+  | a < n * d = return Nothing
+  | n == 1 = return $ Just [a]
+  | otherwise = do
+      randPart <- randomRange d (a - d * (n - 1))
+      ((randPart :) <$>) <$> randomSplitIn (a - randPart) (n - 1) d
