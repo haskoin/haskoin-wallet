@@ -330,7 +330,7 @@ insertAccount ::
   Fingerprint ->
   Text ->
   XPubKey ->
-  ExceptT String (DB m) DBAccount
+  ExceptT String (DB m) (DBAccountId, DBAccount)
 insertAccount net ctx walletFP name xpub = do
   existsName <- lift $ existsAccount name
   if existsName
@@ -359,8 +359,8 @@ insertAccount net ctx walletFP name xpub = do
                     dBAccountBalanceCoins = 0,
                     dBAccountCreated = time
                   }
-          lift $ P.insert_ account
-          return account
+          key <- lift $ P.insert account
+          return (key, account)
 
 -- When a name is provided, get that account or throw an error if it doesn't
 -- exist. When no name is provided, return the account only if there is one
@@ -605,7 +605,7 @@ genNextAddress ::
   DBAccountId ->
   AddrType ->
   AddrFree ->
-  ExceptT String (DB m) ((DBAccount, DBAddress), (Address, SoftPath))
+  ExceptT String (DB m) DBAddress
 genNextAddress ctx accId addrType addrFree = do
   acc <- getAccountById accId
   let net = accountNetwork acc
@@ -616,8 +616,8 @@ genNextAddress ctx accId addrType addrFree = do
   let (addr, _) = derivePathAddr ctx pub deriv (fromIntegral nextIdx)
   dbAddr <-
     insertAddress net accId (deriv :/ fromIntegral nextIdx) addr addrFree
-  newAcc <- lift $ P.updateGet accId [dBAccountField addrType P.=. nextIdx + 1]
-  return ((newAcc, dbAddr), (addr, deriv :/ fromIntegral nextIdx))
+  lift $ P.update accId [dBAccountField addrType P.=. nextIdx + 1]
+  return dbAddr
 
 checkGap ::
   (MonadUnliftIO m) =>
@@ -666,7 +666,7 @@ genExtAddress ::
   Text ->
   ExceptT String (DB m) DBAddress
 genExtAddress ctx accId label = do
-  ((_, addr),_) <- genNextAddress ctx accId AddrExternal AddrBusy
+  addr <- genNextAddress ctx accId AddrExternal AddrBusy
   setAddrLabel accId (dBAddressIndex addr) label
 
 setAddrLabel ::
@@ -686,11 +686,10 @@ setAddrLabel accId@(DBAccountKey wallet accDeriv) idx label = do
 
 nextFreeIntAddr ::
   (MonadUnliftIO m) =>
-  Network ->
   Ctx ->
   DBAccountId ->
-  ExceptT String (DB m) (Address, SoftPath)
-nextFreeIntAddr net ctx accId@(DBAccountKey wallet accDeriv) = do
+  ExceptT String (DB m) DBAddress
+nextFreeIntAddr ctx accId@(DBAccountKey wallet accDeriv) = do
   resM <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAccountWallet ==. val wallet
@@ -699,12 +698,18 @@ nextFreeIntAddr net ctx accId@(DBAccountKey wallet accDeriv) = do
         &&. a ^. DBAddressFree ==. val True
     orderBy [asc $ a ^. DBAddressIndex]
     limit 1
-    return (a ^. DBAddressAddress, a ^. DBAddressIndex)
+    return a
   case resM of
-    Just (Value addrT, Value idx) -> do
-      addr <- liftMaybe "Address" $ textToAddr net addrT
-      return (addr, intDeriv :/ fromIntegral idx)
-    Nothing -> snd <$> genNextAddress ctx accId AddrInternal AddrFree
+    Just (Entity _ a) -> return a
+    Nothing -> genNextAddress ctx accId AddrInternal AddrFree
+
+fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
+fromDBAddr net addrDB = do
+  let addrT = dBAddressAddress addrDB
+      derivT = dBAddressDerivation addrDB
+  deriv <- maybeToEither "fromDBAddress deriv" $ parseSoft $ cs derivT
+  addr <- maybeToEither "fromDBAddress addr" $ textToAddr net addrT
+  return (addr, deriv)
 
 setAddrsFree :: (MonadUnliftIO m) => AddrFree -> [Text] -> DB m Natural
 setAddrsFree free addrs = do
@@ -1136,9 +1141,8 @@ pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
             dBPendingTxNosigHash res
     return (nosigHash, tsd)
 
--- Returns the TxHash and NoSigHash of pending transactions.
--- They are compared during a sync in order to delete pending transactions that
--- are now online.
+-- Returns the TxHash and NoSigHash of pending transactions. They are compared
+-- during a sync in order to delete pending transactions that are now online.
 pendingTxHashes ::
   (MonadUnliftIO m) =>
   DBAccountId ->
@@ -1157,8 +1161,7 @@ pendingTxHashes (DBAccountKey wallet accDeriv) = do
       else return []
   return $ concat res
 
--- Import a pending transaction and locks coins, commits addresses
--- and updates the account internal index
+-- Imports a pending transaction, locks coins and locks internal addresses
 importPendingTx ::
   (MonadUnliftIO m) =>
   Network ->

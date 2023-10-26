@@ -104,7 +104,8 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       -- Get all spendable coins in the account
       allCoins <- getSpendableCoins accId
       -- Get a change address
-      (change, changeDeriv) <- nextFreeIntAddr net ctx accId
+      dbAddr <- nextFreeIntAddr ctx accId
+      (change, changeDeriv) <- liftEither $ fromDBAddr net dbAddr
       -- Build a transaction and pick the coins
       gen <- liftIO initStdGen
       (tx, pickedCoins) <-

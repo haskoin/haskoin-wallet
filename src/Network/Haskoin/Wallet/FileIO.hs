@@ -134,40 +134,6 @@ checkPathFree path = do
   exist <- liftIO $ D.doesPathExist path
   when exist $ throwError $ "Path '" <> path <> "' already exists"
 
-txChecksum :: Tx -> Text
-txChecksum = Text.take 8 . txHashToHex . nosigTxHash
-
-txsChecksum :: [Tx] -> Text
-txsChecksum txs =
-  Text.take 8 $ txHashToHex $ TxHash $ sha256 $ mconcat bss
-  where
-    bss = BSS.fromShort . (.get) . (.get) . nosigTxHash <$> txs
-
-txSignDataFileName :: TxSignData -> FilePath
-txSignDataFileName (TxSignData tx _ _ _ s) =
-  let heading = if s then "signedtx-" else "unsignedtx-"
-   in heading <> cs (txChecksum tx) <> ".json"
-
-initSweepDir ::
-     (MonadIO m) => [TxSignData] -> FilePath -> ExceptT String m FilePath
-initSweepDir tsds dir = do
-  let chksum = cs $ txsChecksum $ txSignDataTx <$> tsds
-      sweepDir = dir </> "sweep-" <> chksum
-  exists <- liftIO $ D.doesDirectoryExist dir
-  unless exists $ throwError $ "Invalid directory " <> dir
-  liftIO $ D.createDirectoryIfMissing False sweepDir
-  return sweepDir
-
-writeSweepFiles ::
-  (MonadIO m) => [TxSignData] -> FilePath -> ExceptT String m [FilePath]
-writeSweepFiles tsds sweepDir = do
-  exists <- liftIO $ D.doesDirectoryExist sweepDir
-  unless exists $ throwError $ "Invalid directory " <> sweepDir
-  forM tsds $ \tsd -> do
-    let file = sweepDir </> txSignDataFileName tsd
-    liftIO $ writeJsonFile file $ toJSON tsd
-    return file
-
 -- JSON IO Helpers--
 
 writeJsonFile :: FilePath -> Value -> IO ()

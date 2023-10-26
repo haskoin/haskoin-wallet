@@ -595,14 +595,15 @@ cmdMnemonic ent useDice splitIn =
     return $ ResponseMnemonic orig (T.words ms) (T.words <$> splitMs)
 
 cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
-cmdCreateAcc ctx name net derivM splitIn =
+cmdCreateAcc ctx name net derivM splitIn = do
   runDB $ do
-    (mnem, walletFP) <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass net ctx splitIn
+    walletFP <- liftEither $ walletFingerprint net ctx mnem
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
     prvKey <- liftEither $ signingKey net ctx mnem d
     let xpub = deriveXPubKey ctx prvKey
-    account <- insertAccount net ctx walletFP name xpub
-    return $ ResponseCreateAcc account
+    (_, acc) <- insertAccount net ctx walletFP name xpub
+    return $ ResponseCreateAcc acc
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx nameM splitIn =
@@ -611,7 +612,7 @@ cmdTestAcc ctx nameM splitIn =
     let net = accountNetwork acc
         xPubKey = accountXPubKey ctx acc
         d = accountIndex acc
-    (mnem, _) <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass net ctx splitIn
     xPrvKey <- liftEither $ signingKey net ctx mnem d
     return $
       if deriveXPubKey ctx xPrvKey == xPubKey
@@ -634,7 +635,7 @@ cmdImportAcc :: Ctx -> FilePath -> IO Response
 cmdImportAcc ctx fp =
   runDB $ do
     (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
-    acc <- insertAccount net ctx wallet name xpub
+    (_, acc) <- insertAccount net ctx wallet name xpub
     return $ ResponseImportAcc acc
 
 cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> IO Response
@@ -811,7 +812,7 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
     for_ outputM checkPathFree
-    (mnem, _) <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass net ctx splitIn
     prvKey <- liftEither $ signingKey net ctx mnem idx
     let pubKey = deriveXPubKey ctx prvKey
     unless (accPub == pubKey) $
@@ -1162,7 +1163,7 @@ askMnemonicPass ::
   Network ->
   Ctx ->
   Natural ->
-  m (MnemonicPass, Fingerprint)
+  m MnemonicPass
 askMnemonicPass net ctx splitIn = do
   mnm <-
     if splitIn == 1
@@ -1172,13 +1173,11 @@ askMnemonicPass net ctx splitIn = do
           liftIO $ askMnemonicWords $ "Split mnemonic part #" <> show n <> ": "
         liftEither $ mergeMnemonicParts ms
   passStr <- liftIO askPassword
-  let mnem =
-        MnemonicPass
-          { mnemonicWords = mnm,
-            mnemonicPass = cs passStr
-          }
-  walletFP <- liftEither $ walletFingerprint net ctx mnem
-  return (mnem, walletFP)
+  return
+    MnemonicPass
+      { mnemonicWords = mnm,
+        mnemonicPass = cs passStr
+      }
 
 askPassword :: IO String
 askPassword = do

@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 6f0dde30af23f700c179b2d4bbcce8c52522ccec3bf337d4ec5dc91481f932af
+-- hash: 1eb9936fc37d41e7c68c0f7771347ec99a57e605a8fcbcd2e7569143126300b4
 
 name:           haskoin-wallet
 version:        0.8.0
@@ -138,8 +138,8 @@ test-suite spec
   type: exitcode-stdio-1.0
   main-is: Spec.hs
   other-modules:
-      Network.Haskoin.Wallet.AccountStoreSpec
       Network.Haskoin.Wallet.AmountsSpec
+      Network.Haskoin.Wallet.CommandsSpec
       Network.Haskoin.Wallet.EntropySpec
       Network.Haskoin.Wallet.SigningSpec
       Network.Haskoin.Wallet.TestUtils
