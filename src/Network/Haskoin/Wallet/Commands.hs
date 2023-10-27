@@ -651,14 +651,6 @@ cmdExportAcc ctx nameM file =
     liftIO $ writeMarshalFile ctx file doc
     return $ ResponseExportAcc acc file
 
-cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
-cmdDeleteTx ctx nameM nosigH =
-  runDB $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    (coins, addrs) <- deletePendingTx net ctx accId nosigH
-    return $ ResponseDeleteTx coins addrs
-
 cmdRenameAcc :: Text -> Text -> IO Response
 cmdRenameAcc oldName newName =
   runDB $ do
@@ -791,6 +783,14 @@ cmdImportTx ctx nameM fp =
         if signed
           then NoSigSigned nosigHash txInfo
           else NoSigUnsigned nosigHash txInfoU
+
+cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
+cmdDeleteTx ctx nameM nosigH =
+  runDB $ do
+    (accId, acc) <- getAccountByName nameM
+    let net = accountNetwork acc
+    (coins, addrs) <- deletePendingTx net ctx accId nosigH
+    return $ ResponseDeleteTx coins addrs
 
 cmdSignTx ::
   Ctx ->

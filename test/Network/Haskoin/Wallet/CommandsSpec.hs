@@ -6,6 +6,7 @@ module Network.Haskoin.Wallet.CommandsSpec where
 
 import Conduit (MonadIO, runResourceT)
 import Control.Arrow (second)
+import Control.Monad
 import Control.Monad.Except
   ( ExceptT,
     MonadError (throwError),
@@ -33,7 +34,9 @@ import Network.Haskoin.Wallet.Database
 import Network.Haskoin.Wallet.FileIO
 import Network.Haskoin.Wallet.Signing
 import Network.Haskoin.Wallet.SigningSpec
-  ( extAddrsT,
+  ( extAddrs,
+    extAddrsT,
+    intAddrs,
     intAddrsT,
     keysT,
     keysT2,
@@ -63,10 +66,34 @@ spec =
     describe "Database" $ do
       bestSpec
       accountSpec ctx
-      addressSpec ctx
+      extAddressSpec ctx
+      intAddressSpec ctx
 
 liftTest :: (MonadIO m) => Expectation -> m ()
 liftTest = liftIO
+
+shouldBeLeft :: (Show a) => ExceptT String (DB IO) a -> DB IO ()
+shouldBeLeft action = liftTest . (`shouldSatisfy` isLeft) =<< runExceptT action
+
+dbShouldBe :: (Show a, Eq a) => DB IO a -> a -> DB IO ()
+dbShouldBe action a = liftTest . (`shouldBe` a) =<< action
+
+dbShouldBeE ::
+  (Show a, Eq a) =>
+  ExceptT String (DB IO) a ->
+  a ->
+  ExceptT String (DB IO) ()
+dbShouldBeE action a = liftTest . (`shouldBe` a) =<< action
+
+dbShouldSatisfy :: (Show a) => DB IO a -> (a -> Bool) -> DB IO ()
+dbShouldSatisfy action f = liftTest . (`shouldSatisfy` f) =<< action
+
+dbShouldSatisfyE ::
+  (Show a) =>
+  ExceptT String (DB IO) a ->
+  (a -> Bool) ->
+  ExceptT String (DB IO) ()
+dbShouldSatisfyE action f = liftTest . (`shouldSatisfy` f) =<< action
 
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc ctx name = do
@@ -111,19 +138,6 @@ bestSpec =
             ( "000000000000001400d91785c92efc15ccfc1949e8581f06db7914a707c3f81d",
               2535443
             )
-
-shouldBeLeft :: (Show a) => ExceptT String (DB IO) a -> DB IO ()
-shouldBeLeft action = liftTest . (`shouldSatisfy` isLeft) =<< runExceptT action
-
-dbShouldBe :: (Show a, Eq a) => DB IO a -> a -> DB IO ()
-dbShouldBe action a = liftTest . (`shouldBe` a) =<< action
-
-dbShouldBeE ::
-  (Show a, Eq a) =>
-  ExceptT String (DB IO) a ->
-  a ->
-  ExceptT String (DB IO) ()
-dbShouldBeE action a = liftTest . (`shouldBe` a) =<< action
 
 accountSpec :: Ctx -> Spec
 accountSpec ctx =
@@ -192,11 +206,11 @@ accountSpec ctx =
       _ <- renameAccount "hello world" "acc2"
       lift $ getAccountNames `dbShouldBe` ["acc1", "acc2", "acc3"]
 
-addressSpec :: Ctx -> Spec
-addressSpec ctx =
-  it "can generate addresses" $ do
+extAddressSpec :: Ctx -> Spec
+extAddressSpec ctx =
+  it "can generate external addresses" $ do
     runDBMemoryE $ do
-      (accId, acc) <- testNewAcc ctx "test"
+      (accId, _) <- testNewAcc ctx "test"
       -- No addresses yet
       lift $ bestAddrWithFunds accId AddrInternal `dbShouldBe` Nothing
       lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Nothing
@@ -223,10 +237,64 @@ addressSpec ctx =
         dBAddressLabel ext2 `shouldBe` "Address 2"
         dBAddressInternal ext2 `shouldBe` False
         dBAddressFree ext2 `shouldBe` False
+      -- Test Paging
       lift $ addressPage accId (Page 5 0) `dbShouldBe` [ext2, ext1]
       lift $ addressPage accId (Page 1 0) `dbShouldBe` [ext2]
       lift $ addressPage accId (Page 1 1) `dbShouldBe` [ext1]
       lift $ addressPage accId (Page 1 2) `dbShouldBe` []
+      -- Set address labels
+      _ <- setAddrLabel accId 0 "test address"
+      lift $
+        addressPage accId (Page 5 0)
+          `dbShouldBe` [ext2, ext1 {dBAddressLabel = "test address"}]
+      -- Test the gap
+      replicateM_ 18 $ genExtAddress ctx accId "" -- We have 20 addresses
+      lift $ shouldBeLeft $ genExtAddress ctx accId "" -- fail gap
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 20) . length)
+      updateAddressBalances btc [Store.Balance (extAddrs !! 2) 0 0 0 1 1]
+      updateAddressBalances btc [Store.Balance (extAddrs !! 4) 0 0 0 1 1]
+      lift $ bestAddrWithFunds accId AddrExternal `dbShouldBe` Just 4
+      replicateM_ 5 $ genExtAddress ctx accId "" -- We have 25 addresses
+      lift $ shouldBeLeft $ genExtAddress ctx accId "" -- fail gap
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      -- Test discoverAccGenAddrs
+      updateAddressBalances btc [Store.Balance (extAddrs !! 9) 0 0 0 1 1]
+      discoverAccGenAddrs ctx accId AddrExternal 0
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      discoverAccGenAddrs ctx accId AddrExternal 25
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 25) . length)
+      discoverAccGenAddrs ctx accId AddrExternal 26
+      lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
+      -- Test getAddrDeriv
+      lift $ getAddrDeriv btc accId (head extAddrs)
+        `dbShouldBe` Right (Deriv :/ 0 :/ 0)
+      lift $ getAddrDeriv btc accId (extAddrs !! 7)
+        `dbShouldBe` Right (Deriv :/ 0 :/ 7)
+      -- Test accound balances
+      acc1 <- lift $ updateAccountBalances accId
+      liftTest $ do
+        dBAccountBalanceConfirmed acc1 `shouldBe` 0
+        dBAccountBalanceUnconfirmed acc1 `shouldBe` 0
+        dBAccountBalanceCoins acc1 `shouldBe` 0
+      updateAddressBalances btc [Store.Balance (extAddrs !! 1) 2 0 1 1 2]
+      updateAddressBalances btc [Store.Balance (extAddrs !! 4) 2 8 2 2 10]
+      _ <- nextFreeIntAddr ctx accId
+      updateAddressBalances btc [Store.Balance (head intAddrs) 3 2 1 1 5]
+      acc1' <- lift $ updateAccountBalances accId
+      liftTest $ do
+        dBAccountBalanceConfirmed acc1' `shouldBe` 7
+        dBAccountBalanceUnconfirmed acc1' `shouldBe` 10
+        dBAccountBalanceCoins acc1' `shouldBe` 4
+      -- Test account indices
+      liftTest $ do
+        dBAccountInternal acc1' `shouldBe` 1
+        dBAccountExternal acc1' `shouldBe` 26
+
+intAddressSpec :: Ctx -> Spec
+intAddressSpec ctx =
+  it "can generate internal addresses" $ do
+    runDBMemoryE $ do
+      (accId, _) <- testNewAcc ctx "test"
       -- Generate internal addresses
       int1 <- nextFreeIntAddr ctx accId
       liftTest $ do
@@ -238,10 +306,33 @@ addressSpec ctx =
         dBAddressLabel int1 `shouldBe` "Internal Address"
         dBAddressInternal int1 `shouldBe` True
         dBAddressFree int1 `shouldBe` True
-      int1' <- nextFreeIntAddr ctx accId -- Should still return the same free addr
-      liftTest $ int1' `shouldBe` int1
-      -- Set address labels
-      _ <- setAddrLabel accId 0 "test address"
-      lift $
-        addressPage accId (Page 5 0)
-          `dbShouldBe` [ext2, ext1 {dBAddressLabel = "test address"}]
+      -- Test the Free status
+      nextFreeIntAddr ctx accId `dbShouldBeE` int1 -- Should return the same address
+      lift $ setAddrsFree AddrBusy [head intAddrsT] `dbShouldBe` 1
+      lift $ setAddrsFree AddrBusy [intAddrsT !! 1] `dbShouldBe` 0
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 1
+      _ <- lift $ setAddrsFree AddrFree [head intAddrsT]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 0
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 1]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 0
+      _ <- lift $ setAddrsFree AddrBusy [head intAddrsT]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 2
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 2]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 3
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 3]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 4
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 5
+      _ <- lift $ setAddrsFree AddrFree [intAddrsT !! 2]
+      _ <- lift $ setAddrsFree AddrFree [intAddrsT !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 2
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 2]
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 5]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 4
+      _ <- lift $ setAddrsFree AddrBusy [intAddrsT !! 4]
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 6
+      -- Test account indices
+      acc <- getAccountById accId
+      liftTest $ do
+        dBAccountInternal acc `shouldBe` 7
+        dBAccountExternal acc `shouldBe` 0

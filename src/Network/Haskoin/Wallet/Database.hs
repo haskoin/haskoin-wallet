@@ -621,10 +621,10 @@ checkGap ::
   ExceptT String (DB m) ()
 checkGap accId addrIdx addrType = do
   usedIdxM <- lift $ bestAddrWithFunds accId addrType
-  for_ usedIdxM $ \usedIdx ->
-    when (addrIdx > usedIdx + gap) $
-      throwError $
-        "Can not generate addresses beyond the gap of " <> show gap
+  let usedIdx = maybe 0 (+1) usedIdxM
+  when (addrIdx >= usedIdx + gap) $
+    throwError $
+      "Can not generate addresses beyond the gap of " <> show gap
 
 -- Highest address with a positive transaction count
 bestAddrWithFunds ::
