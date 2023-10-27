@@ -597,7 +597,7 @@ cmdMnemonic ent useDice splitIn =
 cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
 cmdCreateAcc ctx name net derivM splitIn = do
   runDB $ do
-    mnem <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass splitIn
     walletFP <- liftEither $ walletFingerprint net ctx mnem
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
     prvKey <- liftEither $ signingKey net ctx mnem d
@@ -608,11 +608,11 @@ cmdCreateAcc ctx name net derivM splitIn = do
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx nameM splitIn =
   runDB $ do
-    acc <- getAccountVal nameM
+    (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         xPubKey = accountXPubKey ctx acc
         d = accountIndex acc
-    mnem <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass splitIn
     xPrvKey <- liftEither $ signingKey net ctx mnem d
     return $
       if deriveXPubKey ctx xPrvKey == xPubKey
@@ -641,7 +641,7 @@ cmdImportAcc ctx fp =
 cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx nameM file =
   runDB $ do
-    acc <- getAccountVal nameM
+    (_, acc) <- getAccountByName nameM
     checkPathFree file
     let xpub = accountXPubKey ctx acc
         net = accountNetwork acc
@@ -654,7 +654,7 @@ cmdExportAcc ctx nameM file =
 cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
 cmdDeleteTx ctx nameM nosigH =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     (coins, addrs) <- deletePendingTx net ctx accId nosigH
     return $ ResponseDeleteTx coins addrs
@@ -670,30 +670,30 @@ cmdAccounts nameM =
   runDB $ do
     case nameM of
       Just _ -> do
-        acc <- getAccountVal nameM
+        (_, acc) <- getAccountByName nameM
         return $ ResponseAccounts [acc]
       _ -> do
-        accs <- lift getAccountsVal
-        return $ ResponseAccounts accs
+        accs <- lift getAccounts
+        return $ ResponseAccounts $ snd <$> accs
 
 cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx nameM labelM =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     addr <- genExtAddress ctx accId $ fromMaybe "" labelM
     return $ ResponseReceive acc addr
 
 cmdAddrs :: Maybe Text -> Page -> IO Response
 cmdAddrs nameM page =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     as <- lift $ addressPage accId page
     return $ ResponseAddresses acc as
 
 cmdLabel :: Maybe Text -> Natural -> Text -> IO Response
 cmdLabel nameM idx lab =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseLabel acc adr
 
@@ -715,7 +715,7 @@ cmdPrepareTx ::
   IO Response
 cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
@@ -737,7 +737,7 @@ cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
 cmdPendingTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx nameM page =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsds <- pendingTxPage accId page
@@ -752,7 +752,7 @@ cmdPendingTxs ctx nameM page =
 cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx nameM fp =
   runDB $ do
-    acc <- getAccountVal nameM
+    (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
@@ -779,7 +779,7 @@ cmdExportTx nosigH fp =
 cmdImportTx :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx nameM fp =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
@@ -807,12 +807,12 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
       throwError "The transaction is already online"
     when (txSignDataSigned tsd) $
       throwError "The transaction is already signed"
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
     for_ outputM checkPathFree
-    mnem <- askMnemonicPass net ctx splitIn
+    mnem <- askMnemonicPass splitIn
     prvKey <- liftEither $ signingKey net ctx mnem idx
     let pubKey = deriveXPubKey ctx prvKey
     unless (accPub == pubKey) $
@@ -853,7 +853,7 @@ parseSignInput nosigHM inputM outputM =
 cmdCoins :: Maybe Text -> Page -> IO Response
 cmdCoins nameM page =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     coins <- lift $ coinPage accId page
     bestM <- lift $ getBest net
@@ -864,7 +864,7 @@ cmdCoins nameM page =
 cmdSendTx :: Ctx -> Maybe Text -> TxHash -> IO Response
 cmdSendTx ctx nameM nosigH =
   runDB $ do
-    acc <- getAccountVal nameM
+    (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsdM <- lift $ getPendingTx nosigH
@@ -884,7 +884,7 @@ cmdSendTx ctx nameM nosigH =
 cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx nameM full = do
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     -- Check API health
     checkHealth ctx net
@@ -1015,7 +1015,7 @@ searchAddrTxs net ctx confirmedTxs as
 cmdDiscoverAccount :: Ctx -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx nameM = do
   _ <- runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     checkHealth ctx net
@@ -1059,7 +1059,7 @@ prepareSweep ::
   IO Response
 prepareSweep ctx nameM sweepFromT sweepFromFileM sweepToT outputM feeByte dust =
   runDB $ do
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     sweepFromArg <- liftEither $ mapM (textToAddrE net) sweepFromT
@@ -1092,7 +1092,7 @@ signSweep ctx nameM nosigHM inputM outputM keyFile =
       throwError "The transaction is already online"
     when (txSignDataSigned tsd) $
       throwError "The transaction is already signed"
-    (accId, acc) <- getAccount nameM
+    (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     for_ outputM checkPathFree
@@ -1158,13 +1158,8 @@ askMnemonicWords txt = do
       liftIO $ putStrLn "Invalid mnemonic"
       askMnemonicWords txt
 
-askMnemonicPass ::
-  (MonadError String m, MonadIO m) =>
-  Network ->
-  Ctx ->
-  Natural ->
-  m MnemonicPass
-askMnemonicPass net ctx splitIn = do
+askMnemonicPass :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
+askMnemonicPass splitIn = do
   mnm <-
     if splitIn == 1
       then liftIO $ askMnemonicWords "Enter your mnemonic words: "

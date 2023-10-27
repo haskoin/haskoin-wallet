@@ -362,15 +362,31 @@ oAddr' i = othAddrs !! i
 gen :: StdGen
 gen = mkStdGen 0
 
-pwd :: Text
-pwd = "correct horse battery staple"
-
-mnem :: Text
-mnem =
-  "snow senior nerve virus fabric now fringe clip marble interest analyst can"
-
 mnemPass :: MnemonicPass
-mnemPass = MnemonicPass mnem pwd
+mnemPass =
+  MnemonicPass
+    "snow senior nerve virus fabric now \
+    \fringe clip marble interest analyst can"
+    "correct horse battery staple"
+
+mnemPass2 :: MnemonicPass
+mnemPass2 =
+  MnemonicPass
+    "boring auction demand filter frog accuse \
+    \company exchange rely slogan trim typical"
+    "correct horse battery staple"
+
+walletFPText :: Text
+walletFPText = "892eb8e4"
+
+walletFPText2 :: Text
+walletFPText2 = "807a5cfb"
+
+walletFP :: Fingerprint
+walletFP = forceRight $ textToFingerprint walletFPText
+
+walletFP2 :: Fingerprint
+walletFP2 = forceRight $ textToFingerprint walletFPText2
 
 -- Keys for account 0
 keys :: Ctx -> (XPrvKey, XPubKey)
@@ -386,10 +402,18 @@ keys ctx =
         (snd keysT)
   )
 
+-- Account /44'/0'/0' mnemonic 1
 keysT :: (Text, Text)
 keysT =
   ( "xprv9yHxeaLAZvxXb9VtJNesqk8avfN8misGAW9DUW9eacZJNqsfZxqKLmK5jfmvFideQqGesviJeagzSQYCuQySjgvt7TdfowKja5aJqbgyuNh",
     "xpub6CHK45s4QJWpodaMQQBtCt5KUhCdBBb7Xj4pGtZG8x6HFeCp7W9ZtZdZaxA34YtFAhuebiKqLqHLYoB8HDadGutW8kEH4HeMdeS1KJz8Uah"
+  )
+
+-- Account /44'/0'/0' mnemonic 2
+keysT2 :: (Text, Text)
+keysT2 =
+  ( "xprv9yXnZpEVdonEtT3strknsAgso5qq1cwRooo6susmzVmB5E2vvNw1KKRBgvwvNLxXdBHnkEN5R5uXi2QDs3tpkoBbL61NE6bnSbcrvH6keGa",
+    "xpub6CX8yKmPUBLY6w8LztHoEJdcM7gKR5fHB2ihgJHPYqJ9x2N5TvFFs7jfYCX6So9oYyu6eLDTG5dbQWPncv1PYJtXLJ4cwymhoCpeTEmnZFZ"
   )
 
 extAddrs :: [Address]

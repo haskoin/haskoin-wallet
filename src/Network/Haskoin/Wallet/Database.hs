@@ -365,16 +365,16 @@ insertAccount net ctx walletFP name xpub = do
 -- When a name is provided, get that account or throw an error if it doesn't
 -- exist. When no name is provided, return the account only if there is one
 -- account.
-getAccount ::
+getAccountByName ::
   (MonadUnliftIO m) =>
   Maybe Text ->
   ExceptT String (DB m) (DBAccountId, DBAccount)
-getAccount (Just name) = do
+getAccountByName (Just name) = do
   aM <- lift $ P.getBy $ UniqueName name
   case aM of
     Just a -> return (entityKey a, entityVal a)
     _ -> throwError $ "The account " <> cs name <> " does not exist"
-getAccount Nothing = do
+getAccountByName Nothing = do
   as <- lift getAccounts
   case as of
     [a] -> return a
@@ -385,22 +385,16 @@ getAccountById ::
   (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) DBAccount
 getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)
 
-getAccountVal ::
-  (MonadUnliftIO m) => Maybe Text -> ExceptT String (DB m) DBAccount
-getAccountVal nameM = snd <$> getAccount nameM
-
 getAccounts :: (MonadUnliftIO m) => DB m [(DBAccountId, DBAccount)]
 getAccounts =
   (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
   where
     go a = (entityKey a, entityVal a)
 
-getAccountsVal :: (MonadUnliftIO m) => DB m [DBAccount]
-getAccountsVal = (entityVal <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
-
 getAccountNames :: (MonadUnliftIO m) => DB m [Text]
 getAccountNames = do
-  res <- select . from $ \a ->
+  res <- select . from $ \a -> do
+    orderBy [asc $ a ^. DBAccountCreated]
     return $ a ^. DBAccountName
   return $ unValue <$> res
 
@@ -419,7 +413,7 @@ renameAccount oldName newName
               where_ $ a ^. DBAccountName ==. val oldName
           if c == 0
             then throwError $ "The account " <> cs oldName <> " does not exist"
-            else getAccountVal (Just newName)
+            else snd <$> getAccountByName (Just newName)
 
 updateAccountBalances :: (MonadUnliftIO m) => DBAccountId -> DB m DBAccount
 updateAccountBalances accId@(DBAccountKey wallet accDeriv) = do
@@ -865,7 +859,7 @@ txsPage ::
   Page ->
   ExceptT String (DB m) (DBAccount, [TxInfo])
 txsPage ctx nameM (Page lim off) = do
-  (DBAccountKey wallet accDeriv, acc) <- getAccount nameM
+  (DBAccountKey wallet accDeriv, acc) <- getAccountByName nameM
   let net = accountNetwork acc
   dbTxs <-
     lift . select . from $ \t -> do
