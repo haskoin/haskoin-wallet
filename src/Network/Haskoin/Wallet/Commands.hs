@@ -112,6 +112,7 @@ import Network.Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
+import System.Random (initStdGen)
 
 data Response
   = ResponseError
@@ -712,7 +713,8 @@ cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
-    signDat <- buildTxSignData net ctx accId rcpts feeByte dust rcptPay
+    gen <- liftIO initStdGen
+    signDat <- buildTxSignData net ctx gen accId rcpts feeByte dust rcptPay
     txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
     for_ fileM checkPathFree
     nosigHash <- importPendingTx net ctx accId signDat

@@ -92,13 +92,14 @@ buildTxSignData ::
   (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  StdGen ->
   DBAccountId ->
   [(Address, Natural)] ->
   Natural ->
   Natural ->
   Bool ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx accId rcpts feeByte dust rcptPay
+buildTxSignData net ctx gen accId rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
       -- Get all spendable coins in the account
@@ -107,7 +108,6 @@ buildTxSignData net ctx accId rcpts feeByte dust rcptPay
       dbAddr <- nextFreeIntAddr ctx accId
       (change, changeDeriv) <- liftEither $ fromDBAddr net dbAddr
       -- Build a transaction and pick the coins
-      gen <- liftIO initStdGen
       (tx, pickedCoins) <-
         liftEither $
           buildWalletTx net ctx gen rcpts change allCoins feeByte dust rcptPay

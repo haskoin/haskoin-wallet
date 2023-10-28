@@ -593,6 +593,7 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr free = do
   lift $ P.insert_ dbAddr
   return dbAddr
 
+-- This is an internal function
 genNextAddress ::
   (MonadUnliftIO m) =>
   Ctx ->
@@ -1095,6 +1096,9 @@ getRawTx hash = do
 
 {- Pending Transactions -}
 
+data TxOnline = TxOnline | TxOffline
+  deriving (Eq, Show)
+
 -- Returns (TxSignData, isOnline)
 getPendingTx :: (MonadUnliftIO m) => TxHash -> DB m (Maybe (TxSignData, Bool))
 getPendingTx nosigHash = do
@@ -1189,7 +1193,7 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
               throwError "A coin referenced by the transaction is locked"
             lift $ setLockCoin outpoint True
           _ -> throwError "A coin referenced by the transaction does not exist"
-      -- Outputs: verify addresses
+      -- Verify addresses and set internal output addresses to busy
       outIntAddrsT <- mapM (liftMaybe "Addrs" . addrToText net . fst) outIntAddrs
       restAddrsT <- mapM (liftMaybe "Addrs" . addrToText net) restAddrs
       outIntAddrsE <- lift . select . from $ \a -> do

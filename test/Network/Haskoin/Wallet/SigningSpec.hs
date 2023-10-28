@@ -46,10 +46,10 @@ buildWalletTxSpec ctx =
   describe "Transaction builder" $ do
     it "can build a transaction" $ do
       let coins =
-            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 200000000), (oAddr' 1, 200000000)]
@@ -65,10 +65,10 @@ buildWalletTxSpec ctx =
         `shouldBe` Right [coins !! 2, coins !! 1, head coins]
     it "can fail to build a transaction if funds are insufficient" $ do
       let coins =
-            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 500000000)]
@@ -76,10 +76,10 @@ buildWalletTxSpec ctx =
       resE `shouldBe` Left "chooseCoins: No solution found"
     it "will drop the change output if it is dust" $ do
       let coins =
-            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 499990000)]
@@ -109,10 +109,10 @@ buildWalletTxSpec ctx =
           )
     it "will fail if sending dust" $ do
       let coins =
-            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 500000000), (oAddr' 1, 10000)]
@@ -120,10 +120,10 @@ buildWalletTxSpec ctx =
       resE `shouldBe` Left "Recipient output is smaller than the dust value"
     it "can make the recipient pay for the fees" $ do
       let coins =
-            [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-              coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-              coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-              coin' ctx (txid' 1, 3) (addr' 2) 400000000
+            [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+              coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+              coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+              coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
             ]
           change = iAddr' 0
           rcps = [(oAddr' 0, 200000000), (oAddr' 1, 200000000)]
@@ -141,10 +141,10 @@ buildWalletTxSpec ctx =
     it "fails when recipients cannot pay" $
       do
         let coins =
-              [ coin' ctx (txid' 1, 0) (addr' 0) 100000000,
-                coin' ctx (txid' 1, 1) (addr' 1) 200000000,
-                coin' ctx (txid' 1, 2) (addr' 1) 300000000,
-                coin' ctx (txid' 1, 3) (addr' 2) 400000000
+              [ coin' ctx (txid' 1, 0) Nothing (addr' 0) 100000000,
+                coin' ctx (txid' 1, 1) Nothing (addr' 1) 200000000,
+                coin' ctx (txid' 1, 2) Nothing (addr' 1) 300000000,
+                coin' ctx (txid' 1, 3) Nothing (addr' 2) 400000000
               ]
             change = iAddr' 0
             rcps1 = [(oAddr' 0, 400000000), (oAddr' 1, 87291)] -- fee is 2*87292
@@ -328,19 +328,27 @@ tx' ctx xs ys = Tx 1 txi txo [] 0
 
 txid' :: Word8 -> TxHash
 txid' w =
-  fromRight undefined $ S.decode $ w `BS.cons` BS.replicate 31 0x00
+  fromRight (error "Could not decode txhash") $
+    S.decode $
+      w `BS.cons` BS.replicate 31 0x00
 
 bid' :: Word8 -> BlockHash
 bid' w =
-  fromMaybe (error "Could not decode block hash") $
-    hexToBlockHash $
-      cs $
-        w `BS.cons` BS.replicate 31 0x00
+  fromRight (error "Could not decode block hash") $
+    S.decode $
+      w `BS.cons` BS.replicate 31 0x00
 
-coin' :: Ctx -> (TxHash, Word32) -> Address -> Natural -> Store.Unspent
-coin' ctx (h, p) a v =
+coin' ::
+  Ctx ->
+  (TxHash, Word32) ->
+  Maybe Natural ->
+  Address ->
+  Natural ->
   Store.Unspent
-    { Store.block = Store.MemRef 0,
+coin' ctx (h, p) hM a v =
+  Store.Unspent
+    { Store.block =
+        maybe (Store.MemRef 0) ((`Store.BlockRef` 0) . fromIntegral) hM,
       Store.outpoint = OutPoint h p,
       Store.value = fromIntegral v,
       Store.script = marshal ctx $ PayPKHash $ (.hash160) a,
