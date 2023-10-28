@@ -692,7 +692,8 @@ cmdLabel nameM idx lab =
 cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdTxs ctx nameM page =
   runDB $ do
-    (acc, txInfos) <- txsPage ctx nameM page
+    (accId, acc) <- getAccountByName nameM
+    txInfos <- txsPage ctx accId page
     return $ ResponseTxs acc txInfos
 
 cmdPrepareTx ::
@@ -855,11 +856,8 @@ cmdCoins nameM page =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-    coins <- lift $ coinPage accId page
-    bestM <- lift $ getBest net
-    let best = maybe 0 snd bestM
-    jsonCoins <- mapM (liftEither . toJsonCoin net best) coins
-    return $ ResponseCoins acc jsonCoins
+    coins <- coinPage net accId page
+    return $ ResponseCoins acc coins
 
 cmdSendTx :: Ctx -> Maybe Text -> TxHash -> IO Response
 cmdSendTx ctx nameM nosigH =
@@ -923,7 +921,7 @@ cmdSyncAcc ctx nameM full = do
     Store.SerialList storeCoins <-
       liftExcept . apiBatch ctx coinBatch (conf net) $
         GetAddrsUnspent addrsToUpdate def
-    (coinCount, newCoins) <- updateCoins net accId addrsToUpdate storeCoins
+    (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
     -- Get the dependent tranactions of the new coins
     depTxsHash <-
       if full

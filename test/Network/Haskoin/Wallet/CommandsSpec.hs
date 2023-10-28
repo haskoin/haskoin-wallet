@@ -1,6 +1,8 @@
+{-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
-{-# OPTIONS_GHC -fno-warn-orphans #-}
+{-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
 
 module Network.Haskoin.Wallet.CommandsSpec where
 
@@ -25,7 +27,8 @@ import Data.Serialize (encode)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Word (Word32, Word8)
+import qualified Data.Text as Text
+import Data.Word (Word32, Word64, Word8)
 import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
@@ -68,6 +71,8 @@ spec =
       accountSpec ctx
       extAddressSpec ctx
       intAddressSpec ctx
+      txsSpec ctx
+      coinSpec ctx
 
 liftTest :: (MonadIO m) => Expectation -> m ()
 liftTest = liftIO
@@ -266,10 +271,12 @@ extAddressSpec ctx =
       discoverAccGenAddrs ctx accId AddrExternal 26
       lift $ addressPage accId (Page 100 0) `dbShouldSatisfy` ((== 26) . length)
       -- Test getAddrDeriv
-      lift $ getAddrDeriv btc accId (head extAddrs)
-        `dbShouldBe` Right (Deriv :/ 0 :/ 0)
-      lift $ getAddrDeriv btc accId (extAddrs !! 7)
-        `dbShouldBe` Right (Deriv :/ 0 :/ 7)
+      lift $
+        getAddrDeriv btc accId (head extAddrs)
+          `dbShouldBe` Right (Deriv :/ 0 :/ 0)
+      lift $
+        getAddrDeriv btc accId (extAddrs !! 7)
+          `dbShouldBe` Right (Deriv :/ 0 :/ 7)
       -- Test accound balances
       acc1 <- lift $ updateAccountBalances accId
       liftTest $ do
@@ -336,3 +343,188 @@ intAddressSpec ctx =
       liftTest $ do
         dBAccountInternal acc `shouldBe` 7
         dBAccountExternal acc `shouldBe` 0
+
+zeroTxHash :: TxHash
+zeroTxHash = fromJust $ hexToTxHash $ Text.replicate 32 "00"
+
+zeroBlockHash :: BlockHash
+zeroBlockHash = fromJust $ hexToBlockHash $ Text.replicate 32 "00"
+
+emptyTxInfo :: TxInfo
+emptyTxInfo =
+  TxInfo
+    zeroTxHash
+    TxInternal
+    0
+    Map.empty
+    Map.empty
+    []
+    Map.empty
+    Map.empty
+    []
+    0
+    0
+    0
+    (Store.MemRef 0)
+    0
+
+txsSpec :: Ctx -> Spec
+txsSpec ctx =
+  it "can manage transactions" $ do
+    runDBMemoryE $ do
+      (accId, _) <- testNewAcc ctx "test"
+      -- Simple insert and retrieval
+      (dbInfo, change) <- lift $ repsertTxInfo btc ctx accId emptyTxInfo
+      liftTest $ do
+        change `shouldBe` True
+        dBTxInfoAccountWallet dbInfo `shouldBe` DBWalletKey walletFPText
+        dBTxInfoAccountDerivation dbInfo `shouldBe` "/44'/0'/0'"
+        dBTxInfoBlockRef dbInfo `shouldBe` encode (Store.MemRef 0)
+        dBTxInfoConfirmed dbInfo `shouldBe` False
+      -- Reinserting should produce no change
+      (dbInfo2, change2) <- lift $ repsertTxInfo btc ctx accId emptyTxInfo
+      liftTest $ do
+        change2 `shouldBe` False
+        dbInfo2 `shouldBe` dbInfo
+      txsPage ctx accId (Page 5 0) `dbShouldBeE` [emptyTxInfo]
+      -- Check that confirmations are updated correctly
+      lift $ updateBest btc zeroBlockHash 0
+      getConfirmedTxs accId True `dbShouldBeE` []
+      getConfirmedTxs accId False `dbShouldBeE` [zeroTxHash]
+      txsPage ctx accId (Page 5 0) `dbShouldBeE` [emptyTxInfo]
+      (dbInfo', change') <-
+        lift $
+          repsertTxInfo
+            btc
+            ctx
+            accId
+            emptyTxInfo {txInfoBlockRef = Store.BlockRef 0 0}
+      liftTest $ do
+        change' `shouldBe` True
+        dBTxInfoBlockRef dbInfo' `shouldBe` encode (Store.BlockRef 0 0)
+        dBTxInfoConfirmed dbInfo' `shouldBe` True
+        dBTxInfoCreated dbInfo' `shouldBe` dBTxInfoCreated dbInfo
+      txsPage ctx accId (Page 5 0)
+        `dbShouldBeE` [ emptyTxInfo
+                          { txInfoBlockRef = Store.BlockRef 0 0,
+                            txInfoConfirmations = 1
+                          }
+                      ]
+      getConfirmedTxs accId True `dbShouldBeE` [zeroTxHash]
+      getConfirmedTxs accId False `dbShouldBeE` []
+      lift $ updateBest btcTest zeroBlockHash 10
+      lift $ updateBest btc zeroBlockHash 20
+      txsPage ctx accId (Page 5 0)
+        `dbShouldBeE` [ emptyTxInfo
+                          { txInfoBlockRef = Store.BlockRef 0 0,
+                            txInfoConfirmations = 21
+                          }
+                      ]
+      (dbInfo'', change'') <-
+        lift $
+          repsertTxInfo
+            btc
+            ctx
+            accId
+            emptyTxInfo {txInfoBlockRef = Store.BlockRef 10 0}
+      liftTest $ do
+        change'' `shouldBe` True
+        dBTxInfoBlockRef dbInfo'' `shouldBe` encode (Store.BlockRef 10 0)
+        dBTxInfoConfirmed dbInfo'' `shouldBe` True
+      txsPage ctx accId (Page 5 0)
+        `dbShouldBeE` [ emptyTxInfo
+                          { txInfoBlockRef = Store.BlockRef 10 0,
+                            txInfoConfirmations = 11
+                          }
+                      ]
+
+mkCoin :: Word32 -> Store.BlockRef -> Word64 -> Address -> Store.Unspent
+mkCoin p bref v a = Store.Unspent bref (OutPoint zeroTxHash p) v "" (Just a)
+
+mkJsonCoin :: Word32 -> Store.BlockRef -> Word64 -> Address -> JsonCoin
+mkJsonCoin p bref v a = JsonCoin (OutPoint zeroTxHash p) a v bref 0 False
+
+coinSpec :: Ctx -> Spec
+coinSpec ctx =
+  it "can manage coins" $ do
+    runDBMemoryE $ do
+      (accId, _) <- testNewAcc ctx "test"
+      -- Insert a single coin
+      let coin1 = mkCoin 0 (Store.MemRef 0) 10 (head extAddrs)
+          jsonCoin1 = mkJsonCoin 0 (Store.MemRef 0) 10 (head extAddrs)
+      (c, dbCoin) <- second head <$> refreshCoins btc accId extAddrs [coin1]
+      liftTest $ do
+        c `shouldBe` 1
+        dBCoinAccountWallet dbCoin `shouldBe` DBWalletKey walletFPText
+        dBCoinAccountDerivation dbCoin `shouldBe` "/44'/0'/0'"
+        dBCoinAddress dbCoin `shouldBe` head extAddrsT
+        dBCoinConfirmed dbCoin `shouldBe` False
+        dBCoinLocked dbCoin `shouldBe` False
+      coinPage btc accId (Page 5 0) `dbShouldBeE` [jsonCoin1]
+      getSpendableCoins accId `dbShouldBeE` []
+      -- Nothing should happen when refreshing the same data
+      refreshCoins btc accId extAddrs [coin1] `dbShouldBeE` (0, [])
+      -- Confirm and update the coin
+      let coin1' = coin1{ Store.block = Store.BlockRef 1 0 } :: Store.Unspent
+      refreshCoins btc accId extAddrs [coin1'] `dbShouldBeE` (1, [])
+      getSpendableCoins accId `dbShouldBeE` [coin1']
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 1 0,
+                            jsonCoinConfirmations = 1
+                          }
+                      ]
+      lift $ updateBest btc zeroBlockHash 0
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 1 0,
+                            jsonCoinConfirmations = 1
+                          }
+                      ]
+      lift $ updateBest btc zeroBlockHash 1
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 1 0,
+                            jsonCoinConfirmations = 1
+                          }
+                      ]
+      lift $ updateBest btc zeroBlockHash 10
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 1 0,
+                            jsonCoinConfirmations = 10
+                          }
+                      ]
+      let coin1'' = coin1{ Store.block = Store.BlockRef 10 0 } :: Store.Unspent
+      refreshCoins btc accId extAddrs [coin1''] `dbShouldBeE` (1, [])
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 10 0,
+                            jsonCoinConfirmations = 1
+                          }
+                      ]
+      -- Lock the coin
+      lift $ setLockCoin (OutPoint zeroTxHash 0) True `dbShouldBe` 1
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 10 0,
+                            jsonCoinConfirmations = 1,
+                            jsonCoinLocked = True
+                          }
+                      ]
+      getSpendableCoins accId `dbShouldBeE` []
+      lift $ setLockCoin (OutPoint zeroTxHash 0) True `dbShouldBe` 0
+      lift $ setLockCoin (OutPoint zeroTxHash 0) False `dbShouldBe` 1
+      lift $ setLockCoin (OutPoint zeroTxHash 0) False `dbShouldBe` 0
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin1
+                          { jsonCoinBlock = Store.BlockRef 10 0,
+                            jsonCoinConfirmations = 1,
+                            jsonCoinLocked = False
+                          }
+                      ]
+      getSpendableCoins accId `dbShouldBeE` [coin1'']
+      -- Delete the coin
+      refreshCoins btc accId extAddrs [] `dbShouldBeE` (1, [])
+      getSpendableCoins accId `dbShouldBeE` []
+      coinPage btc accId (Page 5 0) `dbShouldBeE` []

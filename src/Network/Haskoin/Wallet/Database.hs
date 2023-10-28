@@ -621,7 +621,7 @@ checkGap ::
   ExceptT String (DB m) ()
 checkGap accId addrIdx addrType = do
   usedIdxM <- lift $ bestAddrWithFunds accId addrType
-  let usedIdx = maybe 0 (+1) usedIdxM
+  let usedIdx = maybe 0 (+ 1) usedIdxM
   when (addrIdx >= usedIdx + gap) $
     throwError $
       "Can not generate addresses beyond the gap of " <> show gap
@@ -790,10 +790,6 @@ getAddrDeriv net (DBAccountKey wallet accDeriv) addr =
 
 {- Transactions -}
 
-existsTx :: (MonadUnliftIO m) => DBAccountId -> TxHash -> DB m Bool
-existsTx (DBAccountKey wallet accDeriv) txid =
-  isJust <$> P.get (DBTxInfoKey wallet accDeriv $ txHashToHex txid)
-
 getConfirmedTxs ::
   (MonadUnliftIO m) => DBAccountId -> Bool -> ExceptT String (DB m) [TxHash]
 getConfirmedTxs (DBAccountKey wallet accDeriv) confirm = do
@@ -855,11 +851,11 @@ repsertTxInfo net ctx accId tif = do
 txsPage ::
   (MonadUnliftIO m) =>
   Ctx ->
-  Maybe Text ->
+  DBAccountId ->
   Page ->
-  ExceptT String (DB m) (DBAccount, [TxInfo])
-txsPage ctx nameM (Page lim off) = do
-  (DBAccountKey wallet accDeriv, acc) <- getAccountByName nameM
+  ExceptT String (DB m) [TxInfo]
+txsPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+  acc <- getAccountById accId
   let net = accountNetwork acc
   dbTxs <-
     lift . select . from $ \t -> do
@@ -876,20 +872,17 @@ txsPage ctx nameM (Page lim off) = do
         unmarshalJSON (net, ctx) $
           BS.fromStrict dbTx
   bestM <- lift $ getBest net
-  case bestM of
-    Just (_, h) -> return (acc, updateConfirmations h <$> res)
-    _ -> return (acc, res)
+  return $ updateConfirmations (snd <$> bestM) <$> res
+  where
+    updateConfirmations bestM tif =
+      tif {txInfoConfirmations = getConfirmations bestM (txInfoBlockRef tif)}
 
-updateConfirmations :: BlockHeight -> TxInfo -> TxInfo
-updateConfirmations best tif =
-  case txInfoBlockRef tif of
-    Store.BlockRef h _ ->
-      let bestI = toInteger best :: Integer
-          hI = toInteger h :: Integer
-          confI = bestI - hI + 1
-       in tif {txInfoConfirmations = fromIntegral $ max 0 confI}
-    Store.MemRef _ ->
-      tif {txInfoConfirmations = 0}
+getConfirmations :: Maybe BlockHeight -> Store.BlockRef -> Natural
+getConfirmations _ (Store.MemRef _) = 0
+getConfirmations Nothing (Store.BlockRef _ _) = 1
+getConfirmations (Just best) (Store.BlockRef height _)
+  | best < height = 1
+  | otherwise = fromIntegral $ best - height + 1
 
 {- Coins -}
 
@@ -923,21 +916,15 @@ instance MarshalJSON Network JsonCoin where
         <*> o .: "confirmations"
         <*> o .: "locked"
 
-toJsonCoin :: Network -> BlockHeight -> DBCoin -> Either String JsonCoin
-toJsonCoin net bestHeight dbCoin = do
+toJsonCoin :: Network -> Maybe BlockHeight -> DBCoin -> Either String JsonCoin
+toJsonCoin net bestM dbCoin = do
   op <- textToOutpoint $ dBCoinOutpoint dbCoin
   ad <-
     maybeToEither "toJsonCoin: Invalid address" $
       textToAddr net $
         dBCoinAddress dbCoin
   br <- decode $ dBCoinBlockRef dbCoin
-  let confirmations =
-        case br of
-          Store.BlockRef h _ ->
-            if bestHeight < fromIntegral h
-              then 0
-              else fromIntegral bestHeight - fromIntegral h + 1
-          Store.MemRef _ -> 0
+  let confirmations = getConfirmations bestM br
   return $
     JsonCoin
       { jsonCoinOutpoint = op,
@@ -957,10 +944,15 @@ textToOutpoint t = do
   decode bs
 
 -- Get all coins in an account, spendable or not
-coinPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBCoin]
-coinPage (DBAccountKey wallet accDeriv) (Page lim off) = do
+coinPage ::
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  Page ->
+  ExceptT String (DB m) [JsonCoin]
+coinPage net (DBAccountKey wallet accDeriv) (Page lim off) = do
   coins <-
-    select . from $ \c -> do
+    lift . select . from $ \c -> do
       where_ $ do
         c ^. DBCoinAccountWallet ==. val wallet
           &&. c ^. DBCoinAccountDerivation ==. val accDeriv
@@ -968,7 +960,8 @@ coinPage (DBAccountKey wallet accDeriv) (Page lim off) = do
       limit $ fromIntegral lim
       offset $ fromIntegral off
       return c
-  return $ entityVal <$> coins
+  bestM <- lift $ getBest net
+  mapM (liftEither . toJsonCoin net (snd <$> bestM) . entityVal) coins
 
 -- Spendable coins must be confirmed and not locked
 getSpendableCoins ::
@@ -1031,16 +1024,17 @@ getCoinsByAddr addr = do
     return c
   return $ entityVal <$> coins
 
+-- This is the main coin function
 -- Either insert, update or delete coins as required. Returns the number of
 -- coins that have either been inserted, updated or deleted.
-updateCoins ::
+refreshCoins ::
   (MonadUnliftIO m) =>
   Network ->
   DBAccountId ->
   [Address] ->
   [Store.Unspent] ->
   ExceptT String (DB m) (Int, [DBCoin])
-updateCoins net accId addrsToUpdate allUnspent = do
+refreshCoins net accId addrsToUpdate allUnspent = do
   let storeMap = groupCoins net allUnspent
   addrsToUpdateE <-
     mapM (liftEither . maybeToEither "Addr" . addrToText net) addrsToUpdate
@@ -1062,7 +1056,7 @@ updateCoins net accId addrsToUpdate allUnspent = do
     f localCoins s =
       let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins
        in case cM of
-            Just c -> dBCoinConfirmed c /= confirmed s.block
+            Just c -> dBCoinBlockRef c /= encode s.block
             _ -> False
 
 groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
@@ -1078,7 +1072,9 @@ setLockCoin :: (MonadUnliftIO m) => OutPoint -> Bool -> DB m Natural
 setLockCoin op locked = do
   cnt <- updateCount $ \c -> do
     set c [DBCoinLocked =. val locked]
-    where_ $ c ^. DBCoinOutpoint ==. val (outpointText op)
+    where_ $
+      c ^. DBCoinOutpoint ==. val (outpointText op)
+        &&. c ^. DBCoinLocked ==. val (not locked)
   return $ fromIntegral cnt
 
 {- Raw Transactions -}
