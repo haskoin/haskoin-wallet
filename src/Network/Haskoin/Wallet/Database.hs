@@ -957,7 +957,7 @@ coinPage net (DBAccountKey wallet accDeriv) (Page lim off) = do
       where_ $ do
         c ^. DBCoinAccountWallet ==. val wallet
           &&. c ^. DBCoinAccountDerivation ==. val accDeriv
-      orderBy [asc (c ^. DBCoinBlockRef)]
+      orderBy [asc (c ^. DBCoinBlockRef), desc (c ^. DBCoinCreated)]
       limit $ fromIntegral lim
       offset $ fromIntegral off
       return c

@@ -48,6 +48,7 @@ import Network.Haskoin.Wallet.SigningSpec
     iAddr',
     intAddrs,
     intAddrsT,
+    keys,
     keysT,
     keysT2,
     mnemPass,
@@ -90,6 +91,11 @@ liftTest = liftIO
 
 shouldBeLeft :: (Show a) => ExceptT String (DB IO) a -> DB IO ()
 shouldBeLeft action = liftTest . (`shouldSatisfy` isLeft) =<< runExceptT action
+
+shouldBeLeft' ::
+  (Show a, Eq a) => String -> ExceptT String (DB IO) a -> DB IO ()
+shouldBeLeft' err action =
+  liftTest . (`shouldBe` Left err) =<< runExceptT action
 
 dbShouldBe :: (Show a, Eq a) => DB IO a -> a -> DB IO ()
 dbShouldBe action a = liftTest . (`shouldBe` a) =<< action
@@ -588,12 +594,204 @@ pendingTxsSpec ctx =
               txSignDataSigned = False
             }
       -- Import the pending transaction
-      importPendingTx btc ctx accId tsd
-        `dbShouldBeE` nosigTxHash (txSignDataTx tsd)
+      checkFree 0 False
+      checkFree 1 True
+      let h1 = "db1085753d1d9b14005dd2951ff643803d4fa7ffa3bde6841dbb817958cb74e1"
+      importPendingTx btc ctx accId tsd `dbShouldBeE` h1
+      liftTest $ nosigTxHash (txSignDataTx tsd) `shouldBe` h1
       -- Check locked coins
       coinPage btc accId (Page 5 0)
-        `dbShouldBeE` [ jsonCoin1 {jsonCoinLocked = True},
-                        jsonCoin2 {jsonCoinLocked = False}
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
+                        jsonCoin1 {jsonCoinLocked = True}
                       ]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h1, tsd)]
       -- Check address free status
+      checkFree 0 False
       checkFree 1 False
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 2
+      lift $
+        shouldBeLeft' "chooseCoins: No solution found" $
+          buildTxSignData btc ctx gen accId [(oAddr' 1, 12)] 0 0 False
+      lift $
+        shouldBeLeft' "The transaction already exists" $
+          importPendingTx btc ctx accId tsd
+      -- Create second pending transaction
+      tsd2 <- buildTxSignData btc ctx gen accId [(oAddr' 1, 7)] 0 0 False
+      liftTest $
+        tsd2
+          `shouldBe` TxSignData
+            { txSignDataTx =
+                tx'
+                  ctx
+                  [(txHash fundTx2, 0)]
+                  [(iAddr' 2, 3), (oAddr' 1, 7)],
+              txSignDataInputs = [fundTx2],
+              txSignDataInputPaths = [Deriv :/ 1 :/ 0],
+              txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
+              txSignDataSigned = False
+            }
+      -- Import the second transaction
+      checkFree 2 True
+      let h2 = "bb0e46f95f90bf0d2b0805655a77e632a0bd5088d5722d0055bc2862158ba747"
+      importPendingTx btc ctx accId tsd2 `dbShouldBeE` h2
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      pendingTxPage accId (Page 5 0)
+        `dbShouldBeE` [(h2, tsd2), (h1, tsd)]
+      checkFree 0 False
+      checkFree 1 False
+      checkFree 2 False
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 3
+      lift $
+        shouldBeLeft' "chooseCoins: No solution found" $
+          buildTxSignData btc ctx gen accId [(oAddr' 2, 1)] 0 0 False
+      -- Delete first transaction
+      deletePendingTx btc ctx accId h1 `dbShouldBeE` (1, 1)
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+                        jsonCoin1 {jsonCoinLocked = False}
+                      ]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h2, tsd2)]
+      checkFree 0 False
+      checkFree 1 True
+      checkFree 2 False
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 1
+      -- Create transaction with no change
+      tsd3 <- buildTxSignData btc ctx gen accId [(oAddr' 2, 20)] 0 0 False
+      liftTest $
+        tsd3
+          `shouldBe` TxSignData
+            { txSignDataTx =
+                tx'
+                  ctx
+                  [(txHash fundTx1, 0)]
+                  [(oAddr' 2, 20)],
+              txSignDataInputs = [fundTx1],
+              txSignDataInputPaths = [Deriv :/ 0 :/ 0],
+              txSignDataOutputPaths = [],
+              txSignDataSigned = False
+            }
+      let h3 = "abe82b09dddb8abdb5490c3d404d34f2ff3c8f7b893bbe80f0af4018576e1f9e"
+      importPendingTx btc ctx accId tsd3 `dbShouldBeE` h3
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      pendingTxPage accId (Page 5 0)
+        `dbShouldBeE` [(h3, tsd3), (h2, tsd2)]
+      checkFree 0 False
+      checkFree 1 True
+      checkFree 2 False
+      (dBAddressIndex <$> nextFreeIntAddr ctx accId) `dbShouldBeE` 1
+      -- Import a signed transaction
+      let resE = signWalletTx btc ctx tsd2 (fst $ keys ctx)
+      liftTest $ resE `shouldSatisfy` isRight
+      let tsd2' = fst $ forceRight resE
+      liftTest $ txSignDataSigned tsd2' `shouldBe` True
+      importPendingTx btc ctx accId tsd2' `dbShouldBeE` h2
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      pendingTxPage accId (Page 5 0)
+        `dbShouldBeE` [(h3, tsd3), (h2, tsd2')]
+      checkFree 0 False
+      checkFree 1 True
+      checkFree 2 False
+      lift $ do
+        shouldBeLeft' "The transaction already exists" $
+          importPendingTx btc ctx accId tsd2'
+        shouldBeLeft' "Can not replace a signed transaction with an unsigned one" $
+          importPendingTx btc ctx accId tsd2
+      -- Set tsd2 to online
+      lift $ do
+        setPendingTxOnline h2 `dbShouldBe` 1
+        shouldBeLeft' "The transaction is already online" $
+          importPendingTx btc ctx accId tsd2'
+        -- Can not delete an online transaction
+        shouldBeLeft $ deletePendingTx btc ctx accId h2
+      lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex h2
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h3, tsd3)]
+      checkFree 0 False
+      checkFree 1 True
+      checkFree 2 False
+      -- Check for other errors
+      let fundTx3 = tx' ctx [(txid' 2, 0)] [(addr' 8, 30)]
+          coin3 = coin' ctx (txHash fundTx3, 0) (Just 0) (addr' 8) 30
+      lift $ do
+        shouldBeLeft' "A coin referenced by the transaction is locked" $
+          importPendingTx btc ctx accId $
+            TxSignData
+              { txSignDataTx =
+                  tx'
+                    ctx
+                    [(txHash fundTx1, 0)]
+                    [(oAddr' 3, 20)],
+                txSignDataInputs = [fundTx3, fundTx1],
+                txSignDataInputPaths = [Deriv :/ 0 :/ 0],
+                txSignDataOutputPaths = [],
+                txSignDataSigned = False
+              }
+        shouldBeLeft' "A coin referenced by the transaction does not exist" $
+          importPendingTx btc ctx accId $
+            TxSignData
+              { txSignDataTx =
+                  tx'
+                    ctx
+                    [(txHash fundTx3, 0)]
+                    [(oAddr' 3, 20)],
+                txSignDataInputs = [fundTx3, fundTx1],
+                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
+                txSignDataOutputPaths = [],
+                txSignDataSigned = False
+              }
+      (_, dbCoins3) <- refreshCoins btc accId (extAddrs <> intAddrs) [coin1, coin3]
+      let jsonCoin3 = forceRight $ toJsonCoin btc Nothing (head dbCoins3)
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      lift $
+        shouldBeLeft' "Some referenced addresses do not exist" $
+          importPendingTx btc ctx accId $
+            TxSignData
+              { txSignDataTx =
+                  tx'
+                    ctx
+                    [(txHash fundTx3, 0)]
+                    [(iAddr' 1, 5), (oAddr' 3, 25)],
+                txSignDataInputs = [fundTx3],
+                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
+                txSignDataOutputPaths = [Deriv :/ 1 :/ 1],
+                txSignDataSigned = False
+              }
+      -- The transaction is not being rolled back so we roll it back manually
+      replicateM_ 10 $ genExtAddress ctx accId ""
+      _ <- lift $ setLockCoin (jsonCoinOutpoint jsonCoin3) False
+      coinPage btc accId (Page 5 0)
+        `dbShouldBeE` [ jsonCoin3 {jsonCoinLocked = False},
+                        jsonCoin1 {jsonCoinLocked = True}
+                      ]
+      checkFree 0 False
+      checkFree 1 True
+      checkFree 2 False
+      lift $
+        shouldBeLeft' "Some of the internal output addresses are not free" $
+          importPendingTx btc ctx accId $
+            TxSignData
+              { txSignDataTx =
+                  tx'
+                    ctx
+                    [(txHash fundTx3, 0)]
+                    [(iAddr' 2, 1), (oAddr' 3, 25)],
+                txSignDataInputs = [fundTx3],
+                txSignDataInputPaths = [Deriv :/ 0 :/ 8],
+                txSignDataOutputPaths = [Deriv :/ 1 :/ 2],
+                txSignDataSigned = False
+              }
