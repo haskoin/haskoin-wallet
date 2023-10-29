@@ -20,6 +20,7 @@
 
 module Network.Haskoin.Wallet.Database where
 
+import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (Arrow (second), (&&&))
 import Control.Exception (try)
@@ -595,7 +596,7 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr free = do
 
 -- This is an internal function
 genNextAddress ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Ctx ->
   DBAccountId ->
   AddrType ->
@@ -615,15 +616,16 @@ genNextAddress ctx accId addrType addrFree = do
   return dbAddr
 
 checkGap ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   DBAccountId ->
   Int ->
   AddrType ->
   ExceptT String (DB m) ()
 checkGap accId addrIdx addrType = do
+  gap <- lift . lift $ asks configGap
   usedIdxM <- lift $ bestAddrWithFunds accId addrType
   let usedIdx = maybe 0 (+ 1) usedIdxM
-  when (addrIdx >= usedIdx + gap) $
+  when (addrIdx >= usedIdx + fromIntegral gap) $
     throwError $
       "Can not generate addresses beyond the gap of " <> show gap
 
@@ -642,7 +644,7 @@ bestAddrWithFunds (DBAccountKey wallet accDeriv) addrType = do
 
 -- Generate the discovered external and internal addresses
 discoverAccGenAddrs ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Ctx ->
   DBAccountId ->
   AddrType ->
@@ -655,7 +657,7 @@ discoverAccGenAddrs ctx accId addrType newAddrCnt = do
   replicateM_ cnt $ genNextAddress ctx accId addrType AddrBusy
 
 genExtAddress ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Ctx ->
   DBAccountId ->
   Text ->
@@ -680,7 +682,7 @@ setAddrLabel accId@(DBAccountKey wallet accDeriv) idx label = do
   lift $ P.updateGet aKey [DBAddressLabel P.=. label]
 
 nextFreeIntAddr ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Ctx ->
   DBAccountId ->
   ExceptT String (DB m) DBAddress

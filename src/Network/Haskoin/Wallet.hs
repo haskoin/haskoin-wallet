@@ -8,12 +8,14 @@ import Haskoin.Util (MarshalJSON (..))
 import Network.Haskoin.Wallet.Commands
 import Network.Haskoin.Wallet.Parser
 import Network.Haskoin.Wallet.Util (encodeJsonPretty)
+import Network.Haskoin.Wallet.Config
 
 clientMain :: IO ()
 clientMain =
   withContext $ \ctx -> do
+    cfg <- initConfig
     cmd <- parserMain
-    res <- commandResponse ctx cmd
+    res <- commandResponse ctx cfg cmd
     jsonPrinter ctx res
 
 jsonPrinter :: Ctx -> Response -> IO ()

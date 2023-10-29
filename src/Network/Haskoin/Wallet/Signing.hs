@@ -5,6 +5,7 @@
 
 module Network.Haskoin.Wallet.Signing where
 
+import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (second)
 import Control.Monad (forM, unless, void, when, (<=<))
@@ -89,7 +90,7 @@ import System.Random (Random (randomR), StdGen, initStdGen)
 {- Building Transactions -}
 
 buildTxSignData ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Network ->
   Ctx ->
   StdGen ->
@@ -258,7 +259,7 @@ noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 {- Transaction Sweeping -}
 
 buildSweepSignData ::
-  (MonadUnliftIO m) =>
+  (MonadUnliftIO m, MonadReader Config m) =>
   Network ->
   Ctx ->
   DBAccountId ->
@@ -271,9 +272,11 @@ buildSweepSignData net ctx accId sweepFrom sweepTo feeByte dust
   | null sweepFrom = throwError "No addresses to sweep from"
   | null sweepTo = throwError "No addresses to sweep to"
   | otherwise = do
+      cfg <- lift . lift $ ask
+      let host = apiHostCfg net cfg
       -- Get the unspent coins of the sweepFrom addresses
       Store.SerialList coins <-
-        liftExcept . apiBatch ctx coinBatch (conf net) $
+        liftExcept . apiBatch ctx (configCoinBatch cfg) host $
           GetAddrsUnspent sweepFrom def {limit = Just 0}
       when (null coins) $
         throwError "There are no coins to sweep in those addresses"
@@ -283,7 +286,7 @@ buildSweepSignData net ctx accId sweepFrom sweepTo feeByte dust
       -- Get the dependent transactions
       let depTxHash = (.hash) . (.outpoint) <$> (.inputs) tx
       Store.RawResultList depTxs <-
-        liftExcept . apiBatch ctx txFullBatch (conf net) $
+        liftExcept . apiBatch ctx (configTxFullBatch cfg) host $
           GetTxsRaw depTxHash
       -- Check if any of the coins belong to us
       inDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepFrom)

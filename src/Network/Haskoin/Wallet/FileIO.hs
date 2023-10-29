@@ -16,12 +16,6 @@ import Control.Monad.Except
   )
 import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
 import Data.Aeson
-import Data.Aeson
-  ( object,
-    withObject,
-    (.:),
-    (.=),
-  )
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString.Char8 as C8
 import qualified Data.ByteString.Short as BSS

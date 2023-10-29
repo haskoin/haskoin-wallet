@@ -4,6 +4,7 @@
 
 module Network.Haskoin.Wallet.Entropy where
 
+import Control.Monad.IO.Class (MonadIO)
 import Control.Monad (replicateM, unless, when)
 import Control.Monad.Except
   ( ExceptT,
@@ -183,10 +184,11 @@ getDiceEntropy ent = do
 
 -- Generate a mnemonic with optional dice entropy and key splitting
 genMnemonic ::
+  (MonadIO m) =>
   Natural ->
   Bool ->
   Natural ->
-  ExceptT String IO (Text, Mnemonic, [Mnemonic])
+  ExceptT String m (Text, Mnemonic, [Mnemonic])
 genMnemonic reqEnt reqDice splitIn
   | splitIn == 0 = throwError "Invalid split option"
   | reqEnt `elem` [16, 20 .. 32] = do

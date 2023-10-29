@@ -110,13 +110,6 @@ dbShouldBeE action a = liftTest . (`shouldBe` a) =<< action
 dbShouldSatisfy :: (Show a) => DB IO a -> (a -> Bool) -> DB IO ()
 dbShouldSatisfy action f = liftTest . (`shouldSatisfy` f) =<< action
 
-dbShouldSatisfyE ::
-  (Show a) =>
-  ExceptT String (DB IO) a ->
-  (a -> Bool) ->
-  ExceptT String (DB IO) ()
-dbShouldSatisfyE action f = liftTest . (`shouldSatisfy` f) =<< action
-
 testNewAcc :: Ctx -> Text -> ExceptT String (DB IO) (DBAccountId, DBAccount)
 testNewAcc ctx name = do
   let fp = forceRight $ walletFingerprint btc ctx mnemPass

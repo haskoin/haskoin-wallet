@@ -19,7 +19,7 @@ import Control.Monad.Except
     liftEither,
     runExceptT,
   )
-import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.Reader (MonadIO (..), MonadReader, MonadTrans (lift), ReaderT, ask, asks, runReaderT)
 import Control.Monad.State (MonadState (get), gets, modify)
 import Data.Aeson (object, (.:), (.:?), (.=))
 import qualified Data.Aeson as Json
@@ -545,57 +545,64 @@ catchResponseError m = do
     Left err -> return $ ResponseError $ cs err
     Right res -> return res
 
-commandResponse :: Ctx -> Command -> IO Response
-commandResponse ctx =
-  \case
-    -- Mnemonic and account management
-    CommandMnemonic e d s -> cmdMnemonic e d s
-    CommandCreateAcc t n dM s -> cmdCreateAcc ctx t n dM s
-    CommandTestAcc nameM s -> cmdTestAcc ctx nameM s
-    CommandRenameAcc old new -> cmdRenameAcc old new
-    CommandAccounts nameM -> cmdAccounts nameM
-    -- Address management
-    CommandReceive nameM labM -> cmdReceive ctx nameM labM
-    CommandAddrs nameM p -> cmdAddrs nameM p
-    CommandLabel nameM i l -> cmdLabel nameM i l
-    -- Transaction management
-    CommandTxs nameM p -> cmdTxs ctx nameM p
-    CommandPrepareTx rcpts nameM unit fee dust rcptPay o ->
-      cmdPrepareTx ctx rcpts nameM unit fee dust rcptPay o
-    CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
-    CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
-    CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
-    CommandCoins nameM p -> cmdCoins nameM p
-    -- Import/export commands
-    CommandExportAcc nameM f -> cmdExportAcc ctx nameM f
-    CommandImportAcc f -> cmdImportAcc ctx f
-    CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
-    CommandExportTx h f -> cmdExportTx h f
-    CommandImportTx nameM file -> cmdImportTx ctx nameM file
-    -- Online commands
-    CommandSendTx nameM h -> cmdSendTx ctx nameM h
-    CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
-    CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
-    -- Utilities
-    CommandVersion -> cmdVersion
-    CommandPrepareSweep nameM sf fileM st outputM f d ->
-      prepareSweep ctx nameM sf fileM st outputM f d
-    CommandSignSweep nameM h i o k -> signSweep ctx nameM h i o k
-    CommandRollDice n -> rollDice n
+commandResponse :: Ctx -> Config -> Command -> IO Response
+commandResponse ctx cfg cmd =
+  flip runReaderT cfg $ do
+    case cmd of
+      -- Mnemonic and account management
+      CommandMnemonic e d s -> cmdMnemonic e d s
+      CommandCreateAcc t n dM s -> cmdCreateAcc ctx t n dM s
+      CommandTestAcc nameM s -> cmdTestAcc ctx nameM s
+      CommandRenameAcc old new -> cmdRenameAcc old new
+      CommandAccounts nameM -> cmdAccounts nameM
+      -- Address management
+      CommandReceive nameM labM -> cmdReceive ctx nameM labM
+      CommandAddrs nameM p -> cmdAddrs nameM p
+      CommandLabel nameM i l -> cmdLabel nameM i l
+      -- Transaction management
+      CommandTxs nameM p -> cmdTxs ctx nameM p
+      CommandPrepareTx rcpts nameM unit fee dust rcptPay o ->
+        cmdPrepareTx ctx rcpts nameM unit fee dust rcptPay o
+      CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
+      CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
+      CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
+      CommandCoins nameM p -> cmdCoins nameM p
+      -- Import/export commands
+      CommandExportAcc nameM f -> cmdExportAcc ctx nameM f
+      CommandImportAcc f -> cmdImportAcc ctx f
+      CommandReviewTx nameM file -> cmdReviewTx ctx nameM file
+      CommandExportTx h f -> cmdExportTx h f
+      CommandImportTx nameM file -> cmdImportTx ctx nameM file
+      -- Online commands
+      CommandSendTx nameM h -> cmdSendTx ctx nameM h
+      CommandSyncAcc nameM full -> cmdSyncAcc ctx nameM full
+      CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx nameM
+      -- Utilities
+      CommandVersion -> cmdVersion
+      CommandPrepareSweep nameM sf fileM st outputM f d ->
+        prepareSweep ctx nameM sf fileM st outputM f d
+      CommandSignSweep nameM h i o k -> signSweep ctx nameM h i o k
+      CommandRollDice n -> rollDice n
 
 -- runDB Monad Stack:
--- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT IO)))
+-- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT (ReaderT Config IO))))
 
 liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
 liftEitherIO = liftEither <=< liftIO
 
-cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
+cmdMnemonic :: Natural -> Bool -> Natural -> ReaderT Config IO Response
 cmdMnemonic ent useDice splitIn =
   catchResponseError $ do
     (orig, ms, splitMs) <- genMnemonic ent useDice splitIn
     return $ ResponseMnemonic orig (T.words ms) (T.words <$> splitMs)
 
-cmdCreateAcc :: Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
+cmdCreateAcc ::
+  Ctx ->
+  Text ->
+  Network ->
+  Maybe Natural ->
+  Natural ->
+  ReaderT Config IO Response
 cmdCreateAcc ctx name net derivM splitIn = do
   runDB $ do
     mnem <- askMnemonicPass splitIn
@@ -606,7 +613,7 @@ cmdCreateAcc ctx name net derivM splitIn = do
     (_, acc) <- insertAccount net ctx walletFP name xpub
     return $ ResponseCreateAcc acc
 
-cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
+cmdTestAcc :: Ctx -> Maybe Text -> Natural -> ReaderT Config IO Response
 cmdTestAcc ctx nameM splitIn =
   runDB $ do
     (_, acc) <- getAccountByName nameM
@@ -632,14 +639,14 @@ cmdTestAcc ctx nameM splitIn =
                 "The mnemonic and passphrase did not match the account"
             }
 
-cmdImportAcc :: Ctx -> FilePath -> IO Response
+cmdImportAcc :: Ctx -> FilePath -> ReaderT Config IO Response
 cmdImportAcc ctx fp =
   runDB $ do
     (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
     (_, acc) <- insertAccount net ctx wallet name xpub
     return $ ResponseImportAcc acc
 
-cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> ReaderT Config IO Response
 cmdExportAcc ctx nameM file =
   runDB $ do
     (_, acc) <- getAccountByName nameM
@@ -652,13 +659,13 @@ cmdExportAcc ctx nameM file =
     liftIO $ writeMarshalFile ctx file doc
     return $ ResponseExportAcc acc file
 
-cmdRenameAcc :: Text -> Text -> IO Response
+cmdRenameAcc :: Text -> Text -> ReaderT Config IO Response
 cmdRenameAcc oldName newName =
   runDB $ do
     acc <- renameAccount oldName newName
     return $ ResponseRenameAcc oldName newName acc
 
-cmdAccounts :: Maybe Text -> IO Response
+cmdAccounts :: Maybe Text -> ReaderT Config IO Response
 cmdAccounts nameM =
   runDB $ do
     case nameM of
@@ -669,28 +676,28 @@ cmdAccounts nameM =
         accs <- lift getAccounts
         return $ ResponseAccounts $ snd <$> accs
 
-cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> IO Response
+cmdReceive :: Ctx -> Maybe Text -> Maybe Text -> ReaderT Config IO Response
 cmdReceive ctx nameM labelM =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     addr <- genExtAddress ctx accId $ fromMaybe "" labelM
     return $ ResponseReceive acc addr
 
-cmdAddrs :: Maybe Text -> Page -> IO Response
+cmdAddrs :: Maybe Text -> Page -> ReaderT Config IO Response
 cmdAddrs nameM page =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     as <- lift $ addressPage accId page
     return $ ResponseAddresses acc as
 
-cmdLabel :: Maybe Text -> Natural -> Text -> IO Response
+cmdLabel :: Maybe Text -> Natural -> Text -> ReaderT Config IO Response
 cmdLabel nameM idx lab =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseLabel acc adr
 
-cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
+cmdTxs :: Ctx -> Maybe Text -> Page -> ReaderT Config IO Response
 cmdTxs ctx nameM page =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -706,7 +713,7 @@ cmdPrepareTx ::
   Natural ->
   Bool ->
   Maybe FilePath ->
-  IO Response
+  ReaderT Config IO Response
 cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -729,7 +736,7 @@ cmdPrepareTx ctx rcpTxt nameM unit feeByte dust rcptPay fileM =
     badAmnt v =
       "Could not parse the amount " <> v <> " as " <> showUnit unit 1
 
-cmdPendingTxs :: Ctx -> Maybe Text -> Page -> IO Response
+cmdPendingTxs :: Ctx -> Maybe Text -> Page -> ReaderT Config IO Response
 cmdPendingTxs ctx nameM page =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -744,7 +751,7 @@ cmdPendingTxs ctx nameM page =
           else NoSigUnsigned nosigH txInfoU
     return $ ResponsePendingTxs acc txs
 
-cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> ReaderT Config IO Response
 cmdReviewTx ctx nameM fp =
   runDB $ do
     (_, acc) <- getAccountByName nameM
@@ -760,7 +767,7 @@ cmdReviewTx ctx nameM fp =
           then NoSigSigned nosigHash txInfo
           else NoSigUnsigned nosigHash txInfoU
 
-cmdExportTx :: TxHash -> FilePath -> IO Response
+cmdExportTx :: TxHash -> FilePath -> ReaderT Config IO Response
 cmdExportTx nosigH fp =
   runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
@@ -771,7 +778,7 @@ cmdExportTx nosigH fp =
         return $ ResponseExportTx fp
       _ -> throwError "The pending transaction does not exist"
 
-cmdImportTx :: Ctx -> Maybe Text -> FilePath -> IO Response
+cmdImportTx :: Ctx -> Maybe Text -> FilePath -> ReaderT Config IO Response
 cmdImportTx ctx nameM fp =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -787,7 +794,7 @@ cmdImportTx ctx nameM fp =
           then NoSigSigned nosigHash txInfo
           else NoSigUnsigned nosigHash txInfoU
 
-cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
+cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> ReaderT Config IO Response
 cmdDeleteTx ctx nameM nosigH =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -802,7 +809,7 @@ cmdSignTx ::
   Maybe FilePath ->
   Maybe FilePath ->
   Natural ->
-  IO Response
+  ReaderT Config IO Response
 cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
   runDB $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
@@ -853,7 +860,7 @@ parseSignInput nosigHM inputM outputM =
       unless exist $ throwError "Input file does not exist"
       (,False) <$> liftEitherIO (readJsonFile i)
 
-cmdCoins :: Maybe Text -> Page -> IO Response
+cmdCoins :: Maybe Text -> Page -> ReaderT Config IO Response
 cmdCoins nameM page =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -861,7 +868,7 @@ cmdCoins nameM page =
     coins <- coinPage net accId page
     return $ ResponseCoins acc coins
 
-cmdSendTx :: Ctx -> Maybe Text -> TxHash -> IO Response
+cmdSendTx :: Ctx -> Maybe Text -> TxHash -> ReaderT Config IO Response
 cmdSendTx ctx nameM nosigH =
   runDB $ do
     (_, acc) <- getAccountByName nameM
@@ -875,26 +882,28 @@ cmdSendTx ctx nameM nosigH =
             verify = verifyTxInfo net ctx signedTx txInfo
         unless (signed && verify) $ throwError "The transaction is not signed"
         checkHealth ctx net
-        Store.TxId netTxId <-
-          liftExcept $ apiCall ctx (conf net) (PostTx signedTx)
+        host <- lift . lift $ apiHost net
+        Store.TxId netTxId <- liftExcept $ apiCall ctx host (PostTx signedTx)
         _ <- lift $ setPendingTxOnline nosigH
         return $ ResponseSendTx acc txInfo netTxId
       _ -> throwError "The nosigHash does not exist in the wallet"
 
-cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> IO Response
+cmdSyncAcc :: Ctx -> Maybe Text -> Bool -> ReaderT Config IO Response
 cmdSyncAcc ctx nameM full = do
+  cfg <- ask
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
+        host = apiHostCfg net cfg
     -- Check API health
     checkHealth ctx net
     -- Get the new best block before starting the sync
-    best <- liftExcept $ apiCall ctx (conf net) (GetBlockBest def)
+    best <- liftExcept $ apiCall ctx host (GetBlockBest def)
     -- Get the addresses from our local database
     (addrPathMap, addrBalMap) <- allAddressesMap net accId
     -- Fetch the address balances online
     Store.SerialList storeBals <-
-      liftExcept . apiBatch ctx addrBatch (conf net) $
+      liftExcept . apiBatch ctx (configAddrBatch cfg) host $
         GetAddrsBalance (Map.keys addrBalMap)
     -- Filter only those addresses whose balances have changed
     balsToUpdate <-
@@ -909,19 +918,19 @@ cmdSyncAcc ctx nameM full = do
     -- Use an empty list when doing a full sync
     confirmedTxs <- if full then return [] else getConfirmedTxs accId True
     -- Fetch the txids of the addresses to update
-    aTids <- searchAddrTxs net ctx confirmedTxs addrsToUpdate
+    aTids <- searchAddrTxs net ctx cfg confirmedTxs addrsToUpdate
     -- We also want to check if there is any change in unconfirmed txs
     uTids <- getConfirmedTxs accId False
     let tids = nub $ uTids <> aTids
     -- Fetch the full transactions
     Store.SerialList txs <-
-      liftExcept $ apiBatch ctx txFullBatch (conf net) (GetTxs tids)
+      liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
     -- Convert them to TxInfo and store them in the local database
     let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
     resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
     -- Fetch and update coins
     Store.SerialList storeCoins <-
-      liftExcept . apiBatch ctx coinBatch (conf net) $
+      liftExcept . apiBatch ctx (configCoinBatch cfg) host $
         GetAddrsUnspent addrsToUpdate def
     (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
     -- Get the dependent tranactions of the new coins
@@ -930,9 +939,10 @@ cmdSyncAcc ctx nameM full = do
         then return $ (.outpoint.hash) <$> storeCoins
         else mapM (liftEither . coinToTxHash) newCoins
     Store.RawResultList rawTxs <-
-      liftExcept . apiBatch ctx txFullBatch (conf net) $
-        GetTxsRaw $
-          nub depTxsHash
+      liftExcept
+        . apiBatch ctx (configTxFullBatch cfg) host
+        $ GetTxsRaw
+        $ nub depTxsHash
     lift $ forM_ rawTxs insertRawTx
     -- Remove pending transactions if they are online
     pendingTids <- pendingTxHashes accId
@@ -977,13 +987,14 @@ searchAddrTxs ::
   (MonadIO m) =>
   Network ->
   Ctx ->
+  Config ->
   [TxHash] ->
   [Address] ->
   ExceptT String m [TxHash]
-searchAddrTxs _ _ _ [] = return []
-searchAddrTxs net ctx confirmedTxs as
-  | length as > fromIntegral addrBatch =
-      nub . concat <$> mapM (go Nothing 0) (chunksOf addrBatch as)
+searchAddrTxs _ _ _ _ [] = return []
+searchAddrTxs net ctx cfg confirmedTxs as
+  | length as > fromIntegral (configAddrBatch cfg) =
+      nub . concat <$> mapM (go Nothing 0) (chunksOf (configAddrBatch cfg) as)
   | otherwise =
       nub <$> go Nothing 0 as
   where
@@ -992,11 +1003,11 @@ searchAddrTxs net ctx confirmedTxs as
         liftExcept $
           apiCall
             ctx
-            (conf net)
+            (apiHostCfg net cfg)
             ( GetAddrsTxs
                 xs
                 def
-                  { limit = Just $ fromIntegral txBatch,
+                  { limit = Just $ fromIntegral (configTxBatch cfg),
                     start = StartParamHash <$> hashM,
                     offset = offset
                   }
@@ -1005,20 +1016,21 @@ searchAddrTxs net ctx confirmedTxs as
       let tids = ((.txid) <$> txRefs) \\ confirmedTxs
       -- Either we have reached the end of the stream, or we have hit some
       -- txs in confirmedTxs. In both cases, we can stop the search.
-      if length tids < fromIntegral txBatch
+      if length tids < fromIntegral (configTxBatch cfg)
         then return tids
         else do
           let lastId = (last tids).get
           rest <- go (Just lastId) 1 xs
           return $ tids <> rest
 
-cmdDiscoverAccount :: Ctx -> Maybe Text -> IO Response
+cmdDiscoverAccount :: Ctx -> Maybe Text -> ReaderT Config IO Response
 cmdDiscoverAccount ctx nameM = do
   _ <- runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     checkHealth ctx net
+    recoveryGap <- lift . lift $ asks configRecoveryGap
     e <- go net pub extDeriv 0 (Page recoveryGap 0)
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
     discoverAccGenAddrs ctx accId AddrExternal e
@@ -1031,7 +1043,8 @@ cmdDiscoverAccount ctx nameM = do
     go net pub path d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx path page pub
           req = GetAddrsBalance $ fst <$> addrs
-      Store.SerialList bals <- liftExcept $ apiCall ctx (conf net) req
+      host <- lift . lift $ apiHost net
+      Store.SerialList bals <- liftExcept $ apiCall ctx host req
       let vBals = filter ((/= 0) . (.txs)) bals
       if null vBals
         then return d
@@ -1044,7 +1057,7 @@ cmdDiscoverAccount ctx nameM = do
       let fAddrs = filter ((`elem` balAddrs) . fst) addrs
        in fromIntegral $ maximum $ last . pathToList . snd <$> fAddrs
 
-cmdVersion :: IO Response
+cmdVersion :: ReaderT Config IO Response
 cmdVersion = return $ ResponseVersion versionString
 
 prepareSweep ::
@@ -1056,7 +1069,7 @@ prepareSweep ::
   Maybe FilePath ->
   Natural ->
   Natural ->
-  IO Response
+  ReaderT Config IO Response
 prepareSweep ctx nameM sweepFromT sweepFromFileM sweepToT outputM feeByte dust =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
@@ -1084,7 +1097,7 @@ signSweep ::
   Maybe FilePath ->
   Maybe FilePath ->
   FilePath ->
-  IO Response
+  ReaderT Config IO Response
 signSweep ctx nameM nosigHM inputM outputM keyFile =
   runDB $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
@@ -1108,9 +1121,9 @@ signSweep ctx nameM nosigHM inputM outputM keyFile =
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
     return $ ResponseSignSweep acc (NoSigSigned nosigH txInfo)
 
-rollDice :: Natural -> IO Response
+rollDice :: Natural -> ReaderT Config IO Response
 rollDice n = do
-  (res, origEnt) <- go [] ""
+  (res, origEnt) <- lift $ go [] ""
   return $ ResponseRollDice (take (fromIntegral n) res) origEnt
   where
     go acc orig
@@ -1121,9 +1134,14 @@ rollDice n = do
 
 -- Utilities --
 
-checkHealth :: (MonadIO m, MonadError String m) => Ctx -> Network -> m ()
+checkHealth ::
+     (MonadIO m, MonadReader Config m)
+  => Ctx
+  -> Network
+  -> ExceptT String (DB m) ()
 checkHealth ctx net = do
-  health <- liftExcept $ apiCall ctx (conf net) GetHealth
+  host <- lift . lift $ apiHost net
+  health <- liftExcept $ apiCall ctx host GetHealth
   unless (Store.isOK health) $
     throwError "The indexer health check has failed"
 
