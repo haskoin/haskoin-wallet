@@ -26,12 +26,11 @@ import qualified System.Directory as D
 
 -- | Version of Haskoin Wallet package.
 versionString :: (IsString a) => a
-
-
-
-
+#ifdef CURRENT_PACKAGE_VERSION
+versionString = CURRENT_PACKAGE_VERSION
+#else
 versionString = "Unavailable"
-
+#endif
 
 hwDataDirectory :: IO FilePath
 hwDataDirectory = do
