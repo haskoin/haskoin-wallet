@@ -139,9 +139,9 @@ data Response
         responseAccountFile :: !FilePath
       }
   | ResponseRenameAcc
-      { responseOldName :: !Text,
-        responseNewName :: !Text,
-        responseAccount :: !DBAccount
+      { responseAccount :: !DBAccount,
+        responseOldName :: !Text,
+        responseNewName :: !Text
       }
   | ResponseAccounts
       { responseAccounts :: ![DBAccount]
@@ -226,7 +226,7 @@ data Response
       { responseRollDice :: ![Natural],
         responseEntropySource :: !Text
       }
-  deriving (Show)
+  deriving (Eq, Show)
 
 jsonError :: String -> Json.Value
 jsonError err = object ["type" .= Json.String "error", "error" .= err]
@@ -657,7 +657,7 @@ cmdRenameAcc :: Text -> Text -> IO Response
 cmdRenameAcc oldName newName =
   runDB $ do
     acc <- renameAccount oldName newName
-    return $ ResponseRenameAcc oldName newName acc
+    return $ ResponseRenameAcc acc oldName newName
 
 cmdAccounts :: Maybe Text -> IO Response
 cmdAccounts nameM =

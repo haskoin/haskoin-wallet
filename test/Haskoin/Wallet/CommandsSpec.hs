@@ -35,6 +35,7 @@ import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Signing
@@ -64,7 +65,6 @@ import Haskoin.Wallet.SigningSpec
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
-import Haskoin.Wallet.Config
 import Numeric.Natural (Natural)
 import System.Random (StdGen, mkStdGen)
 import Test.HUnit
@@ -73,14 +73,31 @@ import Test.Hspec.QuickCheck
 import Test.QuickCheck
 
 identityTests :: Ctx -> IdentityTests
-identityTests ctx = def
+identityTests ctx =
+  def
+    { jsonTests =
+        [ JsonBox $ arbitraryDBAccount btc ctx,
+          JsonBox $ arbitraryDBAddress btc,
+          JsonBox arbitraryAddressBalance,
+          JsonBox $ arbitraryTxSignData btc ctx
+        ],
+      marshalJsonTests =
+        [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin),
+          MarshalJsonBox ((ctx,) <$> arbitraryPubKeyDoc ctx),
+          MarshalJsonBox (((btc,ctx),) <$> arbitraryTxInfo btc ctx),
+          MarshalJsonBox (((btc,ctx),) <$> arbitraryUnsignedTxInfo btc ctx),
+          MarshalJsonBox (((btc,ctx),) <$> arbitraryNoSigTxInfo btc ctx),
+          MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx)
+        ]
+    }
 
 spec :: Spec
 spec = do
   let cfg = def :: Config
   prepareContext $ \ctx -> do
+    testIdentity $ identityTests ctx
     describe "Database" $ do
-      -- bestSpec
+      bestSpec
       accountSpec ctx
       extAddressSpec ctx cfg
       intAddressSpec ctx cfg

@@ -177,7 +177,7 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         "nonstdinputs" .= (marshalValue net <$> txInfoNonStdInputs tx),
         "size" .= txInfoSize tx,
         "fee" .= txInfoFee tx,
-        "feebyte" .= show (txInfoFeeByte tx),
+        "feebyte" .= txInfoFeeByte tx,
         "block" .= txInfoBlockRef tx,
         "confirmations" .= txInfoConfirmations tx
       ]
@@ -195,7 +195,7 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> (mapM (unmarshalValue net) =<< o .: "nonstdinputs")
         <*> o .: "size"
         <*> o .: "fee"
-        <*> (read <$> o .: "feebyte")
+        <*> o .: "feebyte"
         <*> o .: "block"
         <*> o .: "confirmations"
 
@@ -398,7 +398,7 @@ instance MarshalJSON (Network, Ctx) UnsignedTxInfo where
         "otherinputs" .= marshalMap net ctx (unsignedTxInfoOtherInputs tx),
         "size" .= unsignedTxInfoSize tx,
         "fee" .= unsignedTxInfoFee tx,
-        "feebyte" .= show (unsignedTxInfoFeeByte tx)
+        "feebyte" .= unsignedTxInfoFeeByte tx
       ]
 
   unmarshalValue (net, ctx) =
@@ -409,10 +409,10 @@ instance MarshalJSON (Network, Ctx) UnsignedTxInfo where
         <*> (mapTextAddr net <$> o .: "myoutputs")
         <*> (mapTextAddr net <$> o .: "otheroutputs")
         <*> (unmarshalMap net ctx =<< o .: "myinputs")
-        <*> (unmarshalMap net ctx =<< o .: "otherInputs")
+        <*> (unmarshalMap net ctx =<< o .: "otherinputs")
         <*> o .: "size"
         <*> o .: "fee"
-        <*> (read <$> o .: "feebyte")
+        <*> o .: "feebyte"
 
 parseTxSignData ::
   Network ->
