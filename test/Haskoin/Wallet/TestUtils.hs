@@ -26,13 +26,13 @@ genNatural = arbitrarySizedNatural
 forceRight :: Either a b -> b
 forceRight = fromRight (error "fromRight")
 
-runDBMemory :: (MonadUnliftIO m) => DB m a -> m ()
+runDBMemory :: DB IO a -> Assertion
 runDBMemory action = do
   runSqlite ":memory:" $ do
     _ <- runMigrationQuiet migrateAll
     void action
 
-runDBMemoryE :: (MonadUnliftIO m, Show a) => ExceptT String (DB m) a -> m ()
+runDBMemoryE :: (Show a) => ExceptT String (DB IO) a -> Assertion
 runDBMemoryE action = do
   runSqlite ":memory:" $ do
     _ <- runMigrationQuiet migrateAll

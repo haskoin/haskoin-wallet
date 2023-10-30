@@ -188,13 +188,12 @@ testVectors4 =
 
 testBip44Vector :: Ctx -> Config -> (Text, Text, Text, Text) -> Assertion
 testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
-  flip runReaderT cfg $ do
-    runDBMemoryE $ do
-      (accId, _) <- insertAccount btc ctx walletFP "test" pub
-      extAddr <- genExtAddress ctx accId ""
-      intAddr <- nextFreeIntAddr ctx accId
-      liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
-      liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
+  runDBMemoryE $ do
+    (accId, _) <- insertAccount btc ctx walletFP "test" pub
+    extAddr <- genExtAddress ctx cfg accId ""
+    intAddr <- nextFreeIntAddr ctx cfg accId
+    liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
+    liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
   where
     mnemPass = MnemonicPass mnem pass
     walletFP = forceRight $ walletFingerprint btc ctx mnemPass

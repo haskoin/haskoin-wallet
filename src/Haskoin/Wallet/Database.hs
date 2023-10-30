@@ -20,7 +20,6 @@
 
 module Haskoin.Wallet.Database where
 
-import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (Arrow (second), (&&&))
 import Control.Exception (try)
@@ -596,19 +595,20 @@ insertAddress net (DBAccountKey wallet accDeriv) deriv addr free = do
 
 -- This is an internal function
 genNextAddress ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Ctx ->
+  Config ->
   DBAccountId ->
   AddrType ->
   AddrFree ->
   ExceptT String (DB m) DBAddress
-genNextAddress ctx accId addrType addrFree = do
+genNextAddress ctx cfg accId addrType addrFree = do
   acc <- getAccountById accId
   let net = accountNetwork acc
       pub = accountXPubKey ctx acc
       nextIdx = dBAccountCount addrType acc
       deriv = addrDeriv addrType
-  checkGap accId nextIdx addrType
+  checkGap cfg accId nextIdx addrType
   let (addr, _) = derivePathAddr ctx pub deriv (fromIntegral nextIdx)
   dbAddr <-
     insertAddress net accId (deriv :/ fromIntegral nextIdx) addr addrFree
@@ -616,13 +616,14 @@ genNextAddress ctx accId addrType addrFree = do
   return dbAddr
 
 checkGap ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
+  Config ->
   DBAccountId ->
   Int ->
   AddrType ->
   ExceptT String (DB m) ()
-checkGap accId addrIdx addrType = do
-  gap <- lift . lift $ asks configGap
+checkGap cfg accId addrIdx addrType = do
+  let gap = configGap cfg
   usedIdxM <- lift $ bestAddrWithFunds accId addrType
   let usedIdx = maybe 0 (+ 1) usedIdxM
   when (addrIdx >= usedIdx + fromIntegral gap) $
@@ -644,26 +645,28 @@ bestAddrWithFunds (DBAccountKey wallet accDeriv) addrType = do
 
 -- Generate the discovered external and internal addresses
 discoverAccGenAddrs ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Ctx ->
+  Config ->
   DBAccountId ->
   AddrType ->
   Int ->
   ExceptT String (DB m) ()
-discoverAccGenAddrs ctx accId addrType newAddrCnt = do
+discoverAccGenAddrs ctx cfg accId addrType newAddrCnt = do
   acc <- getAccountById accId
   let oldAddrCnt = dBAccountCount addrType acc
       cnt = max 0 $ newAddrCnt - oldAddrCnt
-  replicateM_ cnt $ genNextAddress ctx accId addrType AddrBusy
+  replicateM_ cnt $ genNextAddress ctx cfg accId addrType AddrBusy
 
 genExtAddress ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Ctx ->
+  Config ->
   DBAccountId ->
   Text ->
   ExceptT String (DB m) DBAddress
-genExtAddress ctx accId label = do
-  addr <- genNextAddress ctx accId AddrExternal AddrBusy
+genExtAddress ctx cfg accId label = do
+  addr <- genNextAddress ctx cfg accId AddrExternal AddrBusy
   setAddrLabel accId (dBAddressIndex addr) label
 
 setAddrLabel ::
@@ -682,11 +685,12 @@ setAddrLabel accId@(DBAccountKey wallet accDeriv) idx label = do
   lift $ P.updateGet aKey [DBAddressLabel P.=. label]
 
 nextFreeIntAddr ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Ctx ->
+  Config ->
   DBAccountId ->
   ExceptT String (DB m) DBAddress
-nextFreeIntAddr ctx accId@(DBAccountKey wallet accDeriv) = do
+nextFreeIntAddr ctx cfg accId@(DBAccountKey wallet accDeriv) = do
   resM <- lift . selectOne . from $ \a -> do
     where_ $
       a ^. DBAddressAccountWallet ==. val wallet
@@ -698,7 +702,7 @@ nextFreeIntAddr ctx accId@(DBAccountKey wallet accDeriv) = do
     return a
   case resM of
     Just (Entity _ a) -> return a
-    Nothing -> genNextAddress ctx accId AddrInternal AddrFree
+    Nothing -> genNextAddress ctx cfg accId AddrInternal AddrFree
 
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
 fromDBAddr net addrDB = do

@@ -10,7 +10,6 @@
 module Haskoin.Wallet.Config where
 
 import Control.Monad (unless)
-import Control.Monad.Reader (MonadReader, ReaderT, ask, asks, runReaderT)
 import Data.Aeson
 import Data.Default
 import Data.String (IsString)
@@ -96,8 +95,5 @@ initConfig = do
   resE <- readJsonFile configFile
   either (error "Could not read config.json") return resE
 
-apiHostCfg :: Network -> Config -> ApiConfig
-apiHostCfg net = ApiConfig net . cs . configHost
-
-apiHost :: (MonadReader Config m) => Network -> m ApiConfig
-apiHost net = asks (apiHostCfg net)
+apiHost :: Network -> Config -> ApiConfig
+apiHost net = ApiConfig net . cs . configHost

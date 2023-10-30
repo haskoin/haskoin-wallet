@@ -5,7 +5,6 @@
 
 module Haskoin.Wallet.Signing where
 
-import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Arrow (second)
 import Control.Monad (forM, unless, void, when, (<=<))
@@ -90,9 +89,10 @@ import System.Random (Random (randomR), StdGen, initStdGen)
 {- Building Transactions -}
 
 buildTxSignData ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  Config ->
   StdGen ->
   DBAccountId ->
   [(Address, Natural)] ->
@@ -100,13 +100,13 @@ buildTxSignData ::
   Natural ->
   Bool ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx gen accId rcpts feeByte dust rcptPay
+buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
       -- Get all spendable coins in the account
       allCoins <- getSpendableCoins accId
       -- Get a change address
-      dbAddr <- nextFreeIntAddr ctx accId
+      dbAddr <- nextFreeIntAddr ctx cfg accId
       (change, changeDeriv) <- liftEither $ fromDBAddr net dbAddr
       -- Build a transaction and pick the coins
       (tx, pickedCoins) <-
@@ -259,21 +259,21 @@ noEmptyInputs = (not . any BS.null) . fmap (.script) . (.inputs)
 {- Transaction Sweeping -}
 
 buildSweepSignData ::
-  (MonadUnliftIO m, MonadReader Config m) =>
+  (MonadUnliftIO m) =>
   Network ->
   Ctx ->
+  Config ->
   DBAccountId ->
   [Address] ->
   [Address] ->
   Natural ->
   Natural ->
   ExceptT String (DB m) TxSignData
-buildSweepSignData net ctx accId sweepFrom sweepTo feeByte dust
+buildSweepSignData net ctx cfg accId sweepFrom sweepTo feeByte dust
   | null sweepFrom = throwError "No addresses to sweep from"
   | null sweepTo = throwError "No addresses to sweep to"
   | otherwise = do
-      cfg <- lift . lift $ ask
-      let host = apiHostCfg net cfg
+      let host = apiHost net cfg
       -- Get the unspent coins of the sweepFrom addresses
       Store.SerialList coins <-
         liftExcept . apiBatch ctx (configCoinBatch cfg) host $
