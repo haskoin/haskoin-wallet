@@ -18,7 +18,7 @@
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.Database where
+module Haskoin.Wallet.Database where
 
 import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
@@ -76,10 +76,10 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
 import Haskoin.Transaction
 import Haskoin.Util (maybeToEither)
-import Network.Haskoin.Wallet.Config
-import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.TxInfo
-import Network.Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import System.IO.Error (alreadyExistsErrorType)

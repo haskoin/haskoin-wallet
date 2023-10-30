@@ -4,7 +4,7 @@
 {-# LANGUAGE NoFieldSelectors #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.SigningSpec where
+module Haskoin.Wallet.SigningSpec where
 
 import Conduit (runResourceT)
 import Control.Arrow (second)
@@ -23,11 +23,11 @@ import Data.Word (Word32, Word8)
 import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Signing
-import Network.Haskoin.Wallet.TestUtils
-import Network.Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Signing
+import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.TxInfo
 import Numeric.Natural (Natural)
 import System.Random (StdGen, mkStdGen)
 import Test.HUnit

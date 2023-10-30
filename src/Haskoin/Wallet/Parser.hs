@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
 
-module Network.Haskoin.Wallet.Parser where
+module Haskoin.Wallet.Parser where
 
 import Control.Monad.Except (runExceptT)
 import Data.Either (fromRight)
@@ -13,12 +13,12 @@ import Haskoin (bech32Const)
 import Haskoin.Crypto (Ctx)
 import Haskoin.Network (Network (name), allNets, btc, netByName)
 import Haskoin.Transaction (TxHash, hexToTxHash)
-import Network.Haskoin.Wallet.Amounts
+import Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readNatural,
   )
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.Util (Page (Page))
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
 import Options.Applicative.Help.Pretty

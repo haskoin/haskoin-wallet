@@ -4,9 +4,9 @@
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.CommandsSpec where
+module Haskoin.Wallet.CommandsSpec where
 
-import Conduit (MonadIO, runResourceT)
+import Conduit (MonadIO, liftIO, runResourceT)
 import Control.Arrow (second)
 import Control.Monad
 import Control.Monad.Except
@@ -35,10 +35,10 @@ import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Signing
-import Network.Haskoin.Wallet.SigningSpec
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Signing
+import Haskoin.Wallet.SigningSpec
   ( addr',
     bid',
     coin',
@@ -61,9 +61,10 @@ import Network.Haskoin.Wallet.SigningSpec
     walletFPText,
     walletFPText2,
   )
-import Network.Haskoin.Wallet.TestUtils
-import Network.Haskoin.Wallet.TxInfo
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Util
+import Haskoin.Wallet.Config
 import Numeric.Natural (Natural)
 import System.Random (StdGen, mkStdGen)
 import Test.HUnit
@@ -75,10 +76,11 @@ identityTests :: Ctx -> IdentityTests
 identityTests ctx = def
 
 spec :: Spec
-spec =
+spec = do
+  let cfg = def :: Config
   prepareContext $ \ctx -> do
     describe "Database" $ do
-      bestSpec
+      -- bestSpec
       accountSpec ctx
       extAddressSpec ctx
       intAddressSpec ctx

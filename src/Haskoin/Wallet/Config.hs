@@ -7,7 +7,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Network.Haskoin.Wallet.Config where
+module Haskoin.Wallet.Config where
 
 import Control.Monad (unless)
 import Control.Monad.Reader (MonadReader, ReaderT, ask, asks, runReaderT)
@@ -20,8 +20,8 @@ import Haskoin.Network
 import Haskoin.Store.WebClient
   ( ApiConfig (..),
   )
-import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
 

@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Network.Haskoin.Wallet.Amounts where
+module Haskoin.Wallet.Amounts where
 
 import Control.Arrow (second)
 import Control.Monad (guard)
@@ -17,7 +17,7 @@ import Data.Text as Text
     uncons,
   )
 import Data.Text.Read as Read (decimal)
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.Util
   ( chunksOfEnd,
     dropPatternEnd,
     padEnd,

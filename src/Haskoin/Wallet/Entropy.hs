@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.Entropy where
+module Haskoin.Wallet.Entropy where
 
 import Control.Monad.IO.Class (MonadIO)
 import Control.Monad (replicateM, unless, when)
@@ -20,7 +20,7 @@ import qualified Data.Text as T
 import Data.Word (Word8)
 import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
 import Haskoin.Util (bsToInteger)
-import Network.Haskoin.Wallet.Util (chunksOf)
+import Haskoin.Wallet.Util (chunksOf)
 import Numeric (showIntAtBase)
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline

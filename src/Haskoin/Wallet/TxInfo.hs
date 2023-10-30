@@ -6,7 +6,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.TxInfo where
+module Haskoin.Wallet.TxInfo where
 
 import Control.Arrow ((&&&))
 import Control.Monad (unless)
@@ -53,8 +53,8 @@ import Haskoin.Util
     fst3,
     maybeToEither,
   )
-import Network.Haskoin.Wallet.FileIO (TxSignData (TxSignData))
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.FileIO (TxSignData (TxSignData))
+import Haskoin.Wallet.Util
   ( addrToTextE,
     safeSubtract,
     textToAddrE,

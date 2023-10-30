@@ -1,16 +1,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.AmountsSpec where
+module Haskoin.Wallet.AmountsSpec where
 
-import Network.Haskoin.Wallet.Amounts
+import Haskoin.Wallet.Amounts
   ( AmountUnit (..),
     readAmount,
     readIntegerAmount,
     showAmount,
     showIntegerAmount,
   )
-import Network.Haskoin.Wallet.TestUtils (genNatural)
+import Haskoin.Wallet.TestUtils (genNatural)
 import Test.Hspec (Spec, describe, it, shouldBe)
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Arbitrary (arbitrary), elements, forAll)

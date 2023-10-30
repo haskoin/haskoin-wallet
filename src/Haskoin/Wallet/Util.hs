@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.Util where
+module Haskoin.Wallet.Util where
 
 import Control.Arrow (second)
 import Control.Monad.Except

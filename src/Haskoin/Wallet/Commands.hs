@@ -8,7 +8,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.Commands where
+module Haskoin.Wallet.Commands where
 
 import Conduit (MonadUnliftIO, ResourceT)
 import Control.Applicative (Alternative (some))
@@ -81,24 +81,24 @@ import Haskoin.Util
     maybeToEither,
     snd3,
   )
-import Network.Haskoin.Wallet.Amounts
+import Haskoin.Wallet.Amounts
   ( AmountUnit,
     readAmount,
     showUnit,
   )
-import Network.Haskoin.Wallet.Config
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.Entropy
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.Entropy
   ( genMnemonic,
     mergeMnemonicParts,
     systemEntropy,
     word8ToBase6,
   )
-import Network.Haskoin.Wallet.FileIO
-import Network.Haskoin.Wallet.Parser
-import Network.Haskoin.Wallet.Signing
-import Network.Haskoin.Wallet.TxInfo
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Parser
+import Haskoin.Wallet.Signing
+import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Util
   ( Page (Page),
     addrToText3,
     chunksOf,

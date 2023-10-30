@@ -3,7 +3,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.Signing where
+module Haskoin.Wallet.Signing where
 
 import Control.Monad.Reader (MonadReader, ask, asks)
 import Conduit (MonadUnliftIO, ResourceT)
@@ -68,9 +68,9 @@ import Haskoin.Transaction
     verifyStdTx,
   )
 import Haskoin.Util (maybeToEither)
-import Network.Haskoin.Wallet.Config
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.FileIO
   ( TxSignData
       ( TxSignData,
         txSignDataInputPaths,
@@ -78,8 +78,8 @@ import Network.Haskoin.Wallet.FileIO
         txSignDataTx
       ),
   )
-import Network.Haskoin.Wallet.TxInfo
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Util
   ( addrToText2,
     liftExcept,
     safeSubtract,

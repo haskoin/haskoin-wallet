@@ -1,31 +1,36 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.EntropySpec where
+module Haskoin.Wallet.EntropySpec where
 
+import Control.Monad.Reader (runReaderT)
 import Control.Exception (evaluate)
 import Control.Monad
 import Control.Monad.Trans (lift, liftIO)
 import qualified Data.ByteString as BS
+import Data.Default (def)
 import Data.Either
 import Data.Maybe
 import Data.Text (Text)
 import Haskoin
 import Haskoin.Util.Arbitrary
-import Network.Haskoin.Wallet.Database
-import Network.Haskoin.Wallet.Entropy
-import Network.Haskoin.Wallet.Signing
-import Network.Haskoin.Wallet.TestUtils
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.Entropy
+import Haskoin.Wallet.Signing
+import Haskoin.Wallet.TestUtils
 import Test.HUnit
 import Test.Hspec
 import Test.Hspec.QuickCheck
 import Test.QuickCheck
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  diceSpec
-  entropySpec
-  mnemonicSpec ctx
+spec = do
+  let cfg = def :: Config
+  prepareContext $ \ctx -> do
+    diceSpec
+    entropySpec
+    mnemonicSpec ctx cfg
 
 diceSpec :: Spec
 diceSpec =
@@ -117,8 +122,8 @@ entropySpec = do
              in unsplitMnem `shouldBe` mnem
           _ -> expectationFailure "Invalid splitEntropyWith"
 
-mnemonicSpec :: Ctx -> Spec
-mnemonicSpec ctx =
+mnemonicSpec :: Ctx -> Config -> Spec
+mnemonicSpec ctx cfg =
   describe "Mnemonic API" $ do
     -- https://github.com/iancoleman/bip39/issues/58
     it "Can derive iancoleman issue 58" $ do
@@ -133,7 +138,7 @@ mnemonicSpec ctx =
     it "Passes the test vectors 4 (zero padding)" $
       mapM_ (testVector ctx) testVectors4
     it "Passes the BIP-44 test vectors" $
-      mapM_ (testBip44Vector ctx) bip44Vectors
+      mapM_ (testBip44Vector ctx cfg) bip44Vectors
 
 testVector :: Ctx -> (Text, HardPath, Text, Text) -> Assertion
 testVector ctx (seedT, deriv, pubT, prvT) = do
@@ -181,14 +186,15 @@ testVectors4 =
     )
   ]
 
-testBip44Vector :: Ctx -> (Text, Text, Text, Text) -> Assertion
-testBip44Vector ctx (mnem, pass, addr0, addr1) = do
-  runDBMemoryE $ do
-    (accId, _) <- insertAccount btc ctx walletFP "test" pub
-    extAddr <- genExtAddress ctx accId ""
-    intAddr <- nextFreeIntAddr ctx accId
-    liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
-    liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
+testBip44Vector :: Ctx -> Config -> (Text, Text, Text, Text) -> Assertion
+testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
+  flip runReaderT cfg $ do
+    runDBMemoryE $ do
+      (accId, _) <- insertAccount btc ctx walletFP "test" pub
+      extAddr <- genExtAddress ctx accId ""
+      intAddr <- nextFreeIntAddr ctx accId
+      liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
+      liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
   where
     mnemPass = MnemonicPass mnem pass
     walletFP = forceRight $ walletFingerprint btc ctx mnemPass

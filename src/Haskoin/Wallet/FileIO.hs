@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 
-module Network.Haskoin.Wallet.FileIO where
+module Haskoin.Wallet.FileIO where
 
 import Control.Applicative ((<|>))
 import Control.Monad
@@ -54,7 +54,7 @@ import Haskoin.Util
     eitherToMaybe,
     encodeHex,
   )
-import Network.Haskoin.Wallet.Util
+import Haskoin.Wallet.Util
   ( encodeJsonPrettyLn,
     textToAddrE,
     (</>),

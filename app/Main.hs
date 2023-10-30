@@ -1,4 +1,4 @@
-import Network.Haskoin.Wallet
+import Haskoin.Wallet
 
 main :: IO ()
 main = clientMain
