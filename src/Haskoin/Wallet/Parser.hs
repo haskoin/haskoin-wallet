@@ -137,15 +137,15 @@ data Command
       }
   deriving (Eq, Show)
 
-parserMain :: IO Command
+parserMain :: IO (Command, Bool)
 parserMain =
   customExecParser
     (prefs $ showHelpOnEmpty <> helpIndent 25)
     programParser
 
-programParser :: ParserInfo Command
+programParser :: ParserInfo (Command, Bool)
 programParser = do
-  let cmd = commandParser <**> helper
+  let cmd = (,) <$> (commandParser <**> helper) <*> jsonOption
   info cmd $
     fullDesc
       <> progDesc
@@ -154,6 +154,13 @@ hw is a BIP-44 command-line wallet for bitcoin and bitcoin-cash. It allows
 sensitive commands (!) to be run on a separate offline computer. For more
 information on a command, type "hw COMMAND --help".
 |]
+
+jsonOption :: Parser Bool
+jsonOption =
+  switch $
+    short 'j'
+      <> long "json"
+      <> help "Display the result as JSON"
 
 commandParser :: Parser Command
 commandParser =

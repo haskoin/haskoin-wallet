@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 0e1826aa518f8c7890f529498b3362e18f28ddf992adaf9192167af089f6bd44
+-- hash: 42aed413540fbe4ee52311d035a86b9bd7bc87b3100dac6bfe3a611adb4360be
 
 name:           haskoin-wallet
-version:        0.8.0
+version:        0.8.1
 synopsis:       Lightweight command-line wallet for Bitcoin and Bitcoin Cash
 description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
                 BIP44 account structure. It requires a full blockchain index such as
@@ -36,7 +36,7 @@ library
       Decimal >=0.5.1
     , aeson >=1.4.6.0
     , aeson-pretty >=0.8.8
-    , ansi-terminal >=0.10.3
+    , ansi-terminal >=1.0
     , base >=4.9 && <5
     , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
@@ -80,6 +80,7 @@ library
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Main
       Haskoin.Wallet.Parser
+      Haskoin.Wallet.PrettyPrinter
       Haskoin.Wallet.Signing
       Haskoin.Wallet.TxInfo
       Haskoin.Wallet.Util
@@ -96,7 +97,7 @@ executable hw
       Decimal >=0.5.1
     , aeson >=1.4.6.0
     , aeson-pretty >=0.8.8
-    , ansi-terminal >=0.10.3
+    , ansi-terminal >=1.0
     , base >=4.9 && <5
     , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
@@ -111,7 +112,7 @@ executable hw
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.0
     , haskoin-store-data >=1.0.0
-    , haskoin-wallet ==0.8.0
+    , haskoin-wallet ==0.8.1
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -154,7 +155,7 @@ test-suite spec
     , QuickCheck >=2.13.2
     , aeson >=1.4.6.0
     , aeson-pretty >=0.8.8
-    , ansi-terminal >=0.10.3
+    , ansi-terminal >=1.0
     , base >=4.9 && <5
     , base16-bytestring >=1.0.0.0
     , base64-bytestring >=1.0.0.3
@@ -169,7 +170,7 @@ test-suite spec
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.0
     , haskoin-store-data >=1.0.0
-    , haskoin-wallet ==0.8.0
+    , haskoin-wallet ==0.8.1
     , hspec >=2.7.1
     , http-types >=0.12.3
     , lens >=4.18.1
