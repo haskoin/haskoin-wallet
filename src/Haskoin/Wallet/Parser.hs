@@ -4,31 +4,16 @@
 
 module Haskoin.Wallet.Parser where
 
-import Control.Monad.Except (runExceptT)
-import Data.Either (fromRight)
-import Data.List (intercalate, isPrefixOf, nub, sort)
+import Data.List (intercalate)
 import Data.String.Conversions (cs)
-import Data.Text (Text, toCaseFold)
-import Haskoin (bech32Const)
-import Haskoin.Crypto (Ctx)
-import Haskoin.Network (Network (name), allNets, btc, netByName)
-import Haskoin.Transaction (TxHash, hexToTxHash)
-import Haskoin.Wallet.Amounts
-  ( AmountUnit (..),
-    readNatural,
-  )
-import Haskoin.Wallet.Database
+import Data.Text (Text)
+import Haskoin
+import Haskoin.Wallet.Amounts (AmountUnit (..), readNatural)
 import Haskoin.Wallet.Util (Page (Page))
 import Numeric.Natural (Natural)
 import Options.Applicative
 import Options.Applicative.Help.Pretty
-  ( Color (Red),
-    Doc,
-    annotate,
-    color,
-    parens,
-  )
-import Text.RawString.QQ
+import Text.RawString.QQ (r)
 
 {- Command Parsers -}
 
@@ -712,7 +697,8 @@ exportTxParser = do
       <> footer importExportTxFooter
 
 importExportTxFooter :: String
-importExportTxFooter = [r|
+importExportTxFooter =
+  [r|
 A transaction that has been prepared with `preparetx` can be exported to a file
 so that it can be signed on an offline computer. The transaction is identified
 by its nosigHash (a hash of the transaction without its signatures) as this
@@ -997,4 +983,3 @@ fileArgument desc =
     metavar "FILENAME"
       <> action "file"
       <> help desc
-

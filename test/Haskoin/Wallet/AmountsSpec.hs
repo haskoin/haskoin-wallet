@@ -4,12 +4,6 @@
 module Haskoin.Wallet.AmountsSpec where
 
 import Haskoin.Wallet.Amounts
-  ( AmountUnit (..),
-    readAmount,
-    readIntegerAmount,
-    showAmount,
-    showIntegerAmount,
-  )
 import Haskoin.Wallet.TestUtils (genNatural)
 import Test.Hspec (Spec, describe, it, shouldBe)
 import Test.Hspec.QuickCheck (prop)

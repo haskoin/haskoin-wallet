@@ -6,11 +6,6 @@ module Haskoin.Wallet.Util where
 
 import Control.Arrow (second)
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    runExceptT,
-  )
-import Crypto.Secp256k1 (Ctx)
 import qualified Data.Aeson as JSON
 import qualified Data.Aeson.Encode.Pretty as Pretty
 import qualified Data.ByteString as BS
@@ -20,11 +15,8 @@ import Data.Maybe (fromMaybe)
 import qualified Data.Serialize as S
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin.Address (Address, addrToText, textToAddr)
-import Haskoin.Crypto.Keys (XPubKey, xPubFP)
-import Haskoin.Network (Network)
+import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Util (encodeHex, maybeToEither)
 import Numeric.Natural (Natural)
 
 {- Data.Aeson Compatibility -}

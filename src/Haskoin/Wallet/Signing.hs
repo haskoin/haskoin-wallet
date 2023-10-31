@@ -5,84 +5,26 @@
 
 module Haskoin.Wallet.Signing where
 
-import Conduit (MonadUnliftIO, ResourceT)
+import Conduit (MonadUnliftIO)
 import Control.Arrow (second)
-import Control.Monad (forM, unless, void, when, (<=<))
+import Control.Monad (unless, when, (<=<))
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-    runExceptT,
-  )
 import Control.Monad.State
-  ( MonadIO (..),
-    MonadState (get, put),
-    MonadTrans (lift),
-    StateT,
-    evalStateT,
-    gets,
-  )
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Either (rights)
 import Data.List (nub)
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import qualified Data.Set as Set
 import Data.Text (Text)
-import Data.Word (Word32, Word64)
-import Haskoin.Address (Address, addrToText, textToAddr)
-import Haskoin.Crypto
-  ( Ctx,
-    Fingerprint,
-    SecKey,
-    SoftPath,
-    XPrvKey (key),
-    XPubKey,
-    derivePath,
-    deriveXPubKey,
-    makeXPrvKey,
-    mnemonicToSeed,
-    xPubFP,
-  )
-import Haskoin.Network (Network)
+import Data.Word (Word64)
+import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-  ( ApiConfig (ApiConfig, host),
-    GetAddrsUnspent (GetAddrsUnspent),
-    GetTxsRaw (GetTxsRaw),
-    LimitsParam (limit),
-    apiBatch,
-  )
-import Haskoin.Transaction
-  ( OutPoint (hash),
-    SigInput (outpoint, script, value),
-    Tx (inputs, outputs),
-    TxIn (outpoint, script),
-    buildAddrTx,
-    chooseCoins,
-    guessTxFee,
-    signTx,
-    txHash,
-    verifyStdTx,
-  )
-import Haskoin.Util (maybeToEither)
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
-  ( TxSignData
-      ( TxSignData,
-        txSignDataInputPaths,
-        txSignDataSigned,
-        txSignDataTx
-      ),
-  )
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
-  ( addrToText2,
-    liftExcept,
-    safeSubtract,
-  )
 import Numeric.Natural (Natural)
 import System.Random (Random (randomR), StdGen, initStdGen)
 

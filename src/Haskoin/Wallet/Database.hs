@@ -21,67 +21,36 @@
 module Haskoin.Wallet.Database where
 
 import Conduit (MonadUnliftIO, ResourceT)
-import Control.Arrow (Arrow (second), (&&&))
-import Control.Exception (try)
+import Control.Arrow (Arrow (second))
 import Control.Monad
-  ( MonadPlus (mzero),
-    forM,
-    forM_,
-    guard,
-    replicateM,
-    replicateM_,
-    unless,
-    void,
-    when,
-    (<=<),
-  )
-import Control.Monad.Except (ExceptT, MonadError (throwError), liftEither, runExceptT)
+import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT)
 import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Data.Aeson
 import qualified Data.Aeson as Json
-import Data.Aeson.Types
-  ( FromJSON (parseJSON),
-    KeyValue ((.=)),
-    ToJSON (toJSON),
-    object,
-    withObject,
-    (.:),
-  )
-import Data.Bits (Bits (clearBit))
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.Char (GeneralCategory (OtherNumber))
-import Data.Either (fromRight, lefts, rights)
-import Data.Foldable (for_)
-import Data.Int (Int64)
+import Data.Either (fromRight)
 import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (catMaybes, fromJust, fromMaybe, isJust, isNothing, mapMaybe)
-import Data.Serialize (decode, encode)
+import Data.Maybe (fromJust, fromMaybe, mapMaybe)
+import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Data.Time
-import Data.Word (Word32, Word64)
-import Database.Esqueleto hiding (isNothing)
+import Data.Time (UTCTime, getCurrentTime)
+import Data.Word (Word64)
+import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
-import Database.Persist.Sqlite (runSqlite)
 import Database.Persist.TH
 import Haskoin
-import Haskoin.Crypto (xPubChild)
-import Haskoin.Store.Data (confirmed)
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Store.WebClient (GetAddrsBalance (..), apiCall)
-import Haskoin.Transaction
-import Haskoin.Util (maybeToEither)
-import Haskoin.Wallet.Config
+import Haskoin.Wallet.Config (Config (configGap))
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.Util (Page (..), liftExcept, textToAddrE, (</>))
+import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
-import qualified System.Directory as D
-import System.IO.Error (alreadyExistsErrorType)
 
 {- SQL Table Definitions -}
 
@@ -825,7 +794,7 @@ repsertTxInfo net ctx accId tif = do
   time <- liftIO getCurrentTime
   let confirmed' = Store.confirmed $ txInfoBlockRef tif
       tid = txHashToHex $ txInfoHash tif
-      bRef = encode $ txInfoBlockRef tif
+      bRef = S.encode $ txInfoBlockRef tif
       -- Confirmations will get updated when retrieving them
       blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
       (DBAccountKey wallet accDeriv) = accId
@@ -930,7 +899,7 @@ toJsonCoin net bestM dbCoin = do
     maybeToEither "toJsonCoin: Invalid address" $
       textToAddr net $
         dBCoinAddress dbCoin
-  br <- decode $ dBCoinBlockRef dbCoin
+  br <- S.decode $ dBCoinBlockRef dbCoin
   let confirmations = getConfirmations bestM br
   return $
     JsonCoin
@@ -943,12 +912,12 @@ toJsonCoin net bestM dbCoin = do
       }
 
 outpointText :: OutPoint -> Text
-outpointText = encodeHex . encode
+outpointText = encodeHex . S.encode
 
 textToOutpoint :: Text -> Either String OutPoint
 textToOutpoint t = do
   bs <- maybeToEither "textToOutpoint: invalid input" $ decodeHex t
-  decode bs
+  S.decode bs
 
 -- Get all coins in an account, spendable or not
 coinPage ::
@@ -982,7 +951,7 @@ getSpendableCoins (DBAccountKey wallet accDeriv) = do
         &&. c ^. DBCoinLocked ==. val False
     return c
   let bss = dBCoinBlob . entityVal <$> coins
-  mapM (liftEither . decode) bss
+  mapM (liftEither . S.decode) bss
 
 insertCoin ::
   (MonadUnliftIO m) =>
@@ -999,8 +968,8 @@ insertCoin (DBAccountKey wallet accDeriv) addr unspent = do
             dBCoinOutpoint = outpointText unspent.outpoint,
             dBCoinAddress = addr,
             dBCoinValue = unspent.value,
-            dBCoinBlockRef = encode unspent.block,
-            dBCoinBlob = encode unspent,
+            dBCoinBlockRef = S.encode unspent.block,
+            dBCoinBlob = S.encode unspent,
             dBCoinConfirmed = Store.confirmed unspent.block,
             dBCoinLocked = False,
             dBCoinCreated = time
@@ -1013,9 +982,9 @@ updateCoin unspent = do
   let key = DBCoinKey $ outpointText unspent.outpoint
   P.update
     key
-    [ DBCoinBlob P.=. encode unspent,
+    [ DBCoinBlob P.=. S.encode unspent,
       DBCoinConfirmed P.=. Store.confirmed unspent.block,
-      DBCoinBlockRef P.=. encode unspent.block
+      DBCoinBlockRef P.=. S.encode unspent.block
     ]
 
 deleteCoin :: (MonadUnliftIO m) => DBCoin -> DB m ()
@@ -1063,7 +1032,7 @@ refreshCoins net accId addrsToUpdate allUnspent = do
     f localCoins s =
       let cM = find ((== outpointText s.outpoint) . dBCoinOutpoint) localCoins
        in case cM of
-            Just c -> dBCoinBlockRef c /= encode s.block
+            Just c -> dBCoinBlockRef c /= S.encode s.block
             _ -> False
 
 groupCoins :: Network -> [Store.Unspent] -> Map Text [Store.Unspent]
@@ -1090,14 +1059,14 @@ insertRawTx :: (MonadUnliftIO m) => Tx -> DB m ()
 insertRawTx tx = do
   let hash = txHashToHex $ txHash tx
       key = DBRawTxKey hash
-  P.repsert key $ DBRawTx hash (encode tx)
+  P.repsert key $ DBRawTx hash (S.encode tx)
 
 getRawTx :: (MonadUnliftIO m) => TxHash -> ExceptT String (DB m) Tx
 getRawTx hash = do
   let key = DBRawTxKey $ txHashToHex hash
   txM <- lift $ P.get key
   case txM of
-    Just tx -> liftEither . decode $ dBRawTxBlob tx
+    Just tx -> liftEither . S.decode $ dBRawTxBlob tx
     Nothing -> throwError "getRawTx: missing transaction"
 
 {- Pending Transactions -}
@@ -1328,11 +1297,11 @@ addrsDerivPage ctx deriv (Page lim off) xpub =
         derivePathAddrs ctx xpub deriv (fromIntegral off)
 
 -- like `maybe` but for a maybe/value sandwich
-joinMaybe :: b -> (a -> b) -> Maybe (Value (Maybe a)) -> b
+joinMaybe :: b -> (a -> b) -> Maybe (E.Value (Maybe a)) -> b
 joinMaybe d f m =
   case m of
     Just (Value m') -> maybe d f m'
     Nothing -> d
 
-flatMaybe :: Maybe (Value (Maybe a)) -> Maybe a
+flatMaybe :: Maybe (E.Value (Maybe a)) -> Maybe a
 flatMaybe = joinMaybe Nothing Just

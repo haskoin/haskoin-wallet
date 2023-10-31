@@ -1,22 +1,24 @@
-{-# LANGUAGE ApplicativeDo #-}
+module Haskoin.Wallet
+  ( module Amounts,
+    module Commands,
+    module Config,
+    module Database,
+    module Entropy,
+    module FileIO,
+    module Parser,
+    module Signing,
+    module TxInfo,
+    module Util,
+  )
+where
 
-module Haskoin.Wallet where
-
-import qualified Data.ByteString.Char8 as C8
-import Haskoin.Crypto (Ctx, withContext)
-import Haskoin.Util (MarshalJSON (..))
-import Haskoin.Wallet.Commands
-import Haskoin.Wallet.Parser
-import Haskoin.Wallet.Util (encodeJsonPretty)
-import Haskoin.Wallet.Config
-
-clientMain :: IO ()
-clientMain =
-  withContext $ \ctx -> do
-    cfg <- initConfig
-    cmd <- parserMain
-    res <- commandResponse ctx cfg cmd
-    jsonPrinter ctx res
-
-jsonPrinter :: Ctx -> Response -> IO ()
-jsonPrinter ctx = C8.putStrLn . encodeJsonPretty . marshalValue ctx
+import Haskoin.Wallet.Amounts as Amounts
+import Haskoin.Wallet.Commands as Commands
+import Haskoin.Wallet.Config as Config
+import Haskoin.Wallet.Database as Database
+import Haskoin.Wallet.Entropy as Entropy
+import Haskoin.Wallet.FileIO as FileIO
+import Haskoin.Wallet.Parser as Parser
+import Haskoin.Wallet.Signing as Signing
+import Haskoin.Wallet.TxInfo as TxInfo
+import Haskoin.Wallet.Util as Util

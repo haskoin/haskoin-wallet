@@ -4,19 +4,13 @@
 
 module Haskoin.Wallet.Entropy where
 
-import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Control.Monad (replicateM, unless, when)
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-  )
-import Control.Monad.IO.Class (liftIO)
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
 import Data.List (foldl', nub)
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Word (Word8)
 import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
 import Haskoin.Util (bsToInteger)
@@ -136,7 +130,7 @@ splitEntropy n secret
 splitEntropyWith :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
 splitEntropyWith secret ks = foldl' xorBytes secret ks : ks
 
-mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
+mergeMnemonicParts :: [Text] -> Either String Mnemonic
 mergeMnemonicParts mnems
   | length mnems < 2 = Left "Only one mnemonic provided"
   | length (nub mnems) /= length mnems = Left "Two mnemonics are identical"

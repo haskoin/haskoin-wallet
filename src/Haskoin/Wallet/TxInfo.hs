@@ -22,44 +22,10 @@ import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.String.ToString (ToString (..))
 import Data.Text (Text)
-import Haskoin.Address
-  ( Address,
-    addressToOutput,
-    scriptToAddressBS,
-  )
-import Haskoin.Crypto
-  ( Ctx,
-    SoftPath,
-    XPubKey,
-    derivePubPath,
-    xPubAddr,
-  )
-import Haskoin.Network (Network (sigHashForkId))
-import Haskoin.Script (SigHash, setForkIdFlag, sigHashAll)
+import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Transaction
-  ( OutPoint (OutPoint),
-    SigInput (SigInput),
-    Tx (inputs, outputs),
-    TxHash,
-    TxIn (outpoint),
-    TxOut (TxOut, value),
-    guessTxSize,
-    nosigTxHash,
-    txHash,
-  )
-import Haskoin.Util
-  ( MarshalJSON (marshalValue, unmarshalValue),
-    fst3,
-    maybeToEither,
-  )
-import Haskoin.Wallet.FileIO (TxSignData (TxSignData))
+import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
-  ( addrToTextE,
-    safeSubtract,
-    textToAddrE,
-    (!!?),
-  )
 import Numeric.Natural (Natural)
 
 data TxType = TxDebit | TxInternal | TxCredit

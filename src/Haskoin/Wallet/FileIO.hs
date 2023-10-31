@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -9,57 +8,17 @@ module Haskoin.Wallet.FileIO where
 import Control.Applicative ((<|>))
 import Control.Monad
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-    runExceptT,
-  )
-import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString.Char8 as C8
-import qualified Data.ByteString.Short as BSS
 import Data.Maybe (fromMaybe, mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Haskoin.Address (Address)
-import Haskoin.Crypto
-  ( Ctx,
-    Fingerprint,
-    Hash256 (get),
-    PrivateKey (key),
-    SecKey,
-    SoftPath,
-    XPubKey,
-    fingerprintToText,
-    fromMiniKey,
-    fromWif,
-    sha256,
-    withContext,
-    xPubChild,
-    xPubExport,
-  )
-import Haskoin.Network (Network (name), netByName)
-import Haskoin.Transaction
-  ( Tx,
-    TxHash (TxHash, get),
-    nosigTxHash,
-    txHashToHex,
-  )
-import Haskoin.Util
-  ( MarshalJSON (marshalValue, unmarshalValue),
-    decodeHex,
-    eitherToMaybe,
-    encodeHex,
-  )
+import Haskoin
 import Haskoin.Wallet.Util
-  ( encodeJsonPrettyLn,
-    textToAddrE,
-    (</>),
-  )
-import Numeric.Natural (Natural)
 import qualified System.Directory as D
 import qualified System.IO as IO
 

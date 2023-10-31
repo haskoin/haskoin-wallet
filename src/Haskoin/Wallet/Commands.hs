@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -10,105 +9,36 @@
 
 module Haskoin.Wallet.Commands where
 
-import Conduit (MonadUnliftIO, ResourceT)
-import Control.Applicative (Alternative (some))
-import Control.Monad (forM, forM_, mzero, unless, void, when, (<=<))
+import Conduit (MonadUnliftIO)
+import Control.Monad
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-    runExceptT,
-  )
-import Control.Monad.Reader (MonadIO (..), MonadReader, MonadTrans (lift), ReaderT, ask, asks, runReaderT)
-import Control.Monad.State (MonadState (get), gets, modify)
-import Data.Aeson (object, (.:), (.:?), (.=))
+import Control.Monad.Reader (MonadIO (..), MonadTrans (lift))
+import Data.Aeson (object, (.:), (.=))
 import qualified Data.Aeson as Json
-import Data.Bits (clearBit)
 import qualified Data.ByteString as BS
 import Data.Default (def)
 import Data.Foldable (for_)
 import Data.List (nub, sort, (\\))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
-import Data.Maybe (fromJust, fromMaybe, isJust, maybeToList)
-import Data.Serialize (decode, encode)
-import Data.String (IsString)
+import Data.Maybe (fromJust, fromMaybe, isJust)
+import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as T
-import Data.Traversable (for)
-import Data.Word (Word32)
+import qualified Data.Text as Text
 import Database.Persist.Sqlite (runMigrationQuiet, runSqlite, transactionUndo)
-import Haskoin.Address (Address, addrToText, textToAddr)
-import Haskoin.Block (BlockHash (..), headerHash)
-import Haskoin.Crypto
-  ( Ctx,
-    Fingerprint,
-    HardPath,
-    Hash256,
-    Mnemonic,
-    SoftPath,
-    XPrvKey,
-    deriveXPubKey,
-    fromMnemonic,
-    pathToList,
-    xPubFP,
-  )
-import Haskoin.Network (Network (name), netByName)
+import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
-  ( ApiConfig (..),
-    GetAddrTxs (GetAddrTxs),
-    GetAddrsBalance (GetAddrsBalance),
-    GetAddrsTxs (GetAddrsTxs),
-    GetAddrsUnspent (GetAddrsUnspent),
-    GetBlockBest (GetBlockBest),
-    GetHealth (GetHealth),
-    GetTxs (GetTxs),
-    GetTxsRaw (GetTxsRaw),
-    LimitsParam (..),
-    PostTx (PostTx),
-    StartParam (StartParamHash),
-    apiBatch,
-    apiCall,
-  )
-import Haskoin.Transaction (OutPoint (..), TxHash (..), hexToTxHash, nosigTxHash, txHashToHex)
-import Haskoin.Util
-  ( MarshalJSON (marshalValue, unmarshalValue),
-    decodeHex,
-    eitherToMaybe,
-    liftMaybe,
-    maybeToEither,
-    snd3,
-  )
 import Haskoin.Wallet.Amounts
-  ( AmountUnit,
-    readAmount,
-    showUnit,
-  )
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
-  ( genMnemonic,
-    mergeMnemonicParts,
-    systemEntropy,
-    word8ToBase6,
-  )
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
-  ( Page (Page),
-    addrToText3,
-    chunksOf,
-    liftExcept,
-    sortDesc,
-    textToAddr3,
-    textToAddrE,
-    toPage,
-    (</>),
-  )
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
 import qualified System.Directory as D
@@ -590,16 +520,16 @@ liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
 liftEitherIO = liftEither <=< liftIO
 
 cmdMnemonic :: Natural -> Bool -> Natural -> IO Response
-cmdMnemonic ent useDice splitIn =
+cmdMnemonic ent useDice splitMnemIn =
   catchResponseError $ do
-    (orig, ms, splitMs) <- genMnemonic ent useDice splitIn
-    return $ ResponseMnemonic orig (T.words ms) (T.words <$> splitMs)
+    (orig, ms, splitMs) <- genMnemonic ent useDice splitMnemIn
+    return $ ResponseMnemonic orig (Text.words ms) (Text.words <$> splitMs)
 
 cmdCreateAcc ::
   Ctx -> Text -> Network -> Maybe Natural -> Natural -> IO Response
-cmdCreateAcc ctx name net derivM splitIn = do
+cmdCreateAcc ctx name net derivM splitMnemIn = do
   runDB $ do
-    mnem <- askMnemonicPass splitIn
+    mnem <- askMnemonicPass splitMnemIn
     walletFP <- liftEither $ walletFingerprint net ctx mnem
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
     prvKey <- liftEither $ signingKey net ctx mnem d
@@ -608,13 +538,13 @@ cmdCreateAcc ctx name net derivM splitIn = do
     return $ ResponseCreateAcc acc
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
-cmdTestAcc ctx nameM splitIn =
+cmdTestAcc ctx nameM splitMnemIn =
   runDB $ do
     (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         xPubKey = accountXPubKey ctx acc
         d = accountIndex acc
-    mnem <- askMnemonicPass splitIn
+    mnem <- askMnemonicPass splitMnemIn
     xPrvKey <- liftEither $ signingKey net ctx mnem d
     return $
       if deriveXPubKey ctx xPrvKey == xPubKey
@@ -805,7 +735,7 @@ cmdSignTx ::
   Maybe FilePath ->
   Natural ->
   IO Response
-cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
+cmdSignTx ctx nameM nosigHM inputM outputM splitMnemIn =
   runDB $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
@@ -817,10 +747,10 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitIn =
         idx = fromIntegral $ dBAccountIndex acc
         accPub = accountXPubKey ctx acc
     for_ outputM checkPathFree
-    mnem <- askMnemonicPass splitIn
+    mnem <- askMnemonicPass splitMnemIn
     prvKey <- liftEither $ signingKey net ctx mnem idx
-    let pubKey = deriveXPubKey ctx prvKey
-    unless (accPub == pubKey) $
+    let xpub = deriveXPubKey ctx prvKey
+    unless (accPub == xpub) $
       throwError "The mnemonic did not match the provided account"
     (newSignData, txInfo) <- liftEither $ signWalletTx net ctx tsd prvKey
     let nosigH = nosigTxHash $ txSignDataTx newSignData
@@ -956,7 +886,7 @@ coinToTxHash :: DBCoin -> Either String TxHash
 coinToTxHash coin =
   maybeToEither "coinToTxHash: Invalid outpoint" $ do
     bs <- decodeHex $ dBCoinOutpoint coin
-    op <- eitherToMaybe (decode bs) :: Maybe OutPoint
+    op <- eitherToMaybe (S.decode bs) :: Maybe OutPoint
     return op.hash
 
 -- Filter addresses that need to be updated
@@ -1173,12 +1103,12 @@ askMnemonicWords txt = do
       askMnemonicWords txt
 
 askMnemonicPass :: (MonadError String m, MonadIO m) => Natural -> m MnemonicPass
-askMnemonicPass splitIn = do
+askMnemonicPass splitMnemIn = do
   mnm <-
-    if splitIn == 1
+    if splitMnemIn == 1
       then liftIO $ askMnemonicWords "Enter your mnemonic words: "
       else do
-        ms <- forM [1 .. splitIn] $ \n ->
+        ms <- forM [1 .. splitMnemIn] $ \n ->
           liftIO $ askMnemonicWords $ "Split mnemonic part #" <> show n <> ": "
         liftEither $ mergeMnemonicParts ms
   passStr <- liftIO askPassword

@@ -1,37 +1,23 @@
 {-# LANGUAGE DuplicateRecordFields #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 {-# OPTIONS_GHC -Wno-ambiguous-fields -fno-warn-orphans #-}
 
 module Haskoin.Wallet.CommandsSpec where
 
-import Conduit (MonadIO, liftIO, runResourceT)
+import Conduit (MonadIO, liftIO)
 import Control.Arrow (second)
 import Control.Monad
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-    runExceptT,
-  )
-import Control.Monad.Logger (runNoLoggingT)
-import Control.Monad.Reader (runReaderT)
-import Control.Monad.Trans (lift, liftIO)
-import qualified Data.ByteString as BS
+import Control.Monad.Trans (lift)
 import Data.Default (def)
 import Data.Either
 import qualified Data.Map as Map
 import Data.Maybe
-import Data.Serialize (encode)
 import qualified Data.Serialize as S
-import Data.String.Conversions (cs)
 import Data.Text (Text)
-import qualified Data.Text as Text
-import Data.Word (Word32, Word64, Word8)
-import Database.Esqueleto hiding (isNothing)
+import Database.Esqueleto.Legacy hiding (isNothing)
 import qualified Database.Persist as P
-import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
@@ -40,37 +26,10 @@ import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.SigningSpec
-  ( addr',
-    bid',
-    coin',
-    extAddrs,
-    extAddrsT,
-    gen,
-    iAddr',
-    intAddrs,
-    intAddrsT,
-    keys,
-    keysT,
-    keysT2,
-    mnemPass,
-    mnemPass2,
-    oAddr',
-    tx',
-    txid',
-    walletFP,
-    walletFP2,
-    walletFPText,
-    walletFPText2,
-  )
 import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util
-import Numeric.Natural (Natural)
-import System.Random (StdGen, mkStdGen)
-import Test.HUnit
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck
 
 identityTests :: Ctx -> IdentityTests
 identityTests ctx =
@@ -84,9 +43,9 @@ identityTests ctx =
       marshalJsonTests =
         [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin),
           MarshalJsonBox ((ctx,) <$> arbitraryPubKeyDoc ctx),
-          MarshalJsonBox (((btc,ctx),) <$> arbitraryTxInfo btc ctx),
-          MarshalJsonBox (((btc,ctx),) <$> arbitraryUnsignedTxInfo btc ctx),
-          MarshalJsonBox (((btc,ctx),) <$> arbitraryNoSigTxInfo btc ctx),
+          MarshalJsonBox (((btc, ctx),) <$> arbitraryTxInfo btc ctx),
+          MarshalJsonBox (((btc, ctx),) <$> arbitraryUnsignedTxInfo btc ctx),
+          MarshalJsonBox (((btc, ctx),) <$> arbitraryNoSigTxInfo btc ctx),
           MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx)
         ]
     }
@@ -402,7 +361,7 @@ txsSpec ctx =
         change `shouldBe` True
         dBTxInfoAccountWallet dbInfo `shouldBe` DBWalletKey walletFPText
         dBTxInfoAccountDerivation dbInfo `shouldBe` "/44'/0'/0'"
-        dBTxInfoBlockRef dbInfo `shouldBe` encode (Store.MemRef 0)
+        dBTxInfoBlockRef dbInfo `shouldBe` S.encode (Store.MemRef 0)
         dBTxInfoConfirmed dbInfo `shouldBe` False
       -- Reinserting should produce no change
       (dbInfo2, change2) <- lift $ repsertTxInfo btc ctx accId emptyTxInfo
@@ -424,7 +383,7 @@ txsSpec ctx =
             emptyTxInfo {txInfoBlockRef = Store.BlockRef 0 0}
       liftTest $ do
         change' `shouldBe` True
-        dBTxInfoBlockRef dbInfo' `shouldBe` encode (Store.BlockRef 0 0)
+        dBTxInfoBlockRef dbInfo' `shouldBe` S.encode (Store.BlockRef 0 0)
         dBTxInfoConfirmed dbInfo' `shouldBe` True
         dBTxInfoCreated dbInfo' `shouldBe` dBTxInfoCreated dbInfo
       txsPage ctx accId (Page 5 0)
@@ -452,7 +411,7 @@ txsSpec ctx =
             emptyTxInfo {txInfoBlockRef = Store.BlockRef 10 0}
       liftTest $ do
         change'' `shouldBe` True
-        dBTxInfoBlockRef dbInfo'' `shouldBe` encode (Store.BlockRef 10 0)
+        dBTxInfoBlockRef dbInfo'' `shouldBe` S.encode (Store.BlockRef 10 0)
         dBTxInfoConfirmed dbInfo'' `shouldBe` True
       txsPage ctx accId (Page 5 0)
         `dbShouldBeE` [ emptyTxInfo

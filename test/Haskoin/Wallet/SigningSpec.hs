@@ -6,21 +6,14 @@
 
 module Haskoin.Wallet.SigningSpec where
 
-import Conduit (runResourceT)
 import Control.Arrow (second)
-import Control.Monad.Logger (runNoLoggingT)
-import Control.Monad.Reader (runReaderT)
-import Control.Monad.Trans (lift, liftIO)
 import qualified Data.ByteString as BS
 import Data.Either (fromRight)
 import qualified Data.Map as Map
 import Data.Maybe (fromJust, fromMaybe)
-import Data.Serialize (encode)
 import qualified Data.Serialize as S
-import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word (Word32, Word8)
-import Database.Persist.Sqlite (SqlBackend, withSqliteConn)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
@@ -30,10 +23,7 @@ import Haskoin.Wallet.TestUtils
 import Haskoin.Wallet.TxInfo
 import Numeric.Natural (Natural)
 import System.Random (StdGen, mkStdGen)
-import Test.HUnit
 import Test.Hspec
-import Test.Hspec.QuickCheck
-import Test.QuickCheck
 
 spec :: Spec
 spec =
@@ -217,7 +207,7 @@ signWalletTxSpec ctx =
                 ],
             txInfoOtherInputs = Map.empty,
             txInfoNonStdInputs = [],
-            txInfoSize = fromIntegral $ BS.length $ encode signedTx,
+            txInfoSize = fromIntegral $ BS.length $ S.encode signedTx,
             txInfoFee = 10000000,
             txInfoFeeByte = 44247,
             txInfoBlockRef = Store.MemRef 0,

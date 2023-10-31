@@ -1,8 +1,6 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
-{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
@@ -17,8 +15,6 @@ import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin.Network
 import Haskoin.Store.WebClient
-  ( ApiConfig (..),
-  )
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)

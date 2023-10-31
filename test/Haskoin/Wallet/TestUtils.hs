@@ -1,24 +1,22 @@
 {-# LANGUAGE ExistentialQuantification #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Haskoin.Wallet.TestUtils where
 
-import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except (ExceptT)
-import Control.Monad.Trans (MonadIO, liftIO)
+import Control.Monad.Trans (liftIO)
 import Control.Monad.Trans.Except (runExceptT)
 import Data.Either
 import qualified Data.Map.Strict as Map
 import Data.Maybe
-import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Data.Word
 import Database.Persist.Sql (runMigrationQuiet)
-import Database.Persist.Sqlite (runSqlite, transactionUndo)
+import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
@@ -253,8 +251,8 @@ arbitraryUnsignedTxInfo net ctx =
 arbitraryNoSigTxInfo :: Network -> Ctx -> Gen NoSigTxInfo
 arbitraryNoSigTxInfo net ctx =
   oneof
-    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx
-    , NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
+    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx,
+      NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
     ]
 
 arbitraryResponse :: Network -> Ctx -> Gen Response

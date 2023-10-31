@@ -3,13 +3,11 @@
 
 module Haskoin.Wallet.EntropySpec where
 
-import Control.Monad.Reader (runReaderT)
 import Control.Exception (evaluate)
 import Control.Monad
-import Control.Monad.Trans (lift, liftIO)
+import Control.Monad.Trans (liftIO)
 import qualified Data.ByteString as BS
 import Data.Default (def)
-import Data.Either
 import Data.Maybe
 import Data.Text (Text)
 import Haskoin
