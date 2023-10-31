@@ -2,24 +2,19 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TupleSections #-}
 
-module Network.Haskoin.Wallet.Entropy where
+module Haskoin.Wallet.Entropy where
 
+import Control.Monad.IO.Class ( MonadIO, liftIO )
 import Control.Monad (replicateM, unless, when)
 import Control.Monad.Except
-  ( ExceptT,
-    MonadError (throwError),
-    liftEither,
-  )
-import Control.Monad.IO.Class (liftIO)
 import Data.Bits (Bits (setBit, xor))
 import qualified Data.ByteString as BS
 import Data.List (foldl', nub)
 import Data.Text (Text)
-import qualified Data.Text as T
 import Data.Word (Word8)
 import Haskoin.Crypto (Mnemonic, toMnemonic, fromMnemonic)
 import Haskoin.Util (bsToInteger)
-import Network.Haskoin.Wallet.Util (chunksOf)
+import Haskoin.Wallet.Util (chunksOf)
 import Numeric (showIntAtBase)
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
@@ -135,7 +130,7 @@ splitEntropy n secret
 splitEntropyWith :: BS.ByteString -> [BS.ByteString] -> [BS.ByteString]
 splitEntropyWith secret ks = foldl' xorBytes secret ks : ks
 
-mergeMnemonicParts :: [T.Text] -> Either String Mnemonic
+mergeMnemonicParts :: [Text] -> Either String Mnemonic
 mergeMnemonicParts mnems
   | length mnems < 2 = Left "Only one mnemonic provided"
   | length (nub mnems) /= length mnems = Left "Two mnemonics are identical"
@@ -183,10 +178,11 @@ getDiceEntropy ent = do
 
 -- Generate a mnemonic with optional dice entropy and key splitting
 genMnemonic ::
+  (MonadIO m) =>
   Natural ->
   Bool ->
   Natural ->
-  ExceptT String IO (Text, Mnemonic, [Mnemonic])
+  ExceptT String m (Text, Mnemonic, [Mnemonic])
 genMnemonic reqEnt reqDice splitIn
   | splitIn == 0 = throwError "Invalid split option"
   | reqEnt `elem` [16, 20 .. 32] = do

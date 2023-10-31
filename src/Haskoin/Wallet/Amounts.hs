@@ -2,27 +2,14 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE TypeFamilies #-}
 
-module Network.Haskoin.Wallet.Amounts where
+module Haskoin.Wallet.Amounts where
 
 import Control.Arrow (second)
 import Control.Monad (guard)
-import Data.Text as Text
-  ( Text,
-    breakOn,
-    drop,
-    filter,
-    intercalate,
-    length,
-    pack,
-    uncons,
-  )
-import Data.Text.Read as Read (decimal)
-import Network.Haskoin.Wallet.Util
-  ( chunksOfEnd,
-    dropPatternEnd,
-    padEnd,
-    padStart,
-  )
+import Data.Text (Text)
+import qualified Data.Text as Text
+import Data.Text.Read as Read
+import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 
 data AmountUnit
@@ -58,7 +45,7 @@ showAmount unit amnt =
   where
     removeEnd = dropPatternEnd "0000" . dropPatternEnd "000000"
     addSep = Text.intercalate "'" . chunksOfEnd 3
-    showT = pack . show
+    showT = Text.pack . show
 
 readAmount :: AmountUnit -> Text -> Maybe Natural
 readAmount unit amntStr =
@@ -76,7 +63,7 @@ readAmount unit amntStr =
     UnitSatoshi -> readNatural str
   where
     str = dropAmountSep amntStr
-    (q, r) = second (Text.drop 1) $ breakOn "." str
+    (q, r) = second (Text.drop 1) $ Text.breakOn "." str
 
 readNatural :: Text -> Maybe Natural
 readNatural txt =
@@ -96,6 +83,6 @@ showIntegerAmount unit i
 -- | Like 'readAmount' but can parse a negative amount
 readIntegerAmount :: AmountUnit -> Text -> Maybe Integer
 readIntegerAmount unit txt =
-  case uncons txt of
+  case Text.uncons txt of
     Just ('-', rest) -> negate . toInteger <$> readAmount unit rest
     _ -> toInteger <$> readAmount unit txt

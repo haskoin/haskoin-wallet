@@ -1,56 +1,34 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
-module Network.Haskoin.Wallet.EntropySpec where
+module Haskoin.Wallet.EntropySpec where
 
 import Control.Exception (evaluate)
-import Control.Monad (forM_)
+import Control.Monad
+import Control.Monad.Trans (liftIO)
 import qualified Data.ByteString as BS
-import Data.Functor.Identity (Identity (runIdentity))
+import Data.Default (def)
+import Data.Maybe
 import Data.Text (Text)
 import Haskoin
-  ( Ctx,
-    addrToText,
-    btc,
-    derivePathAddr,
-    deriveXPubKey,
-    prepareContext,
-  )
-import Haskoin.Util.Arbitrary (arbitraryBSn)
-import Network.Haskoin.Wallet.AccountStore
-  ( emptyAccountStore,
-    extDeriv,
-    genExtAddress,
-    genIntAddress,
-    runAccountStoreT,
-  )
-import Network.Haskoin.Wallet.Entropy
-  ( base6ToWord8,
-    splitEntropyWith,
-    word8ToBase6,
-    xorBytes, mergeMnemonicParts,
-  )
-import Network.Haskoin.Wallet.Signing (signingKey)
-import Network.Haskoin.Wallet.TestUtils (forceRight)
-import Test.HUnit (Assertion, assertEqual)
+import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Config
+import Haskoin.Wallet.Database
+import Haskoin.Wallet.Entropy
+import Haskoin.Wallet.Signing
+import Haskoin.Wallet.TestUtils
+import Test.HUnit
 import Test.Hspec
-  ( Spec,
-    anyException,
-    describe,
-    expectationFailure,
-    it,
-    shouldBe,
-    shouldThrow,
-  )
-import Test.Hspec.QuickCheck (prop)
-import Test.QuickCheck (forAll)
-import Haskoin.Crypto (toMnemonic)
+import Test.Hspec.QuickCheck
+import Test.QuickCheck
 
 spec :: Spec
-spec = prepareContext $ \ctx -> do
-  diceSpec
-  entropySpec
-  mnemonicSpec ctx
+spec = do
+  let cfg = def :: Config
+  prepareContext $ \ctx -> do
+    diceSpec
+    entropySpec
+    mnemonicSpec ctx cfg
 
 diceSpec :: Spec
 diceSpec =
@@ -131,7 +109,7 @@ entropySpec = do
           case splitEntropyWith s [k1, k2] of
             [a, b, c] -> (a `xorBytes` b `xorBytes` c) `shouldBe` s
             _ -> expectationFailure "Invalid splitEntropyWith"
-  prop "prop: can reconstruct original mnemonic" $ 
+  prop "prop: can reconstruct original mnemonic" $
     forAll (arbitraryBSn 32) $ \s ->
       forAll (arbitraryBSn 32) $ \k1 ->
         case splitEntropyWith s [k1] of
@@ -142,35 +120,83 @@ entropySpec = do
              in unsplitMnem `shouldBe` mnem
           _ -> expectationFailure "Invalid splitEntropyWith"
 
--- https://github.com/iancoleman/bip39/issues/58
-mnemonicSpec :: Ctx -> Spec
-mnemonicSpec ctx =
+mnemonicSpec :: Ctx -> Config -> Spec
+mnemonicSpec ctx cfg =
   describe "Mnemonic API" $ do
+    -- https://github.com/iancoleman/bip39/issues/58
     it "Can derive iancoleman issue 58" $ do
-      let m =
-            "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
+      let m = "fruit wave dwarf banana earth journey tattoo true farm silk olive fence"
           p = "banana"
-          xpub = forceRight $ deriveXPubKey ctx <$> signingKey btc ctx p m 0
+          mnemPass = MnemonicPass m p
+          xpub = forceRight $ deriveXPubKey ctx <$> signingKey btc ctx mnemPass 0
           (addr0, _) = derivePathAddr ctx xpub extDeriv 0
       addrToText btc addr0 `shouldBe` Just "17rxURoF96VhmkcEGCj5LNQkmN9HVhWb7F"
-    it "Passes the bip44 test vectors" $
-      mapM_ (testBip44Vector ctx) bip44Vectors
+    it "Passes the test vectors 3 (zero padding)" $
+      mapM_ (testVector ctx) testVectors3
+    it "Passes the test vectors 4 (zero padding)" $
+      mapM_ (testVector ctx) testVectors4
+    it "Passes the BIP-44 test vectors" $
+      mapM_ (testBip44Vector ctx cfg) bip44Vectors
 
-testBip44Vector :: Ctx -> (Text, Text, Text, Text) -> Assertion
-testBip44Vector ctx (mnem, pass, addr0, addr1) = do
-  assertEqual
-    "Addr External"
-    (Just addr0)
-    (addrToText btc $ fst $ r (genExtAddress ctx))
-  assertEqual
-    "Addr Internal"
-    (Just addr1)
-    (addrToText btc $ fst $ r (genIntAddress ctx))
+testVector :: Ctx -> (Text, HardPath, Text, Text) -> Assertion
+testVector ctx (seedT, deriv, pubT, prvT) = do
+  xPrvExport btc xPrv `shouldBe` prvT
+  xPubExport btc ctx xPub `shouldBe` pubT
   where
-    k = forceRight $ signingKey btc ctx pass mnem 0
-    p = deriveXPubKey ctx k
-    s = emptyAccountStore btc p
-    r a = fst $ runIdentity $ runAccountStoreT a s
+    seed = fromJust $ decodeHex seedT
+    xPrv = derivePath ctx deriv (makeXPrvKey seed)
+    xPub = deriveXPubKey ctx xPrv
+
+-- bitpay/bitcore-lib#47 and iancoleman/bip39#58
+-- https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#test-vector-3
+testVectors3 :: [(Text, HardPath, Text, Text)]
+testVectors3 =
+  [ ( "4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be",
+      Deriv, -- m/
+      "xpub661MyMwAqRbcEZVB4dScxMAdx6d4nFc9nvyvH3v4gJL378CSRZiYmhRoP7mBy6gSPSCYk6SzXPTf3ND1cZAceL7SfJ1Z3GC8vBgp2epUt13",
+      "xprv9s21ZrQH143K25QhxbucbDDuQ4naNntJRi4KUfWT7xo4EKsHt2QJDu7KXp1A3u7Bi1j8ph3EGsZ9Xvz9dGuVrtHHs7pXeTzjuxBrCmmhgC6"
+    ),
+    ( "4b381541583be4423346c643850da4b320e46a87ae3d2a4e6da11eba819cd4acba45d239319ac14f863b8d5ab5a0d0c64d2e8a1e7d1457df2e5a3c51c73235be",
+      Deriv :| 0, -- m/0'
+      "xpub68NZiKmJWnxxS6aaHmn81bvJeTESw724CRDs6HbuccFQN9Ku14VQrADWgqbhhTHBaohPX4CjNLf9fq9MYo6oDaPPLPxSb7gwQN3ih19Zm4Y",
+      "xprv9uPDJpEQgRQfDcW7BkF7eTya6RPxXeJCqCJGHuCJ4GiRVLzkTXBAJMu2qaMWPrS7AANYqdq6vcBcBUdJCVVFceUvJFjaPdGZ2y9WACViL4L"
+    )
+  ]
+
+-- btcsuite/btcutil#172
+-- https://github.com/bitcoin/bips/blob/master/bip-0032.mediawiki#test-vector-4
+testVectors4 :: [(Text, HardPath, Text, Text)]
+testVectors4 =
+  [ ( "3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678",
+      Deriv, -- m/
+      "xpub661MyMwAqRbcGczjuMoRm6dXaLDEhW1u34gKenbeYqAix21mdUKJyuyu5F1rzYGVxyL6tmgBUAEPrEz92mBXjByMRiJdba9wpnN37RLLAXa",
+      "xprv9s21ZrQH143K48vGoLGRPxgo2JNkJ3J3fqkirQC2zVdk5Dgd5w14S7fRDyHH4dWNHUgkvsvNDCkvAwcSHNAQwhwgNMgZhLtQC63zxwhQmRv"
+    ),
+    ( "3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678",
+      Deriv :| 0, -- m/0'
+      "xpub69AUMk3qDBi3uW1sXgjCmVjJ2G6WQoYSnNHyzkmdCHEhSZ4tBok37xfFEqHd2AddP56Tqp4o56AePAgCjYdvpW2PU2jbUPFKsav5ut6Ch1m",
+      "xprv9vB7xEWwNp9kh1wQRfCCQMnZUEG21LpbR9NPCNN1dwhiZkjjeGRnaALmPXCX7SgjFTiCTT6bXes17boXtjq3xLpcDjzEuGLQBM5ohqkao9G"
+    ),
+    ( "3ddd5602285899a946114506157c7997e5444528f3003f6134712147db19b678",
+      Deriv :| 0 :| 1, -- m/0'/1'
+      "xpub6BJA1jSqiukeaesWfxe6sNK9CCGaujFFSJLomWHprUL9DePQ4JDkM5d88n49sMGJxrhpjazuXYWdMf17C9T5XnxkopaeS7jGk1GyyVziaMt",
+      "xprv9xJocDuwtYCMNAo3Zw76WENQeAS6WGXQ55RCy7tDJ8oALr4FWkuVoHJeHVAcAqiZLE7Je3vZJHxspZdFHfnBEjHqU5hG1Jaj32dVoS6XLT1"
+    )
+  ]
+
+testBip44Vector :: Ctx -> Config -> (Text, Text, Text, Text) -> Assertion
+testBip44Vector ctx cfg (mnem, pass, addr0, addr1) = do
+  runDBMemoryE $ do
+    (accId, _) <- insertAccount btc ctx walletFP "test" pub
+    extAddr <- genExtAddress ctx cfg accId ""
+    intAddr <- nextFreeIntAddr ctx cfg accId
+    liftIO $ addr0 `shouldBe` dBAddressAddress extAddr
+    liftIO $ addr1 `shouldBe` dBAddressAddress intAddr
+  where
+    mnemPass = MnemonicPass mnem pass
+    walletFP = forceRight $ walletFingerprint btc ctx mnemPass
+    prv = forceRight $ signingKey btc ctx mnemPass 0
+    pub = deriveXPubKey ctx prv
 
 -- (Mnemonic, BIP38 password, external 0/0, internal 1/0)
 bip44Vectors :: [(Text, Text, Text, Text)]
