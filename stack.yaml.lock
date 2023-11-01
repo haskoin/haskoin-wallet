@@ -16,18 +16,31 @@ packages:
     commit: 88ff19c35ad2f3d8afdf2a2970342990b40b6f40
     git: https://github.com/haskoin/haskoin-core.git
 - completed:
-    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
+    commit: 8466ea2f54d7728aff9417b4d52e829450952fd0
     git: https://github.com/haskoin/haskoin-store.git
     name: haskoin-store-data
     pantry-tree:
-      sha256: fa2a2cdca5a3d0531d81269eee4fa1e8e318e86e519a64673da9915579c37f59
+      sha256: c3c237abefa741367596811b321765313d4d5f2bebf7c8ea28e0941c76c2182c
       size: 624
     subdir: data
-    version: 1.2.0
+    version: 1.2.2
   original:
-    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
+    commit: 8466ea2f54d7728aff9417b4d52e829450952fd0
     git: https://github.com/haskoin/haskoin-store.git
     subdir: data
+- completed:
+    commit: 17cfeb3ed3c610704fddbb86c276c728d3613521
+    git: https://github.com/haskoin/secp256k1-haskell.git
+    name: secp256k1-haskell
+    pantry-tree:
+      sha256: f6770a7467efee1d23594cd166b2fe53bb67a9efadfe40c23d91026906f4e02f
+      size: 935
+    subdir: secp256k1-haskell
+    version: 1.1.0
+  original:
+    commit: 17cfeb3ed3c610704fddbb86c276c728d3613521
+    git: https://github.com/haskoin/secp256k1-haskell.git
+    subdir: secp256k1-haskell
 - completed:
     hackage: scotty-0.20@sha256:f9b3f21773f813e92e41a6b5eee1fbefbbe0c695ac5259413500270ec0847151,5292
     pantry-tree:

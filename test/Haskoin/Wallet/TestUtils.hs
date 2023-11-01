@@ -251,7 +251,7 @@ arbitraryUnsignedTxInfo net ctx =
 arbitraryNoSigTxInfo :: Network -> Ctx -> Gen NoSigTxInfo
 arbitraryNoSigTxInfo net ctx =
   oneof
-    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx,
+    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx <*> arbitrary,
       NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
     ]
 
@@ -263,80 +263,44 @@ arbitraryResponse net ctx =
         <$> arbitraryText
         <*> resize 12 (listOf arbitraryText)
         <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
-      ResponseCreateAcc <$> arbitraryDBAccount net ctx,
+      ResponseAccount <$> arbitraryDBAccount net ctx,
       ResponseTestAcc
         <$> arbitraryDBAccount net ctx
         <*> arbitrary
         <*> arbitraryText,
-      ResponseImportAcc
-        <$> arbitraryDBAccount net ctx,
-      ResponseExportAcc
-        <$> arbitraryDBAccount net ctx
-        <*> (cs <$> arbitraryText),
-      ResponseRenameAcc
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryText
-        <*> arbitraryText,
+      ResponseFile
+        <$> (cs <$> arbitraryText),
       ResponseAccounts
         <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
-      ResponseReceive
+      ResponseAddress
         <$> arbitraryDBAccount net ctx
         <*> arbitraryDBAddress net,
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryDBAddress net),
-      ResponseLabel
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryDBAddress net,
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponsePrepareTx
+      ResponseTxInfo
         <$> arbitraryDBAccount net ctx
         <*> arbitraryNoSigTxInfo net ctx,
-      ResponsePendingTxs
+      ResponseTxInfos
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryNoSigTxInfo net ctx),
-      ResponseReviewTx
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
-      ResponseExportTx
-        <$> (cs <$> arbitraryText),
-      ResponseImportTx
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
       ResponseDeleteTx
-        <$> arbitraryNatural
+        <$> arbitraryTxHash
+        <*> arbitraryNatural
         <*> arbitraryNatural,
-      ResponseSignTx
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
       ResponseCoins
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf arbitraryJsonCoin),
-      ResponseSendTx
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryTxInfo net ctx
-        <*> arbitraryTxHash,
-      ResponseSyncAcc
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryBlockHash
-        <*> arbitraryNatural
-        <*> arbitraryNatural
-        <*> arbitraryNatural,
-      ResponseDiscoverAcc
+      ResponseSync
         <$> arbitraryDBAccount net ctx
         <*> arbitraryBlockHash
         <*> arbitraryNatural
         <*> arbitraryNatural
         <*> arbitraryNatural,
       ResponseVersion <$> arbitraryText,
-      ResponsePrepareSweep
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
-      ResponseSignSweep
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
       ResponseRollDice
         <$> resize 20 (listOf arbitraryNatural)
         <*> arbitraryText

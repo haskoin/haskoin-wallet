@@ -166,16 +166,17 @@ instance MarshalJSON (Network, Ctx) TxInfo where
         <*> o .: "confirmations"
 
 data NoSigTxInfo
-  = NoSigSigned !TxHash !TxInfo
+  = NoSigSigned !TxHash !TxInfo !Bool
   | NoSigUnsigned !TxHash !UnsignedTxInfo
   deriving (Eq, Show)
 
 instance MarshalJSON (Network, Ctx) NoSigTxInfo where
-  marshalValue (net, ctx) (NoSigSigned h t) =
+  marshalValue (net, ctx) (NoSigSigned h t o) =
     object
       [ "nosighash" .= h,
         "txinfo" .= marshalValue (net, ctx) t,
-        "signed" .= True
+        "signed" .= True,
+        "online" .= o
       ]
   marshalValue (net, ctx) (NoSigUnsigned h t) =
     object
@@ -190,7 +191,7 @@ instance MarshalJSON (Network, Ctx) NoSigTxInfo where
       tV <- o .: "txinfo"
       h <- o .: "nosighash"
       if s
-        then NoSigSigned h <$> unmarshalValue (net, ctx) tV
+        then NoSigSigned h <$> unmarshalValue (net, ctx) tV <*> o .: "online"
         else NoSigUnsigned h <$> unmarshalValue (net, ctx) tV
 
 marshalMap ::

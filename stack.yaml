@@ -8,7 +8,11 @@ extra-deps:
   - git: https://github.com/haskoin/haskoin-core.git
     commit: 88ff19c35ad2f3d8afdf2a2970342990b40b6f40
   - git: https://github.com/haskoin/haskoin-store.git
-    commit: bc8b99428fedbe88b3dcf80dd4ae298b682112fb
+    commit: 8466ea2f54d7728aff9417b4d52e829450952fd0
     subdirs:
     - data
+  - git: https://github.com/haskoin/secp256k1-haskell.git
+    commit: 17cfeb3ed3c610704fddbb86c276c728d3613521
+    subdirs:
+    - secp256k1-haskell
   - scotty-0.20@sha256:f9b3f21773f813e92e41a6b5eee1fbefbbe0c695ac5259413500270ec0847151,5292

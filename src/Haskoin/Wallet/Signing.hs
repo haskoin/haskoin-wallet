@@ -167,7 +167,7 @@ signTxWithKeys ::
 signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
   when signed $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  txInfoU <- parseTxSignData net ctx publicKey tsd
+  txInfoU <- parseTxSignData net ctx publicKey tsd 
   -- signing
   let myInputs = unsignedTxInfoMyInputs txInfoU
       othInputs = unsignedTxInfoOtherInputs txInfoU

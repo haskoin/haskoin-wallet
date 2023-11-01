@@ -53,7 +53,7 @@ data Response
         responseMnemonic :: ![Text],
         responseSplitMnemonic :: ![[Text]]
       }
-  | ResponseCreateAcc
+  | ResponseAccount
       { responseAccount :: !DBAccount
       }
   | ResponseTestAcc
@@ -61,22 +61,13 @@ data Response
         responseResult :: !Bool,
         responseText :: !Text
       }
-  | ResponseImportAcc
-      { responseAccount :: !DBAccount
-      }
-  | ResponseExportAcc
-      { responseAccount :: !DBAccount,
-        responseAccountFile :: !FilePath
-      }
-  | ResponseRenameAcc
-      { responseAccount :: !DBAccount,
-        responseOldName :: !Text,
-        responseNewName :: !Text
+  | ResponseFile
+      { responseTxFile :: !FilePath
       }
   | ResponseAccounts
       { responseAccounts :: ![DBAccount]
       }
-  | ResponseReceive
+  | ResponseAddress
       { responseAccount :: !DBAccount,
         responseAddress :: !DBAddress
       }
@@ -84,58 +75,28 @@ data Response
       { responseAccount :: !DBAccount,
         responseAddresses :: ![DBAddress]
       }
-  | ResponseLabel
-      { responseAccount :: !DBAccount,
-        responseAddress :: !DBAddress
-      }
   | ResponseTxs
       { responseAccount :: !DBAccount,
         responseTxs :: ![TxInfo]
       }
-  | ResponsePrepareTx
+  | ResponseTxInfo
       { responseAccount :: !DBAccount,
         responsePendingTx :: !NoSigTxInfo
       }
-  | ResponsePendingTxs
+  | ResponseTxInfos
       { responseAccount :: !DBAccount,
         responsePendingTxs :: ![NoSigTxInfo]
       }
-  | ResponseReviewTx
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
-      }
-  | ResponseExportTx
-      { responseTxFile :: !FilePath
-      }
-  | ResponseImportTx
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
-      }
   | ResponseDeleteTx
-      { responseFreedCoins :: !Natural,
+      { responseNoSigHash :: !TxHash,
+        responseFreedCoins :: !Natural,
         responseFreedAddrs :: !Natural
-      }
-  | ResponseSignTx
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
       }
   | ResponseCoins
       { responseAccount :: !DBAccount,
         responseCoins :: ![JsonCoin]
       }
-  | ResponseSendTx
-      { responseAccount :: !DBAccount,
-        responseTransaction :: !TxInfo,
-        responseNetworkTxId :: !TxHash
-      }
-  | ResponseSyncAcc
-      { responseAccount :: !DBAccount,
-        responseBestBlock :: !BlockHash,
-        responseBestHeight :: !Natural,
-        responseTxCount :: !Natural,
-        responseCoinCount :: !Natural
-      }
-  | ResponseDiscoverAcc
+  | ResponseSync
       { responseAccount :: !DBAccount,
         responseBestBlock :: !BlockHash,
         responseBestHeight :: !Natural,
@@ -144,14 +105,6 @@ data Response
       }
   | ResponseVersion
       {responseVersion :: !Text}
-  | ResponsePrepareSweep
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
-      }
-  | ResponseSignSweep
-      { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
-      }
   | ResponseRollDice
       { responseRollDice :: ![Natural],
         responseEntropySource :: !Text
@@ -172,9 +125,9 @@ instance MarshalJSON Ctx Response where
             "mnemonic" .= w,
             "splitmnemonic" .= ws
           ]
-      ResponseCreateAcc a ->
+      ResponseAccount a ->
         object
-          [ "type" .= Json.String "createacc",
+          [ "type" .= Json.String "account",
             "account" .= a
           ]
       ResponseTestAcc a b t ->
@@ -184,32 +137,19 @@ instance MarshalJSON Ctx Response where
             "result" .= b,
             "text" .= t
           ]
-      ResponseImportAcc a ->
+      ResponseFile f ->
         object
-          [ "type" .= Json.String "importacc",
-            "account" .= a
-          ]
-      ResponseExportAcc a f ->
-        object
-          [ "type" .= Json.String "exportacc",
-            "account" .= a,
-            "accountfile" .= f
-          ]
-      ResponseRenameAcc o n a ->
-        object
-          [ "type" .= Json.String "renameacc",
-            "oldname" .= o,
-            "newname" .= n,
-            "account" .= a
+          [ "type" .= Json.String "file",
+            "file" .= f
           ]
       ResponseAccounts as ->
         object
           [ "type" .= Json.String "accounts",
             "accounts" .= as
           ]
-      ResponseReceive a addr ->
+      ResponseAddress a addr ->
         object
-          [ "type" .= Json.String "receive",
+          [ "type" .= Json.String "address",
             "account" .= a,
             "address" .= addr
           ]
@@ -219,63 +159,32 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "addresses" .= adrs
           ]
-      ResponseLabel a adr ->
-        object
-          [ "type" .= Json.String "label",
-            "account" .= a,
-            "address" .= adr
-          ]
       ResponseTxs a txs ->
         object
           [ "type" .= Json.String "txs",
             "account" .= a,
             "txs" .= (marshalValue (accountNetwork a, ctx) <$> txs)
           ]
-      ResponsePrepareTx a t -> do
+      ResponseTxInfo a t -> do
         let net = accountNetwork a
         object
-          [ "type" .= Json.String "preparetx",
+          [ "type" .= Json.String "txinfo",
             "account" .= a,
-            "pendingtx" .= marshalValue (net, ctx) t
+            "txinfo" .= marshalValue (net, ctx) t
           ]
-      ResponsePendingTxs a ts -> do
+      ResponseTxInfos a ts -> do
         let net = accountNetwork a
         object
-          [ "type" .= Json.String "pendingtxs",
+          [ "type" .= Json.String "txinfos",
             "account" .= a,
-            "pendingtxs" .= (marshalValue (net, ctx) <$> ts)
+            "txinfos" .= (marshalValue (net, ctx) <$> ts)
           ]
-      ResponseReviewTx a tx -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "reviewtx",
-            "account" .= a,
-            "pendingtx" .= marshalValue (net, ctx) tx
-          ]
-      ResponseExportTx f ->
-        object
-          [ "type" .= Json.String "exporttx",
-            "txfile" .= f
-          ]
-      ResponseImportTx a tx -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "importtx",
-            "account" .= a,
-            "pendingtx" .= marshalValue (net, ctx) tx
-          ]
-      ResponseDeleteTx c a ->
+      ResponseDeleteTx h c a ->
         object
           [ "type" .= Json.String "deletetx",
+            "nosighash" .= h,
             "freedcoins" .= c,
             "freedaddrs" .= a
-          ]
-      ResponseSignTx a t -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "signtx",
-            "account" .= a,
-            "pendingtx" .= marshalValue (net, ctx) t
           ]
       ResponseCoins a coins -> do
         let net = accountNetwork a
@@ -284,26 +193,9 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "coins" .= (marshalValue net <$> coins)
           ]
-      ResponseSendTx a t h -> do
-        let net = accountNetwork a
+      ResponseSync as bb bh tc cc ->
         object
-          [ "type" .= Json.String "sendtx",
-            "account" .= a,
-            "transaction" .= marshalValue (net, ctx) t,
-            "networktxid" .= h
-          ]
-      ResponseSyncAcc as bb bh tc cc ->
-        object
-          [ "type" .= Json.String "syncacc",
-            "account" .= as,
-            "bestblock" .= bb,
-            "bestheight" .= bh,
-            "txupdates" .= tc,
-            "coinupdates" .= cc
-          ]
-      ResponseDiscoverAcc as bb bh tc cc ->
-        object
-          [ "type" .= Json.String "discoveracc",
+          [ "type" .= Json.String "sync",
             "account" .= as,
             "bestblock" .= bb,
             "bestheight" .= bh,
@@ -312,20 +204,6 @@ instance MarshalJSON Ctx Response where
           ]
       ResponseVersion v ->
         object ["type" .= Json.String "version", "version" .= v]
-      ResponsePrepareSweep a t -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "preparesweep",
-            "account" .= a,
-            "pendingtxs" .= marshalValue (net, ctx) t
-          ]
-      ResponseSignSweep a t -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "signsweep",
-            "account" .= a,
-            "pendingtx" .= marshalValue (net, ctx) t
-          ]
       ResponseRollDice ns e ->
         object
           ["type" .= Json.String "rolldice", "entropysource" .= e, "dice" .= ns]
@@ -339,98 +217,55 @@ instance MarshalJSON Ctx Response where
             <$> o .: "entropysource"
             <*> o .: "mnemonic"
             <*> o .: "splitmnemonic"
-        "createacc" ->
-          ResponseCreateAcc
+        "account" ->
+          ResponseAccount
             <$> o .: "account"
         "testacc" ->
           ResponseTestAcc
             <$> o .: "account"
             <*> o .: "result"
             <*> o .: "text"
-        "importacc" ->
-          ResponseImportAcc
-            <$> o .: "account"
-        "exportacc" ->
-          ResponseExportAcc
-            <$> o .: "account"
-            <*> o .: "accountfile"
-        "renameacc" ->
-          ResponseRenameAcc
-            <$> o .: "oldname"
-            <*> o .: "newname"
-            <*> o .: "account"
+        "file" ->
+          ResponseFile
+            <$> o .: "file"
         "accounts" ->
           ResponseAccounts
             <$> o .: "accounts"
-        "receive" ->
-          ResponseReceive
+        "address" ->
+          ResponseAddress
             <$> o .: "account"
             <*> o .: "address"
         "addresses" ->
           ResponseAddresses
             <$> o .: "account"
             <*> o .: "addresses"
-        "label" ->
-          ResponseLabel
-            <$> o .: "account"
-            <*> o .: "address"
         "txs" -> do
           a <- o .: "account"
           let net = accountNetwork a
           txs <- mapM (unmarshalValue (net, ctx)) =<< o .: "txs"
           return $ ResponseTxs a txs
-        "preparetx" -> do
+        "txinfo" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
-          return $ ResponsePrepareTx a t
-        "pendingtxs" -> do
+          t <- unmarshalValue (net, ctx) =<< o .: "txinfo"
+          return $ ResponseTxInfo a t
+        "txinfos" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "pendingtxs"
-          return $ ResponsePendingTxs a ts
-        "reviewtx" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
-          return $ ResponseReviewTx a t
-        "exporttx" ->
-          ResponseExportTx
-            <$> o .: "txfile"
-        "importtx" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
-          return $ ResponseImportTx a t
+          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "txinfos"
+          return $ ResponseTxInfos a ts
         "deletetx" ->
           ResponseDeleteTx
-            <$> o .: "freedcoins"
+            <$> o .: "nosighash"
+            <*> o .: "freedcoins"
             <*> o .: "freedaddrs"
-        "signtx" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
-          return $ ResponseSignTx a t
         "coins" -> do
           a <- o .: "account"
           xs <- o .: "coins"
           coins <- mapM (unmarshalValue (accountNetwork a)) xs
           return $ ResponseCoins a coins
-        "sendtx" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "transaction"
-          i <- o .: "networktxid"
-          return $ ResponseSendTx a t i
-        "syncacc" ->
-          ResponseSyncAcc
-            <$> o .: "account"
-            <*> o .: "bestblock"
-            <*> o .: "bestheight"
-            <*> o .: "txupdates"
-            <*> o .: "coinupdates"
-        "discoveracc" ->
-          ResponseDiscoverAcc
+        "sync" ->
+          ResponseSync
             <$> o .: "account"
             <*> o .: "bestblock"
             <*> o .: "bestheight"
@@ -439,16 +274,6 @@ instance MarshalJSON Ctx Response where
         "version" ->
           ResponseVersion
             <$> o .: "version"
-        "preparesweep" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtxs"
-          return $ ResponsePrepareSweep a t
-        "signsweep" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "pendingtx"
-          return $ ResponseSignSweep a t
         "rolldice" ->
           ResponseRollDice
             <$> o .: "dice"
@@ -475,8 +300,8 @@ catchResponseError m = do
     Left err -> return $ ResponseError $ cs err
     Right res -> return res
 
-commandResponse :: Ctx -> Config -> Command -> IO Response
-commandResponse ctx cfg cmd =
+commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
+commandResponse ctx cfg unit cmd =
   case cmd of
     -- Mnemonic and account management
     CommandMnemonic e d s -> cmdMnemonic e d s
@@ -490,11 +315,11 @@ commandResponse ctx cfg cmd =
     CommandLabel nameM i l -> cmdLabel nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx nameM p
-    CommandPrepareTx rcpts nameM unit fee dust rcptPay o ->
+    CommandPrepareTx rcpts nameM fee dust rcptPay o ->
       cmdPrepareTx ctx cfg rcpts nameM unit fee dust rcptPay o
     CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
-    CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
+    CommandDeleteTx h -> cmdDeleteTx ctx h
     CommandCoins nameM p -> cmdCoins nameM p
     -- Import/export commands
     CommandExportAcc nameM f -> cmdExportAcc ctx nameM f
@@ -503,7 +328,7 @@ commandResponse ctx cfg cmd =
     CommandExportTx h f -> cmdExportTx h f
     CommandImportTx nameM file -> cmdImportTx ctx nameM file
     -- Online commands
-    CommandSendTx nameM h -> cmdSendTx ctx cfg nameM h
+    CommandSendTx h -> cmdSendTx ctx cfg h
     CommandSyncAcc nameM full -> cmdSyncAcc ctx cfg nameM full
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
@@ -535,7 +360,7 @@ cmdCreateAcc ctx name net derivM splitMnemIn = do
     prvKey <- liftEither $ signingKey net ctx mnem d
     let xpub = deriveXPubKey ctx prvKey
     (_, acc) <- insertAccount net ctx walletFP name xpub
-    return $ ResponseCreateAcc acc
+    return $ ResponseAccount acc
 
 cmdTestAcc :: Ctx -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx nameM splitMnemIn =
@@ -568,7 +393,7 @@ cmdImportAcc ctx fp =
   runDB $ do
     (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
     (_, acc) <- insertAccount net ctx wallet name xpub
-    return $ ResponseImportAcc acc
+    return $ ResponseAccount acc
 
 cmdExportAcc :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx nameM file =
@@ -581,13 +406,13 @@ cmdExportAcc ctx nameM file =
         wallet = accountWallet acc
         doc = PubKeyDoc xpub net name wallet
     liftIO $ writeMarshalFile ctx file doc
-    return $ ResponseExportAcc acc file
+    return $ ResponseFile file
 
 cmdRenameAcc :: Text -> Text -> IO Response
 cmdRenameAcc oldName newName =
   runDB $ do
     acc <- renameAccount oldName newName
-    return $ ResponseRenameAcc acc oldName newName
+    return $ ResponseAccount acc
 
 cmdAccounts :: Maybe Text -> IO Response
 cmdAccounts nameM =
@@ -605,7 +430,7 @@ cmdReceive ctx cfg nameM labelM =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     addr <- genExtAddress ctx cfg accId $ fromMaybe "" labelM
-    return $ ResponseReceive acc addr
+    return $ ResponseAddress acc addr
 
 cmdAddrs :: Maybe Text -> Page -> IO Response
 cmdAddrs nameM page =
@@ -619,7 +444,7 @@ cmdLabel nameM idx lab =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
-    return $ ResponseLabel acc adr
+    return $ ResponseAddress acc adr
 
 cmdTxs :: Ctx -> Maybe Text -> Page -> IO Response
 cmdTxs ctx nameM page =
@@ -652,7 +477,7 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay fileM =
     nosigHash <- importPendingTx net ctx accId signDat
     for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountById accId
-    return $ ResponsePrepareTx newAcc $ NoSigUnsigned nosigHash txInfoU
+    return $ ResponseTxInfo newAcc $ NoSigUnsigned nosigHash txInfoU
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
@@ -668,13 +493,13 @@ cmdPendingTxs ctx nameM page =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsds <- pendingTxPage accId page
-    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed)) -> do
+    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed), online) -> do
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
       return $
         if signed
-          then NoSigSigned nosigH $ unsignedToTxInfo tx txInfoU
+          then NoSigSigned nosigH (unsignedToTxInfo tx txInfoU) online
           else NoSigUnsigned nosigH txInfoU
-    return $ ResponsePendingTxs acc txs
+    return $ ResponseTxInfos acc txs
 
 cmdReviewTx :: Ctx -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx nameM fp =
@@ -687,9 +512,9 @@ cmdReviewTx ctx nameM fp =
     let txInfo = unsignedToTxInfo tx txInfoU
         nosigHash = nosigTxHash tx
     return $
-      ResponseReviewTx acc $
+      ResponseTxInfo acc $
         if signed
-          then NoSigSigned nosigHash txInfo
+          then NoSigSigned nosigHash txInfo False
           else NoSigUnsigned nosigHash txInfoU
 
 cmdExportTx :: TxHash -> FilePath -> IO Response
@@ -697,10 +522,10 @@ cmdExportTx nosigH fp =
   runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
-      Just (tsd, _) -> do
+      Just (_,tsd, _) -> do
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
-        return $ ResponseExportTx fp
+        return $ ResponseFile fp
       _ -> throwError "The pending transaction does not exist"
 
 cmdImportTx :: Ctx -> Maybe Text -> FilePath -> IO Response
@@ -714,18 +539,16 @@ cmdImportTx ctx nameM fp =
     let txInfo = unsignedToTxInfo tx txInfoU
     nosigHash <- importPendingTx net ctx accId tsd
     return $
-      ResponseReviewTx acc $
+      ResponseTxInfo acc $
         if signed
-          then NoSigSigned nosigHash txInfo
+          then NoSigSigned nosigHash txInfo False
           else NoSigUnsigned nosigHash txInfoU
 
-cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
-cmdDeleteTx ctx nameM nosigH =
+cmdDeleteTx :: Ctx -> TxHash -> IO Response
+cmdDeleteTx ctx nosigH =
   runDB $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    (coins, addrs) <- deletePendingTx net ctx accId nosigH
-    return $ ResponseDeleteTx coins addrs
+    (coins, addrs) <- deletePendingTx ctx nosigH
+    return $ ResponseDeleteTx nosigH coins addrs
 
 cmdSignTx ::
   Ctx ->
@@ -758,7 +581,7 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitMnemIn =
       throwError "The nosigHash did not match"
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
-    return $ ResponseSignTx acc (NoSigSigned nosigH txInfo)
+    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
 
 parseSignInput ::
   (MonadUnliftIO m) =>
@@ -778,7 +601,7 @@ parseSignInput nosigHM inputM outputM =
     (Just h, _, _) -> do
       resM <- lift $ getPendingTx h
       case resM of
-        Just res -> return res
+        Just (_,t,b) -> return (t,b)
         _ -> throwError "The nosigHash does not exist in the wallet"
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
@@ -793,15 +616,15 @@ cmdCoins nameM page =
     coins <- coinPage net accId page
     return $ ResponseCoins acc coins
 
-cmdSendTx :: Ctx -> Config -> Maybe Text -> TxHash -> IO Response
-cmdSendTx ctx cfg nameM nosigH =
+cmdSendTx :: Ctx -> Config -> TxHash -> IO Response
+cmdSendTx ctx cfg nosigH =
   runDB $ do
-    (_, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
     tsdM <- lift $ getPendingTx nosigH
     case tsdM of
-      Just (tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+      Just (accId, tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+        acc <- getAccountById accId
+        let net = accountNetwork acc
+            pub = accountXPubKey ctx acc
         txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
         let txInfo = unsignedToTxInfo signedTx txInfoU
             verify = verifyTxInfo net ctx signedTx txInfo
@@ -809,8 +632,12 @@ cmdSendTx ctx cfg nameM nosigH =
         checkHealth ctx net cfg
         let host = apiHost net cfg
         Store.TxId netTxId <- liftExcept $ apiCall ctx host (PostTx signedTx)
+        unless (netTxId == txHash signedTx) $
+          throwError $
+            "The server returned the wrong TxHash: "
+              <> cs (txHashToHex netTxId)
         _ <- lift $ setPendingTxOnline nosigH
-        return $ ResponseSendTx acc txInfo netTxId
+        return $ ResponseTxInfo acc $ NoSigSigned nosigH txInfo True
       _ -> throwError "The nosigHash does not exist in the wallet"
 
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
@@ -818,69 +645,80 @@ cmdSyncAcc ctx cfg nameM full =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        host = apiHost net cfg
-    -- Check API health
-    checkHealth ctx net cfg
-    -- Get the new best block before starting the sync
-    best <- liftExcept $ apiCall ctx host (GetBlockBest def)
-    -- Get the addresses from our local database
-    (addrPathMap, addrBalMap) <- allAddressesMap net accId
-    -- Fetch the address balances online
-    Store.SerialList storeBals <-
-      liftExcept . apiBatch ctx (configAddrBatch cfg) host $
-        GetAddrsBalance (Map.keys addrBalMap)
-    -- Filter only those addresses whose balances have changed
-    balsToUpdate <-
-      if full
-        then return storeBals
-        else liftEither $ filterAddresses storeBals addrBalMap
-    let addrsToUpdate = (.address) <$> balsToUpdate
-    -- Update balances
-    updateAddressBalances net balsToUpdate
-    newAcc <- lift $ updateAccountBalances accId
-    -- Get a list of our confirmed txs in the local database
-    -- Use an empty list when doing a full sync
-    confirmedTxs <- if full then return [] else getConfirmedTxs accId True
-    -- Fetch the txids of the addresses to update
-    aTids <- searchAddrTxs net ctx cfg confirmedTxs addrsToUpdate
-    -- We also want to check if there is any change in unconfirmed txs
-    uTids <- getConfirmedTxs accId False
-    let tids = nub $ uTids <> aTids
-    -- Fetch the full transactions
-    Store.SerialList txs <-
-      liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
-    -- Convert them to TxInfo and store them in the local database
-    let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
-    resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
-    -- Fetch and update coins
-    Store.SerialList storeCoins <-
-      liftExcept . apiBatch ctx (configCoinBatch cfg) host $
-        GetAddrsUnspent addrsToUpdate def
-    (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
-    -- Get the dependent tranactions of the new coins
-    depTxsHash <-
-      if full
-        then return $ (.outpoint.hash) <$> storeCoins
-        else mapM (liftEither . coinToTxHash) newCoins
-    Store.RawResultList rawTxs <-
-      liftExcept
-        . apiBatch ctx (configTxFullBatch cfg) host
-        $ GetTxsRaw
-        $ nub depTxsHash
-    lift $ forM_ rawTxs insertRawTx
-    -- Remove pending transactions if they are online
-    pendingTids <- pendingTxHashes accId
-    let toRemove = filter ((`elem` tids) . fst) pendingTids
-    forM_ toRemove $ \(_, key) -> lift $ deletePendingTxOnline key
-    -- Update the best block for this network
-    lift $ updateBest net (headerHash best.header) best.height
-    return $
-      ResponseSyncAcc
-        newAcc
-        (headerHash best.header)
-        (fromIntegral best.height)
-        (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
-        (fromIntegral coinCount)
+    sync ctx cfg net accId full
+
+sync ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  Config ->
+  Network ->
+  DBAccountId ->
+  Bool ->
+  ExceptT String (DB m) Response
+sync ctx cfg net accId full = do
+  let host = apiHost net cfg
+  -- Check API health
+  checkHealth ctx net cfg
+  -- Get the new best block before starting the sync
+  best <- liftExcept $ apiCall ctx host (GetBlockBest def)
+  -- Get the addresses from our local database
+  (addrPathMap, addrBalMap) <- allAddressesMap net accId
+  -- Fetch the address balances online
+  Store.SerialList storeBals <-
+    liftExcept . apiBatch ctx (configAddrBatch cfg) host $
+      GetAddrsBalance (Map.keys addrBalMap)
+  -- Filter only those addresses whose balances have changed
+  balsToUpdate <-
+    if full
+      then return storeBals
+      else liftEither $ filterAddresses storeBals addrBalMap
+  let addrsToUpdate = (.address) <$> balsToUpdate
+  -- Update balances
+  updateAddressBalances net balsToUpdate
+  newAcc <- lift $ updateAccountBalances accId
+  -- Get a list of our confirmed txs in the local database
+  -- Use an empty list when doing a full sync
+  confirmedTxs <- if full then return [] else getConfirmedTxs accId True
+  -- Fetch the txids of the addresses to update
+  aTids <- searchAddrTxs net ctx cfg confirmedTxs addrsToUpdate
+  -- We also want to check if there is any change in unconfirmed txs
+  uTids <- getConfirmedTxs accId False
+  let tids = nub $ uTids <> aTids
+  -- Fetch the full transactions
+  Store.SerialList txs <-
+    liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
+  -- Convert them to TxInfo and store them in the local database
+  let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
+  resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
+  -- Fetch and update coins
+  Store.SerialList storeCoins <-
+    liftExcept . apiBatch ctx (configCoinBatch cfg) host $
+      GetAddrsUnspent addrsToUpdate def
+  (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
+  -- Get the dependent tranactions of the new coins
+  depTxsHash <-
+    if full
+      then return $ (.outpoint.hash) <$> storeCoins
+      else mapM (liftEither . coinToTxHash) newCoins
+  Store.RawResultList rawTxs <-
+    liftExcept
+      . apiBatch ctx (configTxFullBatch cfg) host
+      $ GetTxsRaw
+      $ nub depTxsHash
+  lift $ forM_ rawTxs insertRawTx
+  -- Remove pending transactions if they are online
+  pendingTids <- pendingTxHashes accId
+  let toRemove = filter ((`elem` tids) . fst) pendingTids
+  forM_ toRemove $ \(_, key) -> lift $ deletePendingTxOnline key
+  -- Update the best block for this network
+  lift $ updateBest net (headerHash best.header) best.height
+  return $
+    ResponseSync
+      newAcc
+      (headerHash best.header)
+      (fromIntegral best.height)
+      (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
+      (fromIntegral coinCount)
 
 coinToTxHash :: DBCoin -> Either String TxHash
 coinToTxHash coin =
@@ -949,7 +787,7 @@ searchAddrTxs net ctx cfg confirmedTxs as
 
 cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx cfg nameM = do
-  _ <- runDB $ do
+  runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -959,10 +797,8 @@ cmdDiscoverAccount ctx cfg nameM = do
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
     discoverAccGenAddrs ctx cfg accId AddrExternal e
     discoverAccGenAddrs ctx cfg accId AddrInternal i
-    return $ ResponseDiscoverAcc acc "" 0 0 0
-  -- Perform a full sync after discovery
-  ResponseSyncAcc a bb bh tc cc <- cmdSyncAcc ctx cfg nameM True
-  return $ ResponseDiscoverAcc a bb bh tc cc
+    -- Perform a full sync after discovery
+    sync ctx cfg net accId True
   where
     go net pub path d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx path page pub
@@ -1013,7 +849,7 @@ prepareSweep ctx cfg nameM sweepFromT sweepFromFileM sweepToT outputM feeByte du
     for_ outputM checkPathFree
     nosigHash <- importPendingTx net ctx accId tsd
     for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
-    return $ ResponsePrepareSweep acc (NoSigUnsigned nosigHash info)
+    return $ ResponseTxInfo acc (NoSigUnsigned nosigHash info)
 
 signSweep ::
   Ctx ->
@@ -1044,7 +880,7 @@ signSweep ctx nameM nosigHM inputM outputM keyFile =
       throwError "The nosigHash did not match"
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
-    return $ ResponseSignSweep acc (NoSigSigned nosigH txInfo)
+    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
 
 rollDice :: Natural -> IO Response
 rollDice n = do
