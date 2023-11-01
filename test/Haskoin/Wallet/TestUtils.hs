@@ -288,7 +288,8 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryNoSigTxInfo net ctx),
       ResponseDeleteTx
-        <$> arbitraryNatural
+        <$> arbitraryTxHash
+        <*> arbitraryNatural
         <*> arbitraryNatural,
       ResponseCoins
         <$> arbitraryDBAccount net ctx

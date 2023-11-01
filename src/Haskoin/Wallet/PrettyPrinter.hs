@@ -109,6 +109,12 @@ block n str =
     Just missing -> str <> replicate (fromIntegral missing) ' '
     _ -> str
 
+rblock :: Natural -> String -> String
+rblock n str =
+  case n `safeSubtract` fromIntegral (length str) of
+    Just missing -> replicate (fromIntegral missing) ' ' <> str
+    _ -> str
+
 renderIO :: Printer -> IO ()
 renderIO cp = go 0 0 cp >> putStrLn ""
   where
@@ -134,27 +140,11 @@ renderIO cp = go 0 0 cp >> putStrLn ""
             PNonEmpty -> return l
 
 formatTitle :: String -> Printer
-formatTitle = PText [SetConsoleIntensity BoldIntensity]
-
-formatCommand :: String -> Printer
-formatCommand =
+formatTitle =
   PText
     [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Blue
+      SetColor Foreground Vivid White
     ]
-
-formatOption :: String -> Printer
-formatOption =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Magenta
-    ]
-
-formatOptExample :: String -> Printer
-formatOptExample = PText [SetConsoleIntensity BoldIntensity]
-
-formatArgument :: String -> Printer
-formatArgument = PText [SetItalicized True]
 
 formatAccount :: String -> Printer
 formatAccount =
@@ -163,34 +153,25 @@ formatAccount =
       SetColor Foreground Dull Cyan
     ]
 
-formatPubKey :: String -> Printer
-formatPubKey = PText [SetColor Foreground Dull Magenta]
-
 formatFilePath :: String -> Printer
 formatFilePath =
   PText
     [ SetItalicized True,
-      SetColor Foreground Dull White
+      SetColor Foreground Vivid White
     ]
 
 formatKey :: String -> Printer
-formatKey = PText []
-
-formatIndex :: String -> Printer
-formatIndex =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull White
-    ]
+formatKey = PText [SetColor Foreground Dull White]
 
 formatValue :: String -> Printer
-formatValue = PText []
-
-formatDeriv :: String -> Printer
-formatDeriv = PText []
+formatValue = PText [SetColor Foreground Vivid White]
 
 formatLabel :: String -> Printer
-formatLabel = PText []
+formatLabel =
+  PText
+    [ SetItalicized True,
+      SetColor Foreground Vivid White
+    ]
 
 formatMnemonic :: Bool -> String -> Printer
 formatMnemonic split =
@@ -200,72 +181,35 @@ formatMnemonic split =
     ]
 
 formatAddress :: Bool -> String -> Printer
-formatAddress True = PText []
-formatAddress False =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Cyan
-    ]
+formatAddress False = PText [SetColor Foreground Dull White]
+formatAddress True = PText [SetColor Foreground Vivid White]
 
 formatTxHash :: String -> Printer
-formatTxHash = PText [SetColor Foreground Vivid Magenta]
+formatTxHash = PText [SetColor Foreground Dull White]
 
 formatNoSigTxHash :: String -> Printer
-formatNoSigTxHash = PText [SetColor Foreground Dull Yellow]
+formatNoSigTxHash = PText [SetColor Foreground Vivid Magenta]
 
 formatBlockHash :: String -> Printer
-formatBlockHash = PText [SetColor Foreground Vivid Magenta]
+formatBlockHash = PText [SetColor Foreground Dull White]
 
 formatPosAmount :: String -> Printer
-formatPosAmount =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Green
-    ]
+formatPosAmount = PText [SetColor Foreground Vivid Green]
 
 formatNegAmount :: String -> Printer
-formatNegAmount =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Red
-    ]
+formatNegAmount = PText [SetColor Foreground Vivid Red]
 
 formatZeroAmount :: String -> Printer
-formatZeroAmount = PText []
-
-formatFee :: String -> Printer
-formatFee = PText []
+formatZeroAmount = PText [SetColor Foreground Vivid White]
 
 formatTrue :: String -> Printer
-formatTrue =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Green
-    ]
+formatTrue = PText [SetColor Foreground Vivid Green]
 
 formatFalse :: String -> Printer
-formatFalse =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Red
-    ]
-
-formatOnline :: String -> Printer
-formatOnline =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Green
-    ]
-
-formatOffline :: String -> Printer
-formatOffline =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Red
-    ]
+formatFalse = PText [SetColor Foreground Vivid Red]
 
 formatError :: String -> Printer
-formatError = PText [SetColor Foreground Dull Red]
+formatError = PText [SetColor Foreground Vivid Red]
 
 printFormat :: [SGR] -> String -> IO ()
 printFormat sgr str = do
@@ -299,6 +243,9 @@ partsPrinter xs =
         nest 2 $ mnemonicPrinter True ws
       ]
 
+keyPrinter :: Natural -> Text -> Printer
+keyPrinter n txt = formatKey (block n (cs txt)) <> text ": "
+
 amountPrinter :: AmountUnit -> Word64 -> Printer
 amountPrinter unit = integerAmountPrinter unit . fromIntegral
 
@@ -321,42 +268,32 @@ naturalPrinter nat
   | nat == 0 = formatZeroAmount $ show nat
   | otherwise = formatPosAmount $ show nat
 
-accountsPrinter :: DBAccount -> Printer
-accountsPrinter acc =
+accountPrinter :: DBAccount -> Printer
+accountPrinter acc =
   vcat
-    [ formatTitle "Account " <> formatAccount (cs $ dBAccountName acc),
-      nest 2 $ mconcat [formatKey (block 10 "Wallet: "), formatValue $ cs fp],
-      nest 2 $ mconcat [formatKey (block 10 "Deriv: "), formatValue deriv],
-      nest 2 $ mconcat [formatKey (block 10 "Network: "), formatValue net],
+    [ keyPrinter 8 "Account" <> formatAccount (cs $ dBAccountName acc),
+      mconcat [keyPrinter 8 "Wallet", formatValue $ cs fp],
+      mconcat [keyPrinter 8 "Deriv", formatValue deriv],
+      mconcat [keyPrinter 8 "Network", formatValue net],
+      mconcat
+        [keyPrinter 8 "External", formatValue $ show $ dBAccountExternal acc],
+      mconcat
+        [keyPrinter 8 "Internal", formatValue $ show $ dBAccountInternal acc],
+      mconcat [keyPrinter 8 "Created", formatValue created],
+      formatKey "Balances:",
       nest 2 $
         mconcat
-          [ formatKey (block 10 "External: "),
-            formatValue $ show $ dBAccountExternal acc
-          ],
-      nest 2 $
-        mconcat
-          [ formatKey (block 10 "Internal: "),
-            formatValue $ show $ dBAccountInternal acc
-          ],
-      nest 2 $
-        mconcat
-          [ formatKey (block 10 "Created: "),
-            formatValue created
-          ],
-      nest 2 $ formatKey "Balances:",
-      nest 4 $
-        mconcat
-          [ formatKey (block 13 "Confirmed: "),
+          [ keyPrinter 11 "Confirmed",
             amountPrinter UnitBitcoin $ dBAccountBalanceConfirmed acc
           ],
-      nest 4 $
+      nest 2 $
         mconcat
-          [ formatKey (block 13 "Unconfirmed: "),
+          [ keyPrinter 11 "Unconfirmed",
             amountPrinter UnitBitcoin $ dBAccountBalanceUnconfirmed acc
           ],
-      nest 4 $
+      nest 2 $
         mconcat
-          [ formatKey (block 13 "Coins: "),
+          [ keyPrinter 11 "Coins",
             naturalPrinter $ fromIntegral $ dBAccountBalanceCoins acc
           ]
     ]
@@ -371,28 +308,25 @@ addressPrinter :: Natural -> DBAddress -> Printer
 addressPrinter pad addr =
   vcat
     [ mconcat
-        [ formatIndex $ block pad $ show (dBAddressIndex addr) <> ":",
-          formatAddress
-            (dBAddressBalanceTxs addr > 0)
-            $ cs
-            $ dBAddressAddress addr
+        [ keyPrinter pad $ cs $ show (dBAddressIndex addr),
+          formatAddress True $ cs $ dBAddressAddress addr
         ],
       if Text.null $ dBAddressLabel addr
         then PEmpty
         else
           nest 2 $
             mconcat
-              [ formatKey (block 10 "Label: "),
+              [ keyPrinter 8 "Label",
                 formatLabel $ cs $ dBAddressLabel addr
               ],
       nest 2 $
         mconcat
-          [ formatKey (block 10 "Txs: "),
+          [ keyPrinter 8 "Txs",
             naturalPrinter $ fromIntegral $ dBAddressBalanceTxs addr
           ],
       nest 2 $
         mconcat
-          [ formatKey (block 10 "Received: "),
+          [ keyPrinter 8 "Received",
             amountPrinter UnitBitcoin $ dBAddressBalanceReceived addr
           ]
     ]
@@ -408,44 +342,55 @@ txInfoPrinter ::
   Printer ->
   Printer
 txInfoPrinter net tType amount feeN feeByteN myOutputs otherOutputs custom =
-  vcat [title, nest 2 $ vcat [custom, fee, debit, credit]]
+  vcat
+    [ formatTitle (block 9 title) <> text ": " <> total,
+      custom,
+      fee,
+      debit,
+      credit
+    ]
   where
     title =
       case tType of
-        TxDebit -> formatTitle "Debit" <+> total
-        TxInternal -> formatTitle "Internal"
-        TxCredit -> formatTitle "Credit" <+> total
+        TxDebit -> "Debit"
+        TxInternal -> "Internal"
+        TxCredit -> "Credit"
     total = integerAmountPrinter UnitBitcoin amount
+    fee
+      | tType `elem` [TxDebit, TxInternal] =
+          keyPrinter 9 "Fee" <> feePrinter UnitBitcoin feeN feeByteN
+      | otherwise = mempty
     debit
       | tType /= TxDebit = mempty
       | otherwise =
-          vcat $ fmap (addrFormat True) (Map.assocs otherOutputs)
+          vcat $
+            [formatKey "Paid to addresses:"]
+              <> (nest 2 . addrPrinter False <$> Map.assocs otherOutputs)
     credit
       | tType /= TxCredit = mempty
       | otherwise =
           vcat $
-            fmap
-              (addrFormat False)
-              (Map.assocs $ Map.map myOutputsValue myOutputs)
-    fee
-      | tType `elem` [TxDebit, TxInternal] =
-          formatKey "Fee:" <+> feePrinter UnitBitcoin feeN feeByteN
-      | otherwise = mempty
-    addrFormat isDebit (a, v) =
-      formatAddress True (parseAddr a)
+            [formatKey "My credited addresses:"]
+              <> ( nest 2 . addrPrinter True
+                     <$> Map.assocs (Map.map myOutputsValue myOutputs)
+                 )
+    addrPrinter isCredit (a, v) =
+      formatAddress isCredit (parseAddr net a)
         <> text ":"
-          <+> if isDebit
+          <+> if isCredit
             then
-              integerAmountPrinterWith
-                formatNegAmount
-                UnitBitcoin
-                (fromIntegral v)
-            else
               integerAmountPrinterWith
                 formatPosAmount
                 UnitBitcoin
                 (fromIntegral v)
-    parseAddr = cs . fromMaybe "Invalid Address" . addrToText net
+            else
+              integerAmountPrinterWith
+                formatZeroAmount
+                UnitBitcoin
+                (fromIntegral v)
+
+parseAddr :: Network -> Address -> String
+parseAddr net = cs . fromMaybe "Invalid Address" . addrToText net
 
 noSigTxInfoPrinter :: Network -> NoSigTxInfo -> Printer
 noSigTxInfoPrinter net ns =
@@ -460,12 +405,13 @@ noSigTxInfoPrinter net ns =
         txInfoMyOutputs
         txInfoOtherOutputs
         $ vcat
-          [ formatKey (block 11 "TxHash:")
-              <+> formatTxHash (cs $ txHashToHex txInfoHash),
-            formatKey (block 11 "NoSigHash:")
-              <+> formatNoSigTxHash (cs $ txHashToHex nosigH),
-            text "This pending transaction is" <+> formatFalse "not signed",
-            formatKey "Confirmations:" <+> text (show txInfoConfirmations)
+          [ keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex txInfoHash),
+            keyPrinter 9 "NoSigHash"
+              <> formatNoSigTxHash (cs $ txHashToHex nosigH),
+            keyPrinter 9 "Signed"
+              <> text "This pending transaction is"
+                <+> formatTrue "signed",
+            keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
           ]
     NoSigUnsigned nosigH UnsignedTxInfo {..} ->
       txInfoPrinter
@@ -477,17 +423,45 @@ noSigTxInfoPrinter net ns =
         unsignedTxInfoMyOutputs
         unsignedTxInfoOtherOutputs
         $ vcat
-          [ formatKey "NoSigHash:" <+> formatNoSigTxHash (cs $ txHashToHex nosigH),
-            text "This pending transaction is" <+> formatFalse "not signed"
+          [ keyPrinter 9 "NoSigHash"
+              <> formatNoSigTxHash (cs $ txHashToHex nosigH),
+            keyPrinter 9 "Signed"
+              <> text "This pending transaction is"
+                <+> formatFalse "not signed"
           ]
 
 feePrinter :: AmountUnit -> Natural -> Natural -> Printer
 feePrinter unit fee feeBytes =
   integerAmountPrinterWith formatZeroAmount unit (fromIntegral fee)
     <+> text "("
-    <> text (show feeBytes)
+    <> formatValue (show feeBytes)
       <+> text "sat/bytes"
     <> text ")"
+
+coinPrinter :: Network -> JsonCoin -> Printer
+coinPrinter net JsonCoin {..} =
+  vcat
+    [ formatKey (block 7 "TxHash")
+        <> text ":"
+          <+> formatTxHash (cs $ txHashToHex jsonCoinOutpoint.hash),
+      formatKey (block 7 "Index")
+        <> text ":"
+          <+> formatValue (show jsonCoinOutpoint.index),
+      formatKey (block 7 "Value")
+        <> text ":"
+          <+> amountPrinter UnitBitcoin jsonCoinValue,
+      formatKey (block 7 "Address")
+        <> text ":"
+          <+> formatAddress True (parseAddr net jsonCoinAddress),
+      formatKey (block 7 "Confs")
+        <> text ":"
+          <+> formatValue (show jsonCoinConfirmations),
+      formatKey (block 7 "Status")
+        <> text ":"
+          <+> if jsonCoinLocked
+            then formatFalse "Locked"
+            else formatTrue "Free"
+    ]
 
 prettyPrinter :: Ctx -> Response -> IO ()
 prettyPrinter ctx =
@@ -503,10 +477,10 @@ prettyPrinter ctx =
           nest 2 $ mnemonicPrinter False mnem
         ]
           <> partsPrinter parts
-    ResponseAccount acc -> renderIO $ accountsPrinter acc
+    ResponseAccount acc -> renderIO $ accountPrinter acc
     ResponseAccounts [] -> renderIO $ text "There are no accounts in the wallet"
     ResponseAccounts accs ->
-      renderIO . vcat $ intersperse (text " ") $ accountsPrinter <$> accs
+      renderIO . vcat $ intersperse (text " ") $ accountPrinter <$> accs
     ResponseTestAcc _ res txt -> do
       let p =
             if res
@@ -516,12 +490,12 @@ prettyPrinter ctx =
     ResponseFile f -> renderIO $ formatKey "File:" <+> formatFilePath f
     ResponseAddress _ addr -> do
       let l = length $ show $ dBAddressIndex addr
-      renderIO $ addressPrinter (fromIntegral l + 2) addr
+      renderIO $ addressPrinter (fromIntegral l) addr
     ResponseAddresses _ [] ->
       renderIO $ text "There are no addresses in the account"
     ResponseAddresses _ addrs -> do
       let l = length $ show $ maximum $ dBAddressIndex <$> addrs
-      renderIO $ vcat $ addressPrinter (fromIntegral l + 2) <$> addrs
+      renderIO $ vcat $ addressPrinter (fromIntegral l) <$> addrs
     ResponseTxs _ [] ->
       renderIO $ text "There are no transactions in the account"
     ResponseTxs acc txs -> do
@@ -536,8 +510,9 @@ prettyPrinter ctx =
               txInfoMyOutputs
               txInfoOtherOutputs
               $ vcat
-                [ formatTxHash (cs $ txHashToHex txInfoHash),
-                  formatKey "Confirmations:" <+> text (show txInfoConfirmations)
+                [ keyPrinter 9 "TxHash"
+                    <> formatTxHash (cs $ txHashToHex txInfoHash),
+                  keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
                 ]
       renderIO $ vcat $ intersperse (text " ") $ f <$> txs
     ResponseTxInfo acc txInfo -> do
@@ -559,3 +534,25 @@ prettyPrinter ctx =
             nest 2 $
               formatKey "Freed internal addresses:" <+> formatValue (show a)
           ]
+    ResponseCoins acc coins -> do
+      let net = accountNetwork acc
+      renderIO $ vcat $ intersperse (text " ") $ coinPrinter net <$> coins
+    ResponseSync acc bh h t c -> do
+      renderIO $
+        vcat
+          [ accountPrinter acc,
+            formatTitle "Sync Results:",
+            nest 2 $
+              keyPrinter 12 "Best Block"
+                <> formatBlockHash (cs $ blockHashToHex bh),
+            nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
+            nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
+            nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
+          ]
+    ResponseVersion v ->
+      renderIO $ formatKey "Version:" <+> formatValue (cs v)
+    ResponseRollDice ds e ->
+      renderIO . vcat $
+        [ formatKey "System Entropy Source:" <+> formatFilePath (cs e),
+          formatKey "Dice rolls:" <+> formatValue (show ds)
+        ]
