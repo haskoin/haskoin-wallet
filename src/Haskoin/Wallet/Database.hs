@@ -1075,22 +1075,24 @@ data TxOnline = TxOnline | TxOffline
   deriving (Eq, Show)
 
 -- Returns (TxSignData, isOnline)
-getPendingTx :: (MonadUnliftIO m) => TxHash -> DB m (Maybe (TxSignData, Bool))
+getPendingTx ::
+  (MonadUnliftIO m) => TxHash -> DB m (Maybe (DBAccountId, TxSignData, Bool))
 getPendingTx nosigHash = do
   let hashT = txHashToHex nosigHash
       key = DBPendingTxKey hashT
   resM <- P.get key
   case resM of
-    Just (DBPendingTx _ _ _ blob online _) -> do
-      let tsdM = Json.decode $ BS.fromStrict blob
-      return $ (,online) <$> tsdM
+    Just (DBPendingTx wallet accDeriv _ blob online _) -> do
+      let accId = DBAccountKey wallet accDeriv
+          tsdM = Json.decode $ BS.fromStrict blob
+      return $ (accId,,online) <$> tsdM
     _ -> return Nothing
 
 pendingTxPage ::
   (MonadUnliftIO m) =>
   DBAccountId ->
   Page ->
-  ExceptT String (DB m) [(TxHash, TxSignData)]
+  ExceptT String (DB m) [(TxHash, TxSignData, Bool)]
 pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
   tsds <-
     lift . select . from $ \p -> do
@@ -1108,7 +1110,7 @@ pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
         maybeToEither "TxHash" $
           hexToTxHash $
             dBPendingTxNosigHash res
-    return (nosigHash, tsd)
+    return (nosigHash, tsd, dBPendingTxOnline res)
 
 -- Returns the TxHash and NoSigHash of pending transactions. They are compared
 -- during a sync in order to delete pending transactions that are now online.
@@ -1145,7 +1147,7 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx nosigHash
   case prevM of
-    Just (TxSignData prevTx _ _ _ prevSigned, online) -> do
+    Just (_, TxSignData prevTx _ _ _ prevSigned, online) -> do
       when online $
         throwError "The transaction is already online"
       when (prevSigned && not signed) $
@@ -1217,23 +1219,22 @@ parseTxInfoU (UnsignedTxInfo _ _ myOps _ myIps _ _ _ _) =
 -- Delete a pending transaction, unlocks coins and frees internal addresses
 deletePendingTx ::
   (MonadUnliftIO m) =>
-  Network ->
   Ctx ->
-  DBAccountId ->
   TxHash ->
   ExceptT String (DB m) (Natural, Natural)
-deletePendingTx net ctx accId nosigHash = do
+deletePendingTx ctx nosigHash = do
   let key = DBPendingTxKey $ txHashToHex nosigHash
   tsdM <- lift $ getPendingTx nosigHash
   case tsdM of
-    Just (_, True) -> do
+    Just (_, _, True) -> do
       throwError
         "This pending transaction has been sent to the network.\
         \ Run syncacc to refresh your database."
     -- We only free coins and addresses if the transaction is offline
-    Just (tsd, False) -> do
+    Just (accId, tsd, False) -> do
       acc <- getAccountById accId
-      let pub = accountXPubKey ctx acc
+      let net = accountNetwork acc
+          pub = accountXPubKey ctx acc
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
       let (outpoints, outIntAddrs, _) = parseTxInfoU txInfoU
       outIntAddrsT <-

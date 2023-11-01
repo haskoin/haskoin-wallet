@@ -67,7 +67,6 @@ data Command
   | CommandPrepareTx
       { commandRecipients :: ![(Text, Text)],
         commandMaybeAcc :: !(Maybe Text),
-        commandUnit :: !AmountUnit,
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
         commandRcptPay :: !Bool,
@@ -90,9 +89,7 @@ data Command
         commandFilePath :: !FilePath
       }
   | CommandDeleteTx
-      { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHash :: !TxHash
-      }
+      { commandNoSigHash :: !TxHash }
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
         commandNoSigHashMaybe :: !(Maybe TxHash),
@@ -105,9 +102,7 @@ data Command
         commandPage :: !Page
       }
   | CommandSendTx
-      { commandMaybeAcc :: !(Maybe Text),
-        commandNoSigHash :: !TxHash
-      }
+      { commandNoSigHash :: !TxHash }
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
         commandFull :: !Bool
@@ -137,15 +132,15 @@ data Command
       }
   deriving (Eq, Show)
 
-parserMain :: IO (Command, Bool)
+parserMain :: IO (Command, AmountUnit, Bool)
 parserMain =
   customExecParser
     (prefs $ showHelpOnEmpty <> helpIndent 25)
     programParser
 
-programParser :: ParserInfo (Command, Bool)
+programParser :: ParserInfo (Command, AmountUnit, Bool)
 programParser = do
-  let cmd = (,) <$> (commandParser <**> helper) <*> jsonOption
+  let cmd = (,,) <$> (commandParser <**> helper) <*> unitOption <*> jsonOption
   info cmd $
     fullDesc
       <> progDesc
@@ -160,7 +155,33 @@ jsonOption =
   switch $
     short 'j'
       <> long "json"
-      <> help "Display the result as JSON"
+      <> help [r|
+Display the result as JSON. Specify this option at the end of your command.
+|]
+
+unitOption :: Parser AmountUnit
+unitOption = satoshiOption <|> bitOption
+
+satoshiOption :: Parser AmountUnit
+satoshiOption =
+  flag UnitBitcoin UnitSatoshi $
+    short 's'
+      <> long "satoshi"
+      <> help [r|
+Use satoshis for parsing and displaying amounts (default: bitcoin). Specify this
+option at the end of your command.
+|]
+
+
+bitOption :: Parser AmountUnit
+bitOption =
+  flag UnitBitcoin UnitBit $
+    short 'b'
+      <> long "bit"
+      <> help  [r|
+Use bits for parsing and displaying amounts (default: bitcoin). Specify this
+option at the end of your command.
+|]
 
 commandParser :: Parser Command
 commandParser =
@@ -557,7 +578,6 @@ prepareTxParser = do
         CommandPrepareTx
           <$> some recipientArg
           <*> accountOption
-          <*> unitOption
           <*> feeOption
           <*> dustOption
           <*> rcptPayOption
@@ -622,23 +642,6 @@ dustOption =
       <> value 5430
       <> showDefault
       <> help "Amount (in satoshi) below which an output is considered dust"
-
-unitOption :: Parser AmountUnit
-unitOption = satoshiOption <|> bitOption
-
-satoshiOption :: Parser AmountUnit
-satoshiOption =
-  flag UnitBitcoin UnitSatoshi $
-    short 's'
-      <> long "satoshi"
-      <> help "Use satoshis for parsing amounts (default: bitcoin)"
-
-bitOption :: Parser AmountUnit
-bitOption =
-  flag UnitBitcoin UnitBit $
-    short 'b'
-      <> long "bit"
-      <> help "Use bits for parsing amounts (default: bitcoin)"
 
 rcptPayOption :: Parser Bool
 rcptPayOption =
@@ -736,10 +739,7 @@ importTxParser = do
 
 deleteTxParser :: ParserInfo Command
 deleteTxParser = do
-  let cmd =
-        CommandDeleteTx
-          <$> accountOption
-          <*> nosigHashArg
+  let cmd = CommandDeleteTx <$> nosigHashArg
   info cmd $
     progDesc "Delete a pending transaction"
       <> footer
@@ -808,10 +808,7 @@ and free up any locked coins.
 
 sendTxParser :: ParserInfo Command
 sendTxParser = do
-  let cmd =
-        CommandSendTx
-          <$> accountOption
-          <*> nosigHashArg
+  let cmd = CommandSendTx <$> nosigHashArg
   info cmd $
     progDesc "Send (upload) a signed transaction to the network"
       <> footer
@@ -896,7 +893,7 @@ prepareSweepParser = do
 given --sweepfrom addresses and sends them to the --sweepto addresses. The
 typical use case for this command is to migrate an old wallet to a new mnemonic.
 The addresses can also be parsed from a --addrfile. The best way to pass
-multiple addresses on the command line is with the shorthand -s ADDR1 -s ADDR2
+multiple addresses on the command line is with the shorthand -w ADDR1 -w ADDR2
 for --sweepfrom addresses and -t ADDR1 -t ADDR2 for --sweepto addresses. You
 can generate addresses to sweep to with the `receive` command.
 |]
@@ -904,7 +901,7 @@ can generate addresses to sweep to with the `receive` command.
 sweepFromOption :: Parser Text
 sweepFromOption =
   strOption $
-    short 's'
+    short 'w'
       <> long "sweepfrom"
       <> metavar "ADDRESS"
       <> help "Addresses to sweep from"

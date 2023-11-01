@@ -300,8 +300,8 @@ catchResponseError m = do
     Left err -> return $ ResponseError $ cs err
     Right res -> return res
 
-commandResponse :: Ctx -> Config -> Command -> IO Response
-commandResponse ctx cfg cmd =
+commandResponse :: Ctx -> Config -> AmountUnit -> Command -> IO Response
+commandResponse ctx cfg unit cmd =
   case cmd of
     -- Mnemonic and account management
     CommandMnemonic e d s -> cmdMnemonic e d s
@@ -315,11 +315,11 @@ commandResponse ctx cfg cmd =
     CommandLabel nameM i l -> cmdLabel nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx nameM p
-    CommandPrepareTx rcpts nameM unit fee dust rcptPay o ->
+    CommandPrepareTx rcpts nameM fee dust rcptPay o ->
       cmdPrepareTx ctx cfg rcpts nameM unit fee dust rcptPay o
     CommandPendingTxs nameM p -> cmdPendingTxs ctx nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx nameM h i o s
-    CommandDeleteTx nameM h -> cmdDeleteTx ctx nameM h
+    CommandDeleteTx h -> cmdDeleteTx ctx h
     CommandCoins nameM p -> cmdCoins nameM p
     -- Import/export commands
     CommandExportAcc nameM f -> cmdExportAcc ctx nameM f
@@ -328,7 +328,7 @@ commandResponse ctx cfg cmd =
     CommandExportTx h f -> cmdExportTx h f
     CommandImportTx nameM file -> cmdImportTx ctx nameM file
     -- Online commands
-    CommandSendTx nameM h -> cmdSendTx ctx cfg nameM h
+    CommandSendTx h -> cmdSendTx ctx cfg h
     CommandSyncAcc nameM full -> cmdSyncAcc ctx cfg nameM full
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
@@ -493,11 +493,11 @@ cmdPendingTxs ctx nameM page =
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     tsds <- pendingTxPage accId page
-    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed)) -> do
+    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed), online) -> do
       txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
       return $
         if signed
-          then NoSigSigned nosigH $ unsignedToTxInfo tx txInfoU
+          then NoSigSigned nosigH (unsignedToTxInfo tx txInfoU) online
           else NoSigUnsigned nosigH txInfoU
     return $ ResponseTxInfos acc txs
 
@@ -514,7 +514,7 @@ cmdReviewTx ctx nameM fp =
     return $
       ResponseTxInfo acc $
         if signed
-          then NoSigSigned nosigHash txInfo
+          then NoSigSigned nosigHash txInfo False
           else NoSigUnsigned nosigHash txInfoU
 
 cmdExportTx :: TxHash -> FilePath -> IO Response
@@ -522,7 +522,7 @@ cmdExportTx nosigH fp =
   runDB $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
-      Just (tsd, _) -> do
+      Just (_,tsd, _) -> do
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseFile fp
@@ -541,15 +541,13 @@ cmdImportTx ctx nameM fp =
     return $
       ResponseTxInfo acc $
         if signed
-          then NoSigSigned nosigHash txInfo
+          then NoSigSigned nosigHash txInfo False
           else NoSigUnsigned nosigHash txInfoU
 
-cmdDeleteTx :: Ctx -> Maybe Text -> TxHash -> IO Response
-cmdDeleteTx ctx nameM nosigH =
+cmdDeleteTx :: Ctx -> TxHash -> IO Response
+cmdDeleteTx ctx nosigH =
   runDB $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    (coins, addrs) <- deletePendingTx net ctx accId nosigH
+    (coins, addrs) <- deletePendingTx ctx nosigH
     return $ ResponseDeleteTx nosigH coins addrs
 
 cmdSignTx ::
@@ -583,7 +581,7 @@ cmdSignTx ctx nameM nosigHM inputM outputM splitMnemIn =
       throwError "The nosigHash did not match"
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
-    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo)
+    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
 
 parseSignInput ::
   (MonadUnliftIO m) =>
@@ -603,7 +601,7 @@ parseSignInput nosigHM inputM outputM =
     (Just h, _, _) -> do
       resM <- lift $ getPendingTx h
       case resM of
-        Just res -> return res
+        Just (_,t,b) -> return (t,b)
         _ -> throwError "The nosigHash does not exist in the wallet"
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
@@ -618,15 +616,15 @@ cmdCoins nameM page =
     coins <- coinPage net accId page
     return $ ResponseCoins acc coins
 
-cmdSendTx :: Ctx -> Config -> Maybe Text -> TxHash -> IO Response
-cmdSendTx ctx cfg nameM nosigH =
+cmdSendTx :: Ctx -> Config -> TxHash -> IO Response
+cmdSendTx ctx cfg nosigH =
   runDB $ do
-    (_, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
     tsdM <- lift $ getPendingTx nosigH
     case tsdM of
-      Just (tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+      Just (accId, tsd@(TxSignData signedTx _ _ _ signed), _) -> do
+        acc <- getAccountById accId
+        let net = accountNetwork acc
+            pub = accountXPubKey ctx acc
         txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
         let txInfo = unsignedToTxInfo signedTx txInfoU
             verify = verifyTxInfo net ctx signedTx txInfo
@@ -639,7 +637,7 @@ cmdSendTx ctx cfg nameM nosigH =
             "The server returned the wrong TxHash: "
               <> cs (txHashToHex netTxId)
         _ <- lift $ setPendingTxOnline nosigH
-        return $ ResponseTxInfo acc $ NoSigSigned nosigH txInfo
+        return $ ResponseTxInfo acc $ NoSigSigned nosigH txInfo True
       _ -> throwError "The nosigHash does not exist in the wallet"
 
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
@@ -882,7 +880,7 @@ signSweep ctx nameM nosigHM inputM outputM keyFile =
       throwError "The nosigHash did not match"
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
-    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo)
+    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
 
 rollDice :: Natural -> IO Response
 rollDice n = do

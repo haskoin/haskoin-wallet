@@ -575,7 +575,7 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h1, tsd)]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h1, tsd, False)]
       -- Check address free status
       checkFree 0 False
       checkFree 1 False
@@ -610,7 +610,7 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h2, tsd2), (h1, tsd)]
+        `dbShouldBeE` [(h2, tsd2, False), (h1, tsd, False)]
       checkFree 0 False
       checkFree 1 False
       checkFree 2 False
@@ -619,12 +619,12 @@ pendingTxsSpec ctx cfg =
         shouldBeLeft' "chooseCoins: No solution found" $
           buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 1)] 0 0 False
       -- Delete first transaction
-      deletePendingTx btc ctx accId h1 `dbShouldBeE` (1, 1)
+      deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = False}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h2, tsd2)]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h2, tsd2, False)]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -651,7 +651,7 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h3, tsd3), (h2, tsd2)]
+        `dbShouldBeE` [(h3, tsd3, False), (h2, tsd2, False)]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -667,7 +667,7 @@ pendingTxsSpec ctx cfg =
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
       pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h3, tsd3), (h2, tsd2')]
+        `dbShouldBeE` [(h3, tsd3, False), (h2, tsd2', False)]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -682,13 +682,13 @@ pendingTxsSpec ctx cfg =
         shouldBeLeft' "The transaction is already online" $
           importPendingTx btc ctx accId tsd2'
         -- Can not delete an online transaction
-        shouldBeLeft $ deletePendingTx btc ctx accId h2
+        shouldBeLeft $ deletePendingTx ctx h2
       lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex h2
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h3, tsd3)]
+      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h3, tsd3, False)]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False

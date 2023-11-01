@@ -12,11 +12,11 @@ clientMain :: IO ()
 clientMain =
   withContext $ \ctx -> do
     cfg <- initConfig
-    (cmd, json) <- parserMain
-    res <- commandResponse ctx cfg cmd
+    (cmd, unit, json) <- parserMain
+    res <- commandResponse ctx cfg unit cmd
     if json
       then jsonPrinter ctx res
-      else prettyPrinter ctx res
+      else prettyPrinter unit res
 
 jsonPrinter :: Ctx -> Response -> IO ()
 jsonPrinter ctx = C8.putStrLn . encodeJsonPretty . marshalValue ctx

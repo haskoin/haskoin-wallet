@@ -251,7 +251,7 @@ arbitraryUnsignedTxInfo net ctx =
 arbitraryNoSigTxInfo :: Network -> Ctx -> Gen NoSigTxInfo
 arbitraryNoSigTxInfo net ctx =
   oneof
-    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx,
+    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx <*> arbitrary,
       NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
     ]
 
