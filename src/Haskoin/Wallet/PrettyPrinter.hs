@@ -5,6 +5,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE TupleSections #-}
 
 module Haskoin.Wallet.PrettyPrinter where
@@ -27,6 +28,7 @@ import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
+import Data.Time.Format
 import Data.Word
 import Database.Persist.Sqlite (runMigrationQuiet, runSqlite, transactionUndo)
 import Haskoin
@@ -49,7 +51,6 @@ import qualified System.Directory as D
 import System.Exit
 import System.IO
 import System.Random (initStdGen)
-import Data.Time.Format
 
 data Printer
   = PConcat !Printer !Printer
@@ -155,9 +156,6 @@ formatOptExample = PText [SetConsoleIntensity BoldIntensity]
 formatArgument :: String -> Printer
 formatArgument = PText [SetItalicized True]
 
-formatStatic :: String -> Printer
-formatStatic = PText []
-
 formatAccount :: String -> Printer
 formatAccount =
   PText
@@ -178,15 +176,21 @@ formatFilePath =
 formatKey :: String -> Printer
 formatKey = PText []
 
-formatValue :: String -> Printer
-formatValue =
+formatIndex :: String -> Printer
+formatIndex =
   PText
     [ SetConsoleIntensity BoldIntensity,
       SetColor Foreground Dull White
     ]
 
+formatValue :: String -> Printer
+formatValue = PText []
+
 formatDeriv :: String -> Printer
 formatDeriv = PText []
+
+formatLabel :: String -> Printer
+formatLabel = PText []
 
 formatMnemonic :: Bool -> String -> Printer
 formatMnemonic split =
@@ -195,22 +199,19 @@ formatMnemonic split =
       SetColor Foreground Dull (if split then Yellow else Cyan)
     ]
 
-formatAddress :: String -> Printer
-formatAddress =
+formatAddress :: Bool -> String -> Printer
+formatAddress True = PText []
+formatAddress False =
   PText
     [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Dull Blue
-    ]
-
-formatInternalAddress :: String -> Printer
-formatInternalAddress =
-  PText
-    [ SetConsoleIntensity BoldIntensity,
-      SetColor Foreground Vivid Black
+      SetColor Foreground Dull Cyan
     ]
 
 formatTxHash :: String -> Printer
 formatTxHash = PText [SetColor Foreground Vivid Magenta]
+
+formatNoSigTxHash :: String -> Printer
+formatNoSigTxHash = PText [SetColor Foreground Dull Yellow]
 
 formatBlockHash :: String -> Printer
 formatBlockHash = PText [SetColor Foreground Vivid Magenta]
@@ -228,6 +229,9 @@ formatNegAmount =
     [ SetConsoleIntensity BoldIntensity,
       SetColor Foreground Dull Red
     ]
+
+formatZeroAmount :: String -> Printer
+formatZeroAmount = PText []
 
 formatFee :: String -> Printer
 formatFee = PText []
@@ -295,24 +299,27 @@ partsPrinter xs =
         nest 2 $ mnemonicPrinter True ws
       ]
 
-formatFeeBytes :: Natural -> Printer
-formatFeeBytes fee = formatFee (show fee) <+> text "sat/bytes"
+amountPrinter :: AmountUnit -> Word64 -> Printer
+amountPrinter unit = integerAmountPrinter unit . fromIntegral
 
-formatAmount :: AmountUnit -> Word64 -> Printer
-formatAmount unit = formatIntegerAmount unit . fromIntegral
+integerAmountPrinter :: AmountUnit -> Integer -> Printer
+integerAmountPrinter unit amnt
+  | amnt == 0 = integerAmountPrinterWith formatZeroAmount unit amnt
+  | amnt > 0 = integerAmountPrinterWith formatPosAmount unit amnt
+  | otherwise = integerAmountPrinterWith formatNegAmount unit amnt
 
-formatIntegerAmount :: AmountUnit -> Integer -> Printer
-formatIntegerAmount unit amnt
-  | amnt >= 0 = formatIntegerAmountWith formatPosAmount unit amnt
-  | otherwise = formatIntegerAmountWith formatNegAmount unit amnt
-
-formatIntegerAmountWith ::
+integerAmountPrinterWith ::
   (String -> Printer) -> AmountUnit -> Integer -> Printer
-formatIntegerAmountWith f unit amnt =
-  f (cs $ showIntegerAmount unit amnt) <+> formatUnit unit amnt
+integerAmountPrinterWith f unit amnt =
+  f (cs $ showIntegerAmount unit amnt) <+> unitPrinter unit amnt
 
-formatUnit :: AmountUnit -> Integer -> Printer
-formatUnit unit = text . cs . showUnit unit
+unitPrinter :: AmountUnit -> Integer -> Printer
+unitPrinter unit = text . cs . showUnit unit
+
+naturalPrinter :: Natural -> Printer
+naturalPrinter nat
+  | nat == 0 = formatZeroAmount $ show nat
+  | otherwise = formatPosAmount $ show nat
 
 accountsPrinter :: DBAccount -> Printer
 accountsPrinter acc =
@@ -336,21 +343,21 @@ accountsPrinter acc =
           [ formatKey (block 10 "Created: "),
             formatValue created
           ],
-      nest 2 $ formatKey (block 10 "Balance:"),
+      nest 2 $ formatKey "Balances:",
       nest 4 $
         mconcat
           [ formatKey (block 13 "Confirmed: "),
-            formatAmount UnitBitcoin $ dBAccountBalanceConfirmed acc
+            amountPrinter UnitBitcoin $ dBAccountBalanceConfirmed acc
           ],
       nest 4 $
         mconcat
           [ formatKey (block 13 "Unconfirmed: "),
-            formatAmount UnitBitcoin $ dBAccountBalanceUnconfirmed acc
+            amountPrinter UnitBitcoin $ dBAccountBalanceUnconfirmed acc
           ],
       nest 4 $
         mconcat
           [ formatKey (block 13 "Coins: "),
-            formatValue $ show $ dBAccountBalanceCoins acc
+            naturalPrinter $ fromIntegral $ dBAccountBalanceCoins acc
           ]
     ]
   where
@@ -360,12 +367,133 @@ accountsPrinter acc =
     utctime = dBAccountCreated acc
     created = formatTime defaultTimeLocale "%d %b %Y" utctime
 
+addressPrinter :: Natural -> DBAddress -> Printer
+addressPrinter pad addr =
+  vcat
+    [ mconcat
+        [ formatIndex $ block pad $ show (dBAddressIndex addr) <> ":",
+          formatAddress
+            (dBAddressBalanceTxs addr > 0)
+            $ cs
+            $ dBAddressAddress addr
+        ],
+      if Text.null $ dBAddressLabel addr
+        then PEmpty
+        else
+          nest 2 $
+            mconcat
+              [ formatKey (block 10 "Label: "),
+                formatLabel $ cs $ dBAddressLabel addr
+              ],
+      nest 2 $
+        mconcat
+          [ formatKey (block 10 "Txs: "),
+            naturalPrinter $ fromIntegral $ dBAddressBalanceTxs addr
+          ],
+      nest 2 $
+        mconcat
+          [ formatKey (block 10 "Received: "),
+            amountPrinter UnitBitcoin $ dBAddressBalanceReceived addr
+          ]
+    ]
+
+txInfoPrinter ::
+  Network ->
+  TxType ->
+  Integer ->
+  Natural ->
+  Natural ->
+  Map Address MyOutputs ->
+  Map Address Natural ->
+  Printer ->
+  Printer
+txInfoPrinter net tType amount feeN feeByteN myOutputs otherOutputs custom =
+  vcat [title, nest 2 $ vcat [custom, fee, debit, credit]]
+  where
+    title =
+      case tType of
+        TxDebit -> formatTitle "Debit" <+> total
+        TxInternal -> formatTitle "Internal"
+        TxCredit -> formatTitle "Credit" <+> total
+    total = integerAmountPrinter UnitBitcoin amount
+    debit
+      | tType /= TxDebit = mempty
+      | otherwise =
+          vcat $ fmap (addrFormat True) (Map.assocs otherOutputs)
+    credit
+      | tType /= TxCredit = mempty
+      | otherwise =
+          vcat $
+            fmap
+              (addrFormat False)
+              (Map.assocs $ Map.map myOutputsValue myOutputs)
+    fee
+      | tType `elem` [TxDebit, TxInternal] =
+          formatKey "Fee:" <+> feePrinter UnitBitcoin feeN feeByteN
+      | otherwise = mempty
+    addrFormat isDebit (a, v) =
+      formatAddress True (parseAddr a)
+        <> text ":"
+          <+> if isDebit
+            then
+              integerAmountPrinterWith
+                formatNegAmount
+                UnitBitcoin
+                (fromIntegral v)
+            else
+              integerAmountPrinterWith
+                formatPosAmount
+                UnitBitcoin
+                (fromIntegral v)
+    parseAddr = cs . fromMaybe "Invalid Address" . addrToText net
+
+noSigTxInfoPrinter :: Network -> NoSigTxInfo -> Printer
+noSigTxInfoPrinter net ns =
+  case ns of
+    NoSigSigned nosigH TxInfo {..} ->
+      txInfoPrinter
+        net
+        txInfoType
+        txInfoAmount
+        txInfoFee
+        txInfoFeeByte
+        txInfoMyOutputs
+        txInfoOtherOutputs
+        $ vcat
+          [ formatKey (block 11 "TxHash:")
+              <+> formatTxHash (cs $ txHashToHex txInfoHash),
+            formatKey (block 11 "NoSigHash:")
+              <+> formatNoSigTxHash (cs $ txHashToHex nosigH),
+            text "This pending transaction is" <+> formatFalse "not signed",
+            formatKey "Confirmations:" <+> text (show txInfoConfirmations)
+          ]
+    NoSigUnsigned nosigH UnsignedTxInfo {..} ->
+      txInfoPrinter
+        net
+        unsignedTxInfoType
+        unsignedTxInfoAmount
+        unsignedTxInfoFee
+        unsignedTxInfoFeeByte
+        unsignedTxInfoMyOutputs
+        unsignedTxInfoOtherOutputs
+        $ vcat
+          [ formatKey "NoSigHash:" <+> formatNoSigTxHash (cs $ txHashToHex nosigH),
+            text "This pending transaction is" <+> formatFalse "not signed"
+          ]
+
+feePrinter :: AmountUnit -> Natural -> Natural -> Printer
+feePrinter unit fee feeBytes =
+  integerAmountPrinterWith formatZeroAmount unit (fromIntegral fee)
+    <+> text "("
+    <> text (show feeBytes)
+      <+> text "sat/bytes"
+    <> text ")"
+
 prettyPrinter :: Ctx -> Response -> IO ()
 prettyPrinter ctx =
   \case
     ResponseError err -> do
-      renderIO . mconcat $
-        [formatError "Error: ", formatStatic $ cs err]
+      renderIO . mconcat $ [formatError "Error: ", text $ cs err]
       exitFailure
     ResponseMnemonic orig mnem parts ->
       renderIO . vcat $
@@ -376,12 +504,58 @@ prettyPrinter ctx =
         ]
           <> partsPrinter parts
     ResponseAccount acc -> renderIO $ accountsPrinter acc
+    ResponseAccounts [] -> renderIO $ text "There are no accounts in the wallet"
     ResponseAccounts accs ->
-      renderIO . vcat $ intersperse (text "-") $ accountsPrinter <$> accs
+      renderIO . vcat $ intersperse (text " ") $ accountsPrinter <$> accs
     ResponseTestAcc _ res txt -> do
-      let p = if res then formatTrue "Success" else formatFalse "Failure"
-      renderIO . vcat $
-        [ formatKey "Result:" <+> p
-        , text $ cs txt
-        ]
+      let p =
+            if res
+              then formatTrue "Success"
+              else formatFalse "Failure"
+      renderIO . vcat $ [formatKey "Result:" <+> p, text $ cs txt]
     ResponseFile f -> renderIO $ formatKey "File:" <+> formatFilePath f
+    ResponseAddress _ addr -> do
+      let l = length $ show $ dBAddressIndex addr
+      renderIO $ addressPrinter (fromIntegral l + 2) addr
+    ResponseAddresses _ [] ->
+      renderIO $ text "There are no addresses in the account"
+    ResponseAddresses _ addrs -> do
+      let l = length $ show $ maximum $ dBAddressIndex <$> addrs
+      renderIO $ vcat $ addressPrinter (fromIntegral l + 2) <$> addrs
+    ResponseTxs _ [] ->
+      renderIO $ text "There are no transactions in the account"
+    ResponseTxs acc txs -> do
+      let net = accountNetwork acc
+          f TxInfo {..} =
+            txInfoPrinter
+              net
+              txInfoType
+              txInfoAmount
+              txInfoFee
+              txInfoFeeByte
+              txInfoMyOutputs
+              txInfoOtherOutputs
+              $ vcat
+                [ formatTxHash (cs $ txHashToHex txInfoHash),
+                  formatKey "Confirmations:" <+> text (show txInfoConfirmations)
+                ]
+      renderIO $ vcat $ intersperse (text " ") $ f <$> txs
+    ResponseTxInfo acc txInfo -> do
+      let net = accountNetwork acc
+      renderIO $ noSigTxInfoPrinter net txInfo
+    ResponseTxInfos _ [] ->
+      renderIO $ text "There are no pending transactions in the account"
+    ResponseTxInfos acc txInfos -> do
+      let net = accountNetwork acc
+      renderIO $
+        vcat $
+          intersperse (text " ") $
+            noSigTxInfoPrinter net <$> txInfos
+    ResponseDeleteTx h c a ->
+      renderIO $
+        vcat
+          [ formatKey "Deleted:" <+> formatNoSigTxHash (cs $ txHashToHex h),
+            nest 2 $ formatKey "Freed coins:" <+> formatValue (show c),
+            nest 2 $
+              formatKey "Freed internal addresses:" <+> formatValue (show a)
+          ]

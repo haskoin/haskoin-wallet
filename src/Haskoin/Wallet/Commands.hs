@@ -88,7 +88,8 @@ data Response
         responsePendingTxs :: ![NoSigTxInfo]
       }
   | ResponseDeleteTx
-      { responseFreedCoins :: !Natural,
+      { responseNoSigHash :: !TxHash,
+        responseFreedCoins :: !Natural,
         responseFreedAddrs :: !Natural
       }
   | ResponseCoins
@@ -178,9 +179,10 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "txinfos" .= (marshalValue (net, ctx) <$> ts)
           ]
-      ResponseDeleteTx c a ->
+      ResponseDeleteTx h c a ->
         object
           [ "type" .= Json.String "deletetx",
+            "nosighash" .= h,
             "freedcoins" .= c,
             "freedaddrs" .= a
           ]
@@ -254,7 +256,8 @@ instance MarshalJSON Ctx Response where
           return $ ResponseTxInfos a ts
         "deletetx" ->
           ResponseDeleteTx
-            <$> o .: "freedcoins"
+            <$> o .: "nosighash"
+            <*> o .: "freedcoins"
             <*> o .: "freedaddrs"
         "coins" -> do
           a <- o .: "account"
@@ -547,7 +550,7 @@ cmdDeleteTx ctx nameM nosigH =
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     (coins, addrs) <- deletePendingTx net ctx accId nosigH
-    return $ ResponseDeleteTx coins addrs
+    return $ ResponseDeleteTx nosigH coins addrs
 
 cmdSignTx ::
   Ctx ->
@@ -644,69 +647,80 @@ cmdSyncAcc ctx cfg nameM full =
   runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
-        host = apiHost net cfg
-    -- Check API health
-    checkHealth ctx net cfg
-    -- Get the new best block before starting the sync
-    best <- liftExcept $ apiCall ctx host (GetBlockBest def)
-    -- Get the addresses from our local database
-    (addrPathMap, addrBalMap) <- allAddressesMap net accId
-    -- Fetch the address balances online
-    Store.SerialList storeBals <-
-      liftExcept . apiBatch ctx (configAddrBatch cfg) host $
-        GetAddrsBalance (Map.keys addrBalMap)
-    -- Filter only those addresses whose balances have changed
-    balsToUpdate <-
-      if full
-        then return storeBals
-        else liftEither $ filterAddresses storeBals addrBalMap
-    let addrsToUpdate = (.address) <$> balsToUpdate
-    -- Update balances
-    updateAddressBalances net balsToUpdate
-    newAcc <- lift $ updateAccountBalances accId
-    -- Get a list of our confirmed txs in the local database
-    -- Use an empty list when doing a full sync
-    confirmedTxs <- if full then return [] else getConfirmedTxs accId True
-    -- Fetch the txids of the addresses to update
-    aTids <- searchAddrTxs net ctx cfg confirmedTxs addrsToUpdate
-    -- We also want to check if there is any change in unconfirmed txs
-    uTids <- getConfirmedTxs accId False
-    let tids = nub $ uTids <> aTids
-    -- Fetch the full transactions
-    Store.SerialList txs <-
-      liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
-    -- Convert them to TxInfo and store them in the local database
-    let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
-    resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
-    -- Fetch and update coins
-    Store.SerialList storeCoins <-
-      liftExcept . apiBatch ctx (configCoinBatch cfg) host $
-        GetAddrsUnspent addrsToUpdate def
-    (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
-    -- Get the dependent tranactions of the new coins
-    depTxsHash <-
-      if full
-        then return $ (.outpoint.hash) <$> storeCoins
-        else mapM (liftEither . coinToTxHash) newCoins
-    Store.RawResultList rawTxs <-
-      liftExcept
-        . apiBatch ctx (configTxFullBatch cfg) host
-        $ GetTxsRaw
-        $ nub depTxsHash
-    lift $ forM_ rawTxs insertRawTx
-    -- Remove pending transactions if they are online
-    pendingTids <- pendingTxHashes accId
-    let toRemove = filter ((`elem` tids) . fst) pendingTids
-    forM_ toRemove $ \(_, key) -> lift $ deletePendingTxOnline key
-    -- Update the best block for this network
-    lift $ updateBest net (headerHash best.header) best.height
-    return $
-      ResponseSync
-        newAcc
-        (headerHash best.header)
-        (fromIntegral best.height)
-        (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
-        (fromIntegral coinCount)
+    sync ctx cfg net accId full
+
+sync ::
+  (MonadUnliftIO m) =>
+  Ctx ->
+  Config ->
+  Network ->
+  DBAccountId ->
+  Bool ->
+  ExceptT String (DB m) Response
+sync ctx cfg net accId full = do
+  let host = apiHost net cfg
+  -- Check API health
+  checkHealth ctx net cfg
+  -- Get the new best block before starting the sync
+  best <- liftExcept $ apiCall ctx host (GetBlockBest def)
+  -- Get the addresses from our local database
+  (addrPathMap, addrBalMap) <- allAddressesMap net accId
+  -- Fetch the address balances online
+  Store.SerialList storeBals <-
+    liftExcept . apiBatch ctx (configAddrBatch cfg) host $
+      GetAddrsBalance (Map.keys addrBalMap)
+  -- Filter only those addresses whose balances have changed
+  balsToUpdate <-
+    if full
+      then return storeBals
+      else liftEither $ filterAddresses storeBals addrBalMap
+  let addrsToUpdate = (.address) <$> balsToUpdate
+  -- Update balances
+  updateAddressBalances net balsToUpdate
+  newAcc <- lift $ updateAccountBalances accId
+  -- Get a list of our confirmed txs in the local database
+  -- Use an empty list when doing a full sync
+  confirmedTxs <- if full then return [] else getConfirmedTxs accId True
+  -- Fetch the txids of the addresses to update
+  aTids <- searchAddrTxs net ctx cfg confirmedTxs addrsToUpdate
+  -- We also want to check if there is any change in unconfirmed txs
+  uTids <- getConfirmedTxs accId False
+  let tids = nub $ uTids <> aTids
+  -- Fetch the full transactions
+  Store.SerialList txs <-
+    liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
+  -- Convert them to TxInfo and store them in the local database
+  let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
+  resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
+  -- Fetch and update coins
+  Store.SerialList storeCoins <-
+    liftExcept . apiBatch ctx (configCoinBatch cfg) host $
+      GetAddrsUnspent addrsToUpdate def
+  (coinCount, newCoins) <- refreshCoins net accId addrsToUpdate storeCoins
+  -- Get the dependent tranactions of the new coins
+  depTxsHash <-
+    if full
+      then return $ (.outpoint.hash) <$> storeCoins
+      else mapM (liftEither . coinToTxHash) newCoins
+  Store.RawResultList rawTxs <-
+    liftExcept
+      . apiBatch ctx (configTxFullBatch cfg) host
+      $ GetTxsRaw
+      $ nub depTxsHash
+  lift $ forM_ rawTxs insertRawTx
+  -- Remove pending transactions if they are online
+  pendingTids <- pendingTxHashes accId
+  let toRemove = filter ((`elem` tids) . fst) pendingTids
+  forM_ toRemove $ \(_, key) -> lift $ deletePendingTxOnline key
+  -- Update the best block for this network
+  lift $ updateBest net (headerHash best.header) best.height
+  return $
+    ResponseSync
+      newAcc
+      (headerHash best.header)
+      (fromIntegral best.height)
+      (fromIntegral $ length $ filter id $ snd <$> resTxInfo)
+      (fromIntegral coinCount)
 
 coinToTxHash :: DBCoin -> Either String TxHash
 coinToTxHash coin =
@@ -775,7 +789,7 @@ searchAddrTxs net ctx cfg confirmedTxs as
 
 cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx cfg nameM = do
-  res <- runDB $ do
+  runDB $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -785,11 +799,8 @@ cmdDiscoverAccount ctx cfg nameM = do
     i <- go net pub intDeriv 0 (Page recoveryGap 0)
     discoverAccGenAddrs ctx cfg accId AddrExternal e
     discoverAccGenAddrs ctx cfg accId AddrInternal i
-    return $ ResponseSync acc "" 0 0 0
-  -- Perform a full sync after discovery
-  case res of
-    ResponseError _ -> return res
-    _ -> cmdSyncAcc ctx cfg nameM True
+    -- Perform a full sync after discovery
+    sync ctx cfg net accId True
   where
     go net pub path d page@(Page lim off) = do
       let addrs = addrsDerivPage ctx path page pub
