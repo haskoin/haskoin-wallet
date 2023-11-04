@@ -342,10 +342,7 @@ txInfoPrinter net unit tType amount feeN feeByteN myOutputs otherOutputs custom 
         TxInternal -> "Internal"
         TxCredit -> "Credit"
     total = integerAmountPrinter unit amount
-    fee
-      | tType `elem` [TxDebit, TxInternal] =
-          keyPrinter 9 "Fee" <> feePrinter unit feeN feeByteN
-      | otherwise = mempty
+    fee = keyPrinter 9 "Fee" <> feePrinter unit feeN feeByteN
     debit
       | tType /= TxDebit = mempty
       | otherwise =
