@@ -12,7 +12,7 @@ import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Aeson.Types (parseEither)
 import qualified Data.ByteString.Char8 as C8
-import Data.Maybe (fromMaybe, mapMaybe)
+import Data.Maybe (mapMaybe)
 import qualified Data.Serialize as S
 import Data.String.Conversions (cs)
 import Data.Text (Text)
@@ -109,12 +109,6 @@ readFileWords :: FilePath -> IO [[Text]]
 readFileWords fp = do
   strContents <- IO.readFile fp
   return $ removeComments $ Text.words <$> Text.lines (cs strContents)
-
-parseAddrsFile :: Network -> [[Text]] -> [Address]
-parseAddrsFile net =
-  withParser $ \w -> eitherToMaybe $ textToAddrE net $ strip "addr=" w
-  where
-    strip p w = fromMaybe w $ Text.stripPrefix p w
 
 parseSecKeysFile :: Network -> [[Text]] -> [SecKey]
 parseSecKeysFile net =

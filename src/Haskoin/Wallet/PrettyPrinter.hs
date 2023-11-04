@@ -9,6 +9,7 @@
 
 module Haskoin.Wallet.PrettyPrinter where
 
+import Control.Arrow ((&&&))
 import Control.Monad
 import Data.List (intersperse)
 import Data.Map.Strict (Map)
@@ -151,6 +152,13 @@ formatLabel =
       SetColor Foreground Vivid White
     ]
 
+formatDeriv :: String -> Printer
+formatDeriv =
+  PText
+    [ SetItalicized True,
+      SetColor Foreground Vivid Yellow
+    ]
+
 formatMnemonic :: Bool -> String -> Printer
 formatMnemonic split =
   PText
@@ -258,7 +266,7 @@ accountPrinter unit acc =
   vcat
     [ keyPrinter 8 "Account" <> formatAccount (cs $ dBAccountName acc),
       mconcat [keyPrinter 8 "Wallet", formatValue $ cs fp],
-      mconcat [keyPrinter 8 "Deriv", formatValue deriv],
+      mconcat [keyPrinter 8 "Deriv", formatDeriv deriv],
       mconcat [keyPrinter 8 "Network", formatValue net],
       mconcat
         [keyPrinter 8 "External", formatValue $ show $ dBAccountExternal acc],
@@ -323,15 +331,17 @@ txInfoPrinter ::
   Integer ->
   Natural ->
   Natural ->
+  Map Address MyInputs ->
   Map Address MyOutputs ->
   Map Address Natural ->
   Printer ->
   Printer
-txInfoPrinter net unit tType amount feeN feeByteN myOutputs otherOutputs custom =
+txInfoPrinter net unit tType amount feeN feeByteN myInputs myOutputs otherOutputs custom =
   vcat
     [ formatTitle (block 9 title) <> text ": " <> total,
       custom,
       fee,
+      internal,
       debit,
       credit
     ]
@@ -343,34 +353,64 @@ txInfoPrinter net unit tType amount feeN feeByteN myOutputs otherOutputs custom 
         TxCredit -> "Credit"
     total = integerAmountPrinter unit amount
     fee = keyPrinter 9 "Fee" <> feePrinter unit feeN feeByteN
+    internal
+      | tType /= TxInternal = mempty
+      | otherwise =
+          vcat $
+            [formatKey "From addresses:"]
+              <> ( nest 2 . addrPrinter True
+                     <$> Map.assocs
+                       ( Map.map
+                           (myInputsValue &&& (Just . myInputsPath))
+                           myInputs
+                       )
+                 )
+              <> [formatKey "To addresses:"]
+              <> ( nest 2
+                     . addrPrinter True
+                     <$> Map.assocs
+                       ( Map.map
+                           (myOutputsValue &&& (Just . myOutputsPath))
+                           myOutputs
+                       )
+                 )
     debit
       | tType /= TxDebit = mempty
       | otherwise =
           vcat $
             [formatKey "Sending to addresses:"]
-              <> (nest 2 . addrPrinter False <$> Map.assocs otherOutputs)
+              <> ( nest 2 . addrPrinter False
+                     <$> Map.assocs
+                       ( Map.map
+                           (id &&& const Nothing)
+                           otherOutputs
+                       )
+                 )
     credit
       | tType /= TxCredit = mempty
       | otherwise =
           vcat $
             [formatKey "My credited addresses:"]
               <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs (Map.map myOutputsValue myOutputs)
+                     <$> Map.assocs
+                       ( Map.map
+                           (myOutputsValue &&& (Just . myOutputsPath))
+                           myOutputs
+                       )
                  )
-    addrPrinter isCredit (a, v) =
-      formatAddress isCredit (parseAddr net a)
-        <> text ":"
-          <+> if isCredit
-            then
-              integerAmountPrinterWith
-                formatPosAmount
-                unit
-                (fromIntegral v)
-            else
-              integerAmountPrinterWith
-                formatZeroAmount
-                unit
-                (fromIntegral v)
+    addrPrinter isMine (a, (v, pathM)) =
+      vcat
+        [ formatAddress isMine (parseAddr net a)
+            <> text ":"
+              <+> if isMine
+                then integerAmountPrinterWith formatPosAmount unit (fromIntegral v)
+                else integerAmountPrinterWith formatZeroAmount unit (fromIntegral v),
+          case pathM of
+            Just p ->
+              nest 2 $
+                formatKey "Path:" <+> formatDeriv (pathToStr p)
+            _ -> mempty
+        ]
 
 parseAddr :: Network -> Address -> String
 parseAddr net = cs . fromMaybe "Invalid Address" . addrToText net
@@ -386,6 +426,7 @@ noSigTxInfoPrinter net unit ns =
         txInfoAmount
         txInfoFee
         txInfoFeeByte
+        txInfoMyInputs
         txInfoMyOutputs
         txInfoOtherOutputs
         $ vcat
@@ -410,6 +451,7 @@ noSigTxInfoPrinter net unit ns =
         unsignedTxInfoAmount
         unsignedTxInfoFee
         unsignedTxInfoFeeByte
+        unsignedTxInfoMyInputs
         unsignedTxInfoMyOutputs
         unsignedTxInfoOtherOutputs
         $ vcat
@@ -498,6 +540,7 @@ prettyPrinter unit =
               txInfoAmount
               txInfoFee
               txInfoFeeByte
+              txInfoMyInputs
               txInfoMyOutputs
               txInfoOtherOutputs
               $ vcat
@@ -525,7 +568,7 @@ prettyPrinter unit =
             nest 2 $
               formatKey "Freed internal addresses:" <+> formatValue (show a)
           ]
-    ResponseCoins _ [] -> 
+    ResponseCoins _ [] ->
       renderIO $ text "There are no coins in the account"
     ResponseCoins acc coins -> do
       let net = accountNetwork acc

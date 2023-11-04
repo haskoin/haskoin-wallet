@@ -113,8 +113,7 @@ data Command
   | CommandVersion
   | CommandPrepareSweep
       { commandMaybeAcc :: !(Maybe Text),
-        commandSweepFrom :: ![Text],
-        commandSweepFileMaybe :: !(Maybe FilePath),
+        commandSecKeyPath :: !FilePath,
         commandSweepTo :: ![Text],
         commandOutputFileMaybe :: !(Maybe FilePath),
         commandFeeByte :: !Natural,
@@ -879,8 +878,7 @@ prepareSweepParser = do
   let cmd =
         CommandPrepareSweep
           <$> accountOption
-          <*> many sweepFromOption -- many: not optional
-          <*> addressFileOption
+          <*> prvKeyFileOption
           <*> some sweepToOption -- some: optional
           <*> outputFileMaybeOption
           <*> feeOption
@@ -889,13 +887,11 @@ prepareSweepParser = do
     progDesc "Prepare a transaction to sweep funds"
       <> footer
         [r|
-`preparesweep` will prepare a transaction that sweeps the funds available in the
-given --sweepfrom addresses and sends them to the --sweepto addresses. The
-typical use case for this command is to migrate an old wallet to a new mnemonic.
-The addresses can also be parsed from a --addrfile. The best way to pass
-multiple addresses on the command line is with the shorthand -w ADDR1 -w ADDR2
-for --sweepfrom addresses and -t ADDR1 -t ADDR2 for --sweepto addresses. You
-can generate addresses to sweep to with the `receive` command.
+`preparesweep` will prepare a transaction that sweeps the funds of the given
+private keys. The private keys are passed in a file and can be in WIF or minikey
+format. The typical use case for this command is to migrate an old wallet to a
+new mnemonic. You can send the funds to 1 or multiple addresses. You can use the
+shorthand format -t ADDR1 -t ADDR2 to specify the --sweepto addresses.
 |]
 
 sweepFromOption :: Parser Text
