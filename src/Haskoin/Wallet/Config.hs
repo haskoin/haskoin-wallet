@@ -34,6 +34,14 @@ hwDataDirectory = do
   D.createDirectoryIfMissing True dir
   return dir
 
+databaseFile :: Config -> IO FilePath
+databaseFile cfg =
+  case configDatabaseFile cfg of
+    Just dbFile -> return dbFile
+    _ -> do
+      dir <- hwDataDirectory
+      return $ dir </> "accounts.sqlite"
+
 data Config = Config
   { configHost :: Text,
     configGap :: Natural,
@@ -41,7 +49,8 @@ data Config = Config
     configAddrBatch :: Natural,
     configTxBatch :: Natural,
     configCoinBatch :: Natural,
-    configTxFullBatch :: Natural
+    configTxFullBatch :: Natural,
+    configDatabaseFile :: Maybe FilePath
   }
   deriving (Eq, Show)
 
@@ -56,6 +65,7 @@ instance FromJSON Config where
         <*> o .: "tx-batch"
         <*> o .: "coin-batch"
         <*> o .: "tx-full-batch"
+        <*> o .:? "database-file"
 
 instance ToJSON Config where
   toJSON cfg =
@@ -66,7 +76,8 @@ instance ToJSON Config where
         "addr-batch" .= configAddrBatch cfg,
         "tx-batch" .= configTxBatch cfg,
         "coin-batch" .= configCoinBatch cfg,
-        "tx-full-batch" .= configTxFullBatch cfg
+        "tx-full-batch" .= configTxFullBatch cfg,
+        "database-file" .= configDatabaseFile cfg
       ]
 
 instance Default Config where
@@ -78,7 +89,8 @@ instance Default Config where
         configAddrBatch = 100,
         configTxBatch = 100,
         configCoinBatch = 100,
-        configTxFullBatch = 100
+        configTxFullBatch = 100,
+        configDatabaseFile = Nothing
       }
 
 initConfig :: IO Config

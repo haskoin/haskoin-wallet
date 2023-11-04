@@ -6,7 +6,7 @@ nix:
   - pkg-config
 extra-deps:
   - git: https://github.com/haskoin/haskoin-core.git
-    commit: 88ff19c35ad2f3d8afdf2a2970342990b40b6f40
+    commit: 09f8fbbd4fc02ba1538c2be04d8fea5339737e6e
   - git: https://github.com/haskoin/haskoin-store.git
     commit: 8466ea2f54d7728aff9417b4d52e829450952fd0
     subdirs:
