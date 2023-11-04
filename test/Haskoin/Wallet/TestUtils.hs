@@ -21,6 +21,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
 import Haskoin.Wallet.Commands
+import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
@@ -305,3 +306,15 @@ arbitraryResponse net ctx =
         <$> resize 20 (listOf arbitraryNatural)
         <*> arbitraryText
     ]
+
+arbitraryConfig :: Gen Config
+arbitraryConfig =
+  Config
+    <$> arbitraryText
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> arbitrary
