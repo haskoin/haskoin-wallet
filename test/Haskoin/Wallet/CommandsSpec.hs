@@ -38,7 +38,8 @@ identityTests ctx =
         [ JsonBox $ arbitraryDBAccount btc ctx,
           JsonBox $ arbitraryDBAddress btc,
           JsonBox arbitraryAddressBalance,
-          JsonBox $ arbitraryTxSignData btc ctx
+          JsonBox $ arbitraryTxSignData btc ctx,
+          JsonBox arbitraryConfig
         ],
       marshalJsonTests =
         [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin),
