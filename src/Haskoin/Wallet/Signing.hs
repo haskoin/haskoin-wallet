@@ -167,7 +167,7 @@ signTxWithKeys ::
 signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
   when signed $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  txInfoU <- parseTxSignData net ctx publicKey tsd 
+  txInfoU <- parseTxSignData net ctx publicKey tsd
   -- signing
   let myInputs = unsignedTxInfoMyInputs txInfoU
       othInputs = unsignedTxInfoOtherInputs txInfoU
@@ -207,16 +207,18 @@ buildSweepSignData ::
   Ctx ->
   Config ->
   DBAccountId ->
-  [Address] ->
+  [SecKey] ->
   [Address] ->
   Natural ->
   Natural ->
   ExceptT String (DB m) TxSignData
-buildSweepSignData net ctx cfg accId sweepFrom sweepTo feeByte dust
-  | null sweepFrom = throwError "No addresses to sweep from"
+buildSweepSignData net ctx cfg accId prvKeys sweepTo feeByte dust
+  | null prvKeys = throwError "No private keys to sweep from"
   | null sweepTo = throwError "No addresses to sweep to"
   | otherwise = do
       let host = apiHost net cfg
+      -- Generate the addresses to sweep from
+      let sweepFrom = nub $ concatMap (genPossibleAddrs net ctx) prvKeys
       -- Get the unspent coins of the sweepFrom addresses
       Store.SerialList coins <-
         liftExcept . apiBatch ctx (configCoinBatch cfg) host $
@@ -237,6 +239,26 @@ buildSweepSignData net ctx cfg accId sweepFrom sweepTo feeByte dust
       outDerivs <- rights <$> lift (mapM (getAddrDeriv net accId) sweepTo)
       return $ TxSignData tx depTxs (nub inDerivs) (nub outDerivs) False
 
+genPossibleAddrs :: Network -> Ctx -> SecKey -> [Address]
+genPossibleAddrs net ctx k
+  | net `elem` [btc, btcTest, btcRegTest] =
+    [ pubKeyAddr ctx pc,
+      pubKeyAddr ctx pu,
+      pubKeyWitnessAddr ctx pc,
+      pubKeyWitnessAddr ctx pu,
+      pubKeyCompatWitnessAddr ctx pc,
+      pubKeyCompatWitnessAddr ctx pu
+    ]
+  | otherwise =
+    [ pubKeyAddr ctx pc,
+      pubKeyAddr ctx pu
+    ]
+  where
+    c = wrapSecKey False k :: PrivateKey -- Compressed
+    u = wrapSecKey True k :: PrivateKey -- Uncompressed
+    pc = derivePublicKey ctx c
+    pu = derivePublicKey ctx u
+
 buildSweepTx ::
   Network ->
   Ctx ->
@@ -254,14 +276,12 @@ buildSweepTx net ctx gen coins sweepTo feeByte dust =
         fee = guessTxFee (fromIntegral feeByte) (length sweepTo) (length coins)
     when (coinsTot < fee) $
       throwError "Could not find a sweep solution: fee is too large"
-    rdmAmntsM <-
-      randomSplitIn
-        (coinsTot - fee) -- will not overflow
-        (fromIntegral $ length sweepTo)
-        (fromIntegral $ dust + 1)
-    rdmAmnts <- lift $ maybeToEither "Could not find a sweep solution" rdmAmntsM
+    let (q, r) = (coinsTot - fee) `quotRem` fromIntegral (length sweepTo)
+        amnts = (q+r):repeat q
+    when (q <= fromIntegral dust) $
+      throwError "Outputs are smaller than the dust value"
     addrsT <- lift $ mapM (maybeToEither "Addr" . addrToText net) rdmSweepTo
-    lift $ buildAddrTx net ctx rdmOutpoints (zip addrsT rdmAmnts)
+    lift $ buildAddrTx net ctx rdmOutpoints (zip addrsT amnts)
 
 -- Utilities --
 
@@ -281,12 +301,3 @@ randomShuffle xs = do
     (as, e : bs) -> (e :) <$> randomShuffle (as <> bs)
     _ -> error "randomShuffle"
 
--- Split the number a into n parts of minimum value d
-randomSplitIn ::
-  (Random a, Num a, Ord a, MonadState StdGen m) => a -> a -> a -> m (Maybe [a])
-randomSplitIn a n d
-  | a < n * d = return Nothing
-  | n == 1 = return $ Just [a]
-  | otherwise = do
-      randPart <- randomRange d (a - d * (n - 1))
-      ((randPart :) <$>) <$> randomSplitIn (a - randPart) (n - 1) d

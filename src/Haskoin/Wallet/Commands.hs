@@ -333,8 +333,8 @@ commandResponse ctx cfg unit cmd =
     CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
     CommandVersion -> cmdVersion
-    CommandPrepareSweep nameM sf fileM st outputM f d ->
-      prepareSweep ctx cfg nameM sf fileM st outputM f d
+    CommandPrepareSweep nameM prvKey st outputM f d ->
+      prepareSweep ctx cfg nameM prvKey st outputM f d
     CommandSignSweep nameM h i o k -> signSweep ctx cfg nameM h i o k
     CommandRollDice n -> rollDice n
 
@@ -825,27 +825,21 @@ prepareSweep ::
   Ctx ->
   Config ->
   Maybe Text ->
-  [Text] ->
-  Maybe FilePath ->
+  FilePath ->
   [Text] ->
   Maybe FilePath ->
   Natural ->
   Natural ->
   IO Response
-prepareSweep ctx cfg nameM sweepFromT sweepFromFileM sweepToT outputM feeByte dust =
+prepareSweep ctx cfg nameM prvKeyFile sweepToT outputM feeByte dust =
   runDB cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    sweepFromArg <- liftEither $ mapM (textToAddrE net) sweepFromT
+    secKeys <- parseSecKeysFile net <$> liftIO (readFileWords prvKeyFile)
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
-    addrsFile <-
-      case sweepFromFileM of
-        Just file -> parseAddrsFile net <$> liftIO (readFileWords file)
-        _ -> return []
-    let sweepFrom = sweepFromArg <> addrsFile
     checkHealth ctx net cfg
-    tsd <- buildSweepSignData net ctx cfg accId sweepFrom sweepTo feeByte dust
+    tsd <- buildSweepSignData net ctx cfg accId secKeys sweepTo feeByte dust
     info <- liftEither $ parseTxSignData net ctx pub tsd
     for_ outputM checkPathFree
     nosigHash <- importPendingTx net ctx accId tsd
