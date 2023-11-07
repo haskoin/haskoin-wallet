@@ -6,13 +6,12 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
+{-# LANGUAGE TupleSections #-}
 
 module Haskoin.Wallet.PrettyPrinter where
 
-import Control.Arrow ((&&&))
 import Control.Monad
 import Data.List (intersperse)
-import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
@@ -327,19 +326,13 @@ addressPrinter unit pad addr =
 txInfoPrinter ::
   Network ->
   AmountUnit ->
-  TxType ->
-  Integer ->
-  Natural ->
-  Natural ->
-  Map Address MyInputs ->
-  Map Address MyOutputs ->
-  Map Address Natural ->
-  Printer ->
+  TxInfo ->
   Printer
-txInfoPrinter net unit tType amount feeN feeByteN myInputs myOutputs otherOutputs custom =
+txInfoPrinter net unit TxInfo {..} =
   vcat
     [ formatTitle (block 9 title) <> text ": " <> total,
-      custom,
+      txid,
+      pending,
       fee,
       internal,
       debit,
@@ -347,58 +340,72 @@ txInfoPrinter net unit tType amount feeN feeByteN myInputs myOutputs otherOutput
     ]
   where
     title =
-      case tType of
+      case txInfoType of
         TxDebit -> "Debit"
         TxInternal -> "Internal"
         TxCredit -> "Credit"
-    total = integerAmountPrinter unit amount
-    fee = keyPrinter 9 "Fee" <> feePrinter unit feeN feeByteN
+    total = integerAmountPrinter unit txInfoAmount
+    fee = keyPrinter 9 "Fee" <> feePrinter unit txInfoFee txInfoFeeByte
+    txid =
+      case txInfoHash of
+        Just tid ->
+          keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex tid)
+        _ -> mempty
+    pending =
+      case txInfoPending of
+        Just (TxInfoPending nosigH signed online) ->
+          vcat
+            [ keyPrinter 9 "NoSigHash"
+                <> formatNoSigTxHash (cs $ txHashToHex nosigH),
+              keyPrinter 9 "Signed"
+                <> text "This pending transaction is"
+                  <+> if signed
+                    then formatTrue "signed"
+                    else formatFalse "not signed",
+              if online
+                then
+                  keyPrinter 9 "Online"
+                    <> text "This transaction is"
+                      <+> formatTrue "online"
+                else mempty
+            ]
+        _ -> keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
     internal
-      | tType /= TxInternal = mempty
+      | txInfoType /= TxInternal = mempty
       | otherwise =
           vcat $
             [formatKey "From addresses:"]
               <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs
-                       ( Map.map
-                           (myInputsValue &&& (Just . myInputsPath))
-                           myInputs
-                       )
+                     <$> Map.assocs (Map.map g txInfoMyInputs)
                  )
               <> [formatKey "To addresses:"]
               <> ( nest 2
                      . addrPrinter True
-                     <$> Map.assocs
-                       ( Map.map
-                           (myOutputsValue &&& (Just . myOutputsPath))
-                           myOutputs
-                       )
+                     <$> Map.assocs (Map.map f txInfoMyOutputs)
                  )
     debit
-      | tType /= TxDebit = mempty
+      | txInfoType /= TxDebit = mempty
       | otherwise =
           vcat $
             [formatKey "Sending to addresses:"]
               <> ( nest 2 . addrPrinter False
                      <$> Map.assocs
                        ( Map.map
-                           (id &&& const Nothing)
-                           otherOutputs
+                           (, Nothing, "")
+                           txInfoOtherOutputs
                        )
                  )
     credit
-      | tType /= TxCredit = mempty
+      | txInfoType /= TxCredit = mempty
       | otherwise =
           vcat $
             [formatKey "My credited addresses:"]
               <> ( nest 2 . addrPrinter True
-                     <$> Map.assocs
-                       ( Map.map
-                           (myOutputsValue &&& (Just . myOutputsPath))
-                           myOutputs
-                       )
+                     <$> Map.assocs (Map.map f txInfoMyOutputs)
                  )
-    addrPrinter isMine (a, (v, pathM)) =
+    f (MyOutputs v p l) = (v, Just p, cs l)
+    g (MyInputs v p l _) = (v, Just p, cs l)
+    addrPrinter isMine (a, (v, pathM, label)) =
       vcat
         [ formatAddress isMine (parseAddr net a)
             <> text ":"
@@ -409,58 +416,14 @@ txInfoPrinter net unit tType amount feeN feeByteN myInputs myOutputs otherOutput
             Just p ->
               nest 2 $
                 formatKey "Path:" <+> formatDeriv (pathToStr p)
-            _ -> mempty
+            _ -> mempty,
+          if null label
+            then mempty
+            else nest 2 $ formatKey "Label:" <+> formatLabel label
         ]
 
 parseAddr :: Network -> Address -> String
 parseAddr net = cs . fromMaybe "Invalid Address" . addrToText net
-
-noSigTxInfoPrinter :: Network -> AmountUnit -> NoSigTxInfo -> Printer
-noSigTxInfoPrinter net unit ns =
-  case ns of
-    NoSigSigned nosigH TxInfo {..} online ->
-      txInfoPrinter
-        net
-        unit
-        txInfoType
-        txInfoAmount
-        txInfoFee
-        txInfoFeeByte
-        txInfoMyInputs
-        txInfoMyOutputs
-        txInfoOtherOutputs
-        $ vcat
-          [ keyPrinter 9 "TxHash" <> formatTxHash (cs $ txHashToHex txInfoHash),
-            keyPrinter 9 "NoSigHash"
-              <> formatNoSigTxHash (cs $ txHashToHex nosigH),
-            keyPrinter 9 "Signed"
-              <> text "This pending transaction is"
-                <+> formatTrue "signed",
-            if online
-              then
-                keyPrinter 9 "Online"
-                  <> text "This transaction is"
-                    <+> formatTrue "online"
-              else mempty
-          ]
-    NoSigUnsigned nosigH UnsignedTxInfo {..} ->
-      txInfoPrinter
-        net
-        unit
-        unsignedTxInfoType
-        unsignedTxInfoAmount
-        unsignedTxInfoFee
-        unsignedTxInfoFeeByte
-        unsignedTxInfoMyInputs
-        unsignedTxInfoMyOutputs
-        unsignedTxInfoOtherOutputs
-        $ vcat
-          [ keyPrinter 9 "NoSigHash"
-              <> formatNoSigTxHash (cs $ txHashToHex nosigH),
-            keyPrinter 9 "Signed"
-              <> text "This pending transaction is"
-                <+> formatFalse "not signed"
-          ]
 
 feePrinter :: AmountUnit -> Natural -> Natural -> Printer
 feePrinter unit fee feeBytes =
@@ -510,7 +473,7 @@ prettyPrinter unit =
         ]
           <> partsPrinter parts
     ResponseAccount acc -> renderIO $ accountPrinter unit acc
-    ResponseAccounts [] -> renderIO $ text "There are no accounts in the wallet"
+    ResponseAccounts [] -> renderIO $ text "There are no accounts to display"
     ResponseAccounts accs ->
       renderIO . vcat $ intersperse (text " ") $ accountPrinter unit <$> accs
     ResponseTestAcc _ res txt -> do
@@ -524,42 +487,18 @@ prettyPrinter unit =
       let l = length $ show $ dBAddressIndex addr
       renderIO $ addressPrinter unit (fromIntegral l) addr
     ResponseAddresses _ [] ->
-      renderIO $ text "There are no addresses in the account"
+      renderIO $ text "There are no addresses to display"
     ResponseAddresses _ addrs -> do
       let l = length $ show $ maximum $ dBAddressIndex <$> addrs
       renderIO $ vcat $ addressPrinter unit (fromIntegral l) <$> addrs
     ResponseTxs _ [] ->
-      renderIO $ text "There are no transactions in the account"
+      renderIO $ text "There are no transactions to display"
     ResponseTxs acc txs -> do
       let net = accountNetwork acc
-          f TxInfo {..} =
-            txInfoPrinter
-              net
-              unit
-              txInfoType
-              txInfoAmount
-              txInfoFee
-              txInfoFeeByte
-              txInfoMyInputs
-              txInfoMyOutputs
-              txInfoOtherOutputs
-              $ vcat
-                [ keyPrinter 9 "TxHash"
-                    <> formatTxHash (cs $ txHashToHex txInfoHash),
-                  keyPrinter 9 "Confs" <> formatValue (show txInfoConfirmations)
-                ]
-      renderIO $ vcat $ intersperse (text " ") $ f <$> txs
-    ResponseTxInfo acc txInfo -> do
+      renderIO $ vcat $ intersperse (text " ") $ txInfoPrinter net unit <$> txs
+    ResponseTx acc txInfo -> do
       let net = accountNetwork acc
-      renderIO $ noSigTxInfoPrinter net unit txInfo
-    ResponseTxInfos _ [] ->
-      renderIO $ text "There are no pending transactions in the account"
-    ResponseTxInfos acc txInfos -> do
-      let net = accountNetwork acc
-      renderIO $
-        vcat $
-          intersperse (text " ") $
-            noSigTxInfoPrinter net unit <$> txInfos
+      renderIO $ txInfoPrinter net unit txInfo
     ResponseDeleteTx h c a ->
       renderIO $
         vcat
@@ -569,7 +508,7 @@ prettyPrinter unit =
               formatKey "Freed internal addresses:" <+> formatValue (show a)
           ]
     ResponseCoins _ [] ->
-      renderIO $ text "There are no coins in the account"
+      renderIO $ text "There are no coins to display"
     ResponseCoins acc coins -> do
       let net = accountNetwork acc
       renderIO $ vcat $ intersperse (text " ") $ coinPrinter net unit <$> coins

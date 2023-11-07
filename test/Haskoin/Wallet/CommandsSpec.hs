@@ -45,8 +45,6 @@ identityTests ctx =
         [ MarshalJsonBox ((btc,) <$> arbitraryJsonCoin),
           MarshalJsonBox ((ctx,) <$> arbitraryPubKeyDoc ctx),
           MarshalJsonBox (((btc, ctx),) <$> arbitraryTxInfo btc ctx),
-          MarshalJsonBox (((btc, ctx),) <$> arbitraryUnsignedTxInfo btc ctx),
-          MarshalJsonBox (((btc, ctx),) <$> arbitraryNoSigTxInfo btc ctx),
           MarshalJsonBox ((ctx,) <$> arbitraryResponse btc ctx)
         ]
     }
@@ -336,7 +334,7 @@ intAddressSpec ctx cfg =
 emptyTxInfo :: TxInfo
 emptyTxInfo =
   TxInfo
-    (txid' 0)
+    (Just $ txid' 0)
     TxInternal
     0
     Map.empty
@@ -350,6 +348,7 @@ emptyTxInfo =
     0
     (Store.MemRef 0)
     0
+    Nothing
 
 txsSpec :: Ctx -> Spec
 txsSpec ctx =
@@ -357,7 +356,7 @@ txsSpec ctx =
     runDBMemoryE $ do
       (accId, _) <- testNewAcc ctx "test"
       -- Simple insert and retrieval
-      (dbInfo, change) <- lift $ repsertTxInfo btc ctx accId emptyTxInfo
+      (dbInfo, change) <- repsertTxInfo btc ctx accId emptyTxInfo
       liftTest $ do
         change `shouldBe` True
         dBTxInfoAccountWallet dbInfo `shouldBe` DBWalletKey walletFPText
@@ -365,7 +364,7 @@ txsSpec ctx =
         dBTxInfoBlockRef dbInfo `shouldBe` S.encode (Store.MemRef 0)
         dBTxInfoConfirmed dbInfo `shouldBe` False
       -- Reinserting should produce no change
-      (dbInfo2, change2) <- lift $ repsertTxInfo btc ctx accId emptyTxInfo
+      (dbInfo2, change2) <- repsertTxInfo btc ctx accId emptyTxInfo
       liftTest $ do
         change2 `shouldBe` False
         dbInfo2 `shouldBe` dbInfo
@@ -376,12 +375,11 @@ txsSpec ctx =
       getConfirmedTxs accId False `dbShouldBeE` [txid' 0]
       txsPage ctx accId (Page 5 0) `dbShouldBeE` [emptyTxInfo]
       (dbInfo', change') <-
-        lift $
-          repsertTxInfo
-            btc
-            ctx
-            accId
-            emptyTxInfo {txInfoBlockRef = Store.BlockRef 0 0}
+        repsertTxInfo
+          btc
+          ctx
+          accId
+          emptyTxInfo {txInfoBlockRef = Store.BlockRef 0 0}
       liftTest $ do
         change' `shouldBe` True
         dBTxInfoBlockRef dbInfo' `shouldBe` S.encode (Store.BlockRef 0 0)
@@ -404,12 +402,11 @@ txsSpec ctx =
                           }
                       ]
       (dbInfo'', change'') <-
-        lift $
-          repsertTxInfo
-            btc
-            ctx
-            accId
-            emptyTxInfo {txInfoBlockRef = Store.BlockRef 10 0}
+        repsertTxInfo
+          btc
+          ctx
+          accId
+          emptyTxInfo {txInfoBlockRef = Store.BlockRef 10 0}
       liftTest $ do
         change'' `shouldBe` True
         dBTxInfoBlockRef dbInfo'' `shouldBe` S.encode (Store.BlockRef 10 0)
@@ -576,7 +573,8 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = False},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h1, tsd, False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [Just $ TxInfoPending h1 False False]
       -- Check address free status
       checkFree 0 False
       checkFree 1 False
@@ -610,8 +608,10 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h2, tsd2, False), (h1, tsd, False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [ Just $ TxInfoPending h2 False False,
+                        Just $ TxInfoPending h1 False False
+                      ]
       checkFree 0 False
       checkFree 1 False
       checkFree 2 False
@@ -625,7 +625,8 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = False}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h2, tsd2, False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [Just $ TxInfoPending h2 False False]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -651,8 +652,10 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h3, tsd3, False), (h2, tsd2, False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
+                        Just $ TxInfoPending h2 False False
+                      ]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -667,8 +670,10 @@ pendingTxsSpec ctx cfg =
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0)
-        `dbShouldBeE` [(h3, tsd3, False), (h2, tsd2', False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
+                        Just $ TxInfoPending h2 True False
+                      ]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False
@@ -684,12 +689,17 @@ pendingTxsSpec ctx cfg =
           importPendingTx btc ctx accId tsd2'
         -- Can not delete an online transaction
         shouldBeLeft $ deletePendingTx ctx h2
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [ Just $ TxInfoPending h3 False False,
+                        Just $ TxInfoPending h2 True True
+                      ]
       lift $ deletePendingTxOnline $ DBPendingTxKey $ txHashToHex h2
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin2 {jsonCoinLocked = True},
                         jsonCoin1 {jsonCoinLocked = True}
                       ]
-      pendingTxPage accId (Page 5 0) `dbShouldBeE` [(h3, tsd3, False)]
+      ((txInfoPending <$>) <$> pendingTxPage ctx accId (Page 5 0))
+        `dbShouldBeE` [Just $ TxInfoPending h3 False False]
       checkFree 0 False
       checkFree 1 True
       checkFree 2 False

@@ -10,6 +10,7 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE QuasiQuotes #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE TupleSections #-}
@@ -27,6 +28,7 @@ import Control.Monad.Except
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Logger (NoLoggingT)
 import Control.Monad.Reader (MonadTrans (lift), ReaderT)
+import Control.Monad.Trans.Maybe
 import Data.Aeson
 import qualified Data.Aeson as Json
 import Data.ByteString (ByteString)
@@ -144,8 +146,8 @@ DBPendingTx
   accountWallet DBWalletId
   accountDerivation Text
   nosigHash Text
-  blob ByteString
   online Bool
+  blob ByteString
   created UTCTime default=CURRENT_TIME
   Primary nosigHash
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
@@ -789,40 +791,48 @@ repsertTxInfo ::
   Ctx ->
   DBAccountId ->
   TxInfo ->
-  DB m (DBTxInfo, Bool)
-repsertTxInfo net ctx accId tif = do
+  ExceptT String (DB m) (DBTxInfo, Bool)
+repsertTxInfo net ctx accId txInfo = do
   time <- liftIO getCurrentTime
-  let confirmed' = Store.confirmed $ txInfoBlockRef tif
-      tid = txHashToHex $ txInfoHash tif
-      bRef = S.encode $ txInfoBlockRef tif
+  tid <- liftEither $ maybeToEither "TxId" $ txInfoHash txInfo
+  let confirmed' = Store.confirmed $ txInfoBlockRef txInfo
+      tidT = txHashToHex tid
+      bRef = S.encode $ txInfoBlockRef txInfo
       -- Confirmations will get updated when retrieving them
-      blob = BS.toStrict $ marshalJSON (net, ctx) tif {txInfoConfirmations = 0}
+      blob =
+        BS.toStrict $
+          marshalJSON
+            (net, ctx)
+            txInfo
+              { txInfoConfirmations = 0,
+                txInfoPending = Nothing
+              }
       (DBAccountKey wallet accDeriv) = accId
-      key = DBTxInfoKey wallet accDeriv tid
-      txInfo =
+      key = DBTxInfoKey wallet accDeriv tidT
+      dbInfo =
         DBTxInfo
           { dBTxInfoAccountWallet = wallet,
             dBTxInfoAccountDerivation = accDeriv,
-            dBTxInfoTxid = tid,
+            dBTxInfoTxid = tidT,
             dBTxInfoBlockRef = bRef,
             dBTxInfoConfirmed = confirmed',
             dBTxInfoBlob = blob,
             dBTxInfoCreated = time
           }
-  resM <- P.get key
-  case resM of
-    Just res -> do
-      let newTxInfo =
-            res
+  prevM <- lift $ P.get key
+  case prevM of
+    Just prev -> do
+      let newDBInfo =
+            prev
               { dBTxInfoBlockRef = bRef,
                 dBTxInfoConfirmed = confirmed',
                 dBTxInfoBlob = blob
               }
-      P.replace key newTxInfo
-      return (newTxInfo, res /= newTxInfo)
+      lift $ P.replace key newDBInfo
+      return (newDBInfo, prev /= newDBInfo)
     Nothing -> do
-      P.insert_ txInfo
-      return (txInfo, True)
+      lift $ P.insert_ dbInfo
+      return (dbInfo, True)
 
 txsPage ::
   (MonadUnliftIO m) =>
@@ -847,8 +857,9 @@ txsPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
       liftEither . maybeToEither "TxInfo unmarshalJSON Failed" $
         unmarshalJSON (net, ctx) $
           BS.fromStrict dbTx
+  resLabels <- lift $ mapM (fillTxInfoLabels net) res
   bestM <- lift $ getBest net
-  return $ updateConfirmations (snd <$> bestM) <$> res
+  return $ updateConfirmations (snd <$> bestM) <$> resLabels
   where
     updateConfirmations bestM tif =
       tif {txInfoConfirmations = getConfirmations bestM (txInfoBlockRef tif)}
@@ -859,6 +870,29 @@ getConfirmations Nothing (Store.BlockRef _ _) = 1
 getConfirmations (Just best) (Store.BlockRef height _)
   | best < height = 1
   | otherwise = fromIntegral $ best - height + 1
+
+fillTxInfoLabels :: (MonadUnliftIO m) => Network -> TxInfo -> DB m TxInfo
+fillTxInfoLabels net txInfo = do
+  o <- mapM fillOutput $ Map.assocs $ txInfoMyOutputs txInfo
+  i <- mapM fillInput $ Map.assocs $ txInfoMyInputs txInfo
+  return $
+    txInfo
+      { txInfoMyOutputs = Map.fromList o,
+        txInfoMyInputs = Map.fromList i
+      }
+  where
+    fillOutput (a, o) = do
+      resM <- runMaybeT $ do
+        addrT <- hoistMaybe $ addrToText net a
+        (Entity _ dbAddr) <- hoistMaybe =<< lift (P.getBy $ UniqueAddress addrT)
+        return (a, o {myOutputsLabel = dBAddressLabel dbAddr})
+      return $ fromMaybe (a, o) resM
+    fillInput (a, i) = do
+      resM <- runMaybeT $ do
+        addrT <- hoistMaybe $ addrToText net a
+        (Entity _ dbAddr) <- hoistMaybe =<< lift (P.getBy $ UniqueAddress addrT)
+        return (a, i {myInputsLabel = dBAddressLabel dbAddr})
+      return $ fromMaybe (a, i) resM
 
 {- Coins -}
 
@@ -1076,24 +1110,37 @@ data TxOnline = TxOnline | TxOffline
 
 -- Returns (TxSignData, isOnline)
 getPendingTx ::
-  (MonadUnliftIO m) => TxHash -> DB m (Maybe (DBAccountId, TxSignData, Bool))
+  (MonadUnliftIO m) =>
+  TxHash ->
+  DB m (Maybe (DBAccountId, TxSignData, TxInfoPending))
 getPendingTx nosigHash = do
   let hashT = txHashToHex nosigHash
       key = DBPendingTxKey hashT
   resM <- P.get key
   case resM of
-    Just (DBPendingTx wallet accDeriv _ blob online _) -> do
+    Just (DBPendingTx wallet accDeriv _ online blob _) -> do
       let accId = DBAccountKey wallet accDeriv
           tsdM = Json.decode $ BS.fromStrict blob
-      return $ (accId,,online) <$> tsdM
+      return $ do
+        tsd <- tsdM
+        let pending =
+              TxInfoPending
+                (nosigTxHash $ txSignDataTx tsd)
+                (txSignDataSigned tsd)
+                online
+        return (accId, tsd, pending)
     _ -> return Nothing
 
 pendingTxPage ::
   (MonadUnliftIO m) =>
+  Ctx ->
   DBAccountId ->
   Page ->
-  ExceptT String (DB m) [(TxHash, TxSignData, Bool)]
-pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
+  ExceptT String (DB m) [TxInfo]
+pendingTxPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
+  acc <- getAccountById accId
+  let pub = accountXPubKey ctx acc
+      net = accountNetwork acc
   tsds <-
     lift . select . from $ \p -> do
       where_ $ do
@@ -1105,12 +1152,12 @@ pendingTxPage (DBAccountKey wallet accDeriv) (Page lim off) = do
       return p
   forM tsds $ \(Entity _ res) -> do
     tsd <- liftEither . Json.eitherDecode . BS.fromStrict $ dBPendingTxBlob res
-    nosigHash <-
-      liftEither $
-        maybeToEither "TxHash" $
-          hexToTxHash $
-            dBPendingTxNosigHash res
-    return (nosigHash, tsd, dBPendingTxOnline res)
+    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    let nosigHash = nosigTxHash $ txSignDataTx tsd
+        pending =
+          TxInfoPending nosigHash (txSignDataSigned tsd) (dBPendingTxOnline res)
+    let txInfoP = txInfo{txInfoPending = Just pending}
+    lift $ fillTxInfoLabels net txInfoP
 
 -- Returns the TxHash and NoSigHash of pending transactions. They are compared
 -- during a sync in order to delete pending transactions that are now online.
@@ -1147,8 +1194,8 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
       bs = BS.toStrict $ Json.encode tsd
   prevM <- lift $ getPendingTx nosigHash
   case prevM of
-    Just (_, TxSignData prevTx _ _ _ prevSigned, online) -> do
-      when online $
+    Just (_, TxSignData prevTx _ _ _ prevSigned, pending) -> do
+      when (pendingOnline pending) $
         throwError "The transaction is already online"
       when (prevSigned && not signed) $
         throwError "Can not replace a signed transaction with an unsigned one"
@@ -1195,20 +1242,20 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
               (dBAccountWallet acc)
               (dBAccountDerivation acc)
               (txHashToHex nosigHash)
-              bs
               False
+              bs
               time
       lift $ P.insert_ ptx
       return nosigHash
 
 -- (Outpoints, external addrs, internal addrs)
-parseTxInfoU :: UnsignedTxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
-parseTxInfoU (UnsignedTxInfo _ _ myOps _ myIps _ _ _ _) =
+parseTxInfoU :: TxInfo -> ([OutPoint], [(Address, KeyIndex)], [Address])
+parseTxInfoU TxInfo {..} =
   (outpoints, nub $ f <$> outIntAddrs, nub $ fst <$> restAddrs)
   where
-    outpoints = (.outpoint) <$> concatMap myInputsSigInput (Map.elems myIps)
-    outAddrs = second myOutputsPath <$> Map.assocs myOps
-    inAddrs = second myInputsPath <$> Map.assocs myIps
+    outpoints = (.outpoint) <$> concatMap myInputsSigInput (Map.elems txInfoMyInputs)
+    outAddrs = second myOutputsPath <$> Map.assocs txInfoMyOutputs
+    inAddrs = second myInputsPath <$> Map.assocs txInfoMyInputs
     (outIntAddrs, outExtAddrs) = partition (isIntPath . snd) outAddrs
     restAddrs = outExtAddrs <> inAddrs
     f (a, p) =
@@ -1226,12 +1273,12 @@ deletePendingTx ctx nosigHash = do
   let key = DBPendingTxKey $ txHashToHex nosigHash
   tsdM <- lift $ getPendingTx nosigHash
   case tsdM of
-    Just (_, _, True) -> do
+    Just (_, _, TxInfoPending _ _ True) -> do
       throwError
         "This pending transaction has been sent to the network.\
         \ Run syncacc to refresh your database."
     -- We only free coins and addresses if the transaction is offline
-    Just (accId, tsd, False) -> do
+    Just (accId, tsd, _) -> do
       acc <- getAccountById accId
       let net = accountNetwork acc
           pub = accountXPubKey ctx acc

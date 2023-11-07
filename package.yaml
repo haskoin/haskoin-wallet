@@ -1,5 +1,5 @@
 name: haskoin-wallet
-version: &version 0.8.3
+version: &version 0.8.4
 synopsis: Lightweight command-line wallet for Bitcoin and Bitcoin Cash
 description: !
   haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and

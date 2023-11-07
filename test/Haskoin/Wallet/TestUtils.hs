@@ -140,12 +140,14 @@ arbitraryMyOutputs =
   MyOutputs
     <$> arbitraryNatural
     <*> arbitrarySoftPath
+    <*> arbitraryText
 
 arbitraryMyInputs :: Network -> Ctx -> Gen MyInputs
 arbitraryMyInputs net ctx =
   MyInputs
     <$> arbitraryNatural
     <*> arbitrarySoftPath
+    <*> arbitraryText
     <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
 
 arbitraryOtherInputs :: Network -> Ctx -> Gen OtherInputs
@@ -189,7 +191,7 @@ arbitraryStoreInput =
 arbitraryTxInfo :: Network -> Ctx -> Gen TxInfo
 arbitraryTxInfo net ctx =
   TxInfo
-    <$> arbitraryTxHash
+    <$> arbitraryMaybe arbitraryTxHash
     <*> arbitraryTxType
     <*> arbitrary
     <*> ( Map.fromList
@@ -219,42 +221,14 @@ arbitraryTxInfo net ctx =
     <*> arbitraryNatural
     <*> arbitraryBlockRef
     <*> arbitraryNatural
+    <*> arbitraryMaybe arbitraryTxInfoPending
 
-arbitraryUnsignedTxInfo :: Network -> Ctx -> Gen UnsignedTxInfo
-arbitraryUnsignedTxInfo net ctx =
-  UnsignedTxInfo
-    <$> arbitraryTxType
+arbitraryTxInfoPending :: Gen TxInfoPending
+arbitraryTxInfoPending =
+  TxInfoPending
+    <$> arbitraryTxHash
     <*> arbitrary
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryMyOutputs)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryNatural)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryMyInputs net ctx)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryOtherInputs net ctx)
-        )
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-
-arbitraryNoSigTxInfo :: Network -> Ctx -> Gen NoSigTxInfo
-arbitraryNoSigTxInfo net ctx =
-  oneof
-    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx <*> arbitrary,
-      NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
-    ]
+    <*> arbitrary
 
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
@@ -282,12 +256,9 @@ arbitraryResponse net ctx =
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponseTxInfo
+      ResponseTx
         <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
-      ResponseTxInfos
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryNoSigTxInfo net ctx),
+        <*> arbitraryTxInfo net ctx,
       ResponseDeleteTx
         <$> arbitraryTxHash
         <*> arbitraryNatural

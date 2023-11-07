@@ -5,7 +5,6 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE TupleSections #-}
 
 module Haskoin.Wallet.Commands where
 
@@ -79,13 +78,9 @@ data Response
       { responseAccount :: !DBAccount,
         responseTxs :: ![TxInfo]
       }
-  | ResponseTxInfo
+  | ResponseTx
       { responseAccount :: !DBAccount,
-        responsePendingTx :: !NoSigTxInfo
-      }
-  | ResponseTxInfos
-      { responseAccount :: !DBAccount,
-        responsePendingTxs :: ![NoSigTxInfo]
+        responsePendingTx :: !TxInfo
       }
   | ResponseDeleteTx
       { responseNoSigHash :: !TxHash,
@@ -165,19 +160,12 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "txs" .= (marshalValue (accountNetwork a, ctx) <$> txs)
           ]
-      ResponseTxInfo a t -> do
+      ResponseTx a t -> do
         let net = accountNetwork a
         object
-          [ "type" .= Json.String "txinfo",
+          [ "type" .= Json.String "tx",
             "account" .= a,
-            "txinfo" .= marshalValue (net, ctx) t
-          ]
-      ResponseTxInfos a ts -> do
-        let net = accountNetwork a
-        object
-          [ "type" .= Json.String "txinfos",
-            "account" .= a,
-            "txinfos" .= (marshalValue (net, ctx) <$> ts)
+            "tx" .= marshalValue (net, ctx) t
           ]
       ResponseDeleteTx h c a ->
         object
@@ -244,16 +232,11 @@ instance MarshalJSON Ctx Response where
           let net = accountNetwork a
           txs <- mapM (unmarshalValue (net, ctx)) =<< o .: "txs"
           return $ ResponseTxs a txs
-        "txinfo" -> do
+        "tx" -> do
           a <- o .: "account"
           let net = accountNetwork a
-          t <- unmarshalValue (net, ctx) =<< o .: "txinfo"
-          return $ ResponseTxInfo a t
-        "txinfos" -> do
-          a <- o .: "account"
-          let net = accountNetwork a
-          ts <- mapM (unmarshalValue (net, ctx)) =<< o .: "txinfos"
-          return $ ResponseTxInfos a ts
+          t <- unmarshalValue (net, ctx) =<< o .: "tx"
+          return $ ResponseTx a t
         "deletetx" ->
           ResponseDeleteTx
             <$> o .: "nosighash"
@@ -281,7 +264,7 @@ instance MarshalJSON Ctx Response where
         _ -> fail "Invalid JSON response type"
 
 runDB ::
-     (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
+  (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
 runDB cfg action = do
   dbFile <- liftIO $ databaseFile cfg
   runSqlite (cs dbFile) $ do
@@ -446,7 +429,7 @@ cmdLabel cfg nameM idx lab =
     adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseAddress acc adr
 
-cmdTxs :: Ctx -> Config ->Maybe Text -> Page -> IO Response
+cmdTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdTxs ctx cfg nameM page =
   runDB cfg $ do
     (accId, acc) <- getAccountByName nameM
@@ -472,12 +455,13 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay fileM =
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
     signDat <- buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay
-    txInfoU <- liftEither $ parseTxSignData net ctx pub signDat
+    txInfo <- liftEither $ parseTxSignData net ctx pub signDat
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ fileM checkPathFree
-    nosigHash <- importPendingTx net ctx accId signDat
+    _ <- importPendingTx net ctx accId signDat
     for_ fileM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON signDat
     newAcc <- getAccountById accId
-    return $ ResponseTxInfo newAcc $ NoSigUnsigned nosigHash txInfoU
+    return $ ResponseTx newAcc txInfoL
   where
     toRecipient net (a, v) = do
       addr <- textToAddrE net a
@@ -490,16 +474,8 @@ cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx cfg nameM page =
   runDB cfg $ do
     (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-        pub = accountXPubKey ctx acc
-    tsds <- pendingTxPage accId page
-    txs <- forM tsds $ \(nosigH, tsd@(TxSignData tx _ _ _ signed), online) -> do
-      txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
-      return $
-        if signed
-          then NoSigSigned nosigH (unsignedToTxInfo tx txInfoU) online
-          else NoSigUnsigned nosigH txInfoU
-    return $ ResponseTxInfos acc txs
+    txInfos <- pendingTxPage ctx accId page
+    return $ ResponseTxs acc txInfos
 
 cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx cfg nameM fp =
@@ -507,22 +483,17 @@ cmdReviewTx ctx cfg nameM fp =
     (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
-    txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
-    let txInfo = unsignedToTxInfo tx txInfoU
-        nosigHash = nosigTxHash tx
-    return $
-      ResponseTxInfo acc $
-        if signed
-          then NoSigSigned nosigHash txInfo False
-          else NoSigUnsigned nosigHash txInfoU
+    tsd <- liftEitherIO $ readJsonFile fp
+    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
+    return $ ResponseTx acc txInfoL
 
 cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
 cmdExportTx cfg nosigH fp =
   runDB cfg $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
-      Just (_,tsd, _) -> do
+      Just (_, tsd, _) -> do
         checkPathFree fp
         liftIO $ writeJsonFile fp $ Json.toJSON tsd
         return $ ResponseFile fp
@@ -534,15 +505,11 @@ cmdImportTx ctx cfg nameM fp =
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
-    tsd@(TxSignData tx _ _ _ signed) <- liftEitherIO $ readJsonFile fp
-    txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
-    let txInfo = unsignedToTxInfo tx txInfoU
-    nosigHash <- importPendingTx net ctx accId tsd
-    return $
-      ResponseTxInfo acc $
-        if signed
-          then NoSigSigned nosigHash txInfo False
-          else NoSigUnsigned nosigHash txInfoU
+    tsd <- liftEitherIO $ readJsonFile fp
+    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
+    _ <- importPendingTx net ctx accId tsd
+    return $ ResponseTx acc txInfoL
 
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
 cmdDeleteTx ctx cfg nosigH =
@@ -577,12 +544,10 @@ cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
     unless (accPub == xpub) $
       throwError "The mnemonic did not match the provided account"
     (newSignData, txInfo) <- liftEither $ signWalletTx net ctx tsd prvKey
-    let nosigH = nosigTxHash $ txSignDataTx newSignData
-    when (isJust nosigHM && Just nosigH /= nosigHM) $
-      throwError "The nosigHash did not match"
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newSignData
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newSignData
-    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
+    return $ ResponseTx acc txInfoL
 
 parseSignInput ::
   (MonadUnliftIO m) =>
@@ -602,12 +567,13 @@ parseSignInput nosigHM inputM outputM =
     (Just h, _, _) -> do
       resM <- lift $ getPendingTx h
       case resM of
-        Just (_,t,b) -> return (t,b)
+        Just (_, t, TxInfoPending _ _ online) -> return (t, online)
         _ -> throwError "The nosigHash does not exist in the wallet"
     (_, Just i, _) -> do
       exist <- liftIO $ D.doesFileExist i
       unless exist $ throwError "Input file does not exist"
-      (,False) <$> liftEitherIO (readJsonFile i)
+      tsd <- liftEitherIO (readJsonFile i)
+      return (tsd, False)
 
 cmdCoins :: Config -> Maybe Text -> Page -> IO Response
 cmdCoins cfg nameM page =
@@ -626,9 +592,9 @@ cmdSendTx ctx cfg nosigH =
         acc <- getAccountById accId
         let net = accountNetwork acc
             pub = accountXPubKey ctx acc
-        txInfoU <- liftEither $ parseTxSignData net ctx pub tsd
-        let txInfo = unsignedToTxInfo signedTx txInfoU
-            verify = verifyTxInfo net ctx signedTx txInfo
+        txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+        txInfoL <- lift $ fillTxInfoLabels net txInfo
+        let verify = verifyTxInfo net ctx signedTx txInfoL
         unless (signed && verify) $ throwError "The transaction is not signed"
         checkHealth ctx net cfg
         let host = apiHost net cfg
@@ -638,8 +604,14 @@ cmdSendTx ctx cfg nosigH =
             "The server returned the wrong TxHash: "
               <> cs (txHashToHex netTxId)
         _ <- lift $ setPendingTxOnline nosigH
-        return $ ResponseTxInfo acc $ NoSigSigned nosigH txInfo True
+        return $ ResponseTx acc $ setTxInfoOnline txInfoL
       _ -> throwError "The nosigHash does not exist in the wallet"
+
+setTxInfoOnline :: TxInfo -> TxInfo
+setTxInfoOnline txInfo =
+  case txInfoPending txInfo of
+    Just p -> txInfo{ txInfoPending = Just p{pendingOnline = True}}
+    _ -> txInfo
 
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx cfg nameM full =
@@ -689,8 +661,8 @@ sync ctx cfg net accId full = do
   Store.SerialList txs <-
     liftExcept $ apiBatch ctx (configTxFullBatch cfg) host (GetTxs tids)
   -- Convert them to TxInfo and store them in the local database
-  let txInfos = toTxInfo addrPathMap (fromIntegral best.height) <$> txs
-  resTxInfo <- lift $ forM txInfos $ repsertTxInfo net ctx accId
+  let txInfos = storeToTxInfo addrPathMap (fromIntegral best.height) <$> txs
+  resTxInfo <- forM txInfos $ repsertTxInfo net ctx accId
   -- Fetch and update coins
   Store.SerialList storeCoins <-
     liftExcept . apiBatch ctx (configCoinBatch cfg) host $
@@ -840,11 +812,12 @@ prepareSweep ctx cfg nameM prvKeyFile sweepToT outputM feeByte dust =
     sweepTo <- liftEither $ mapM (textToAddrE net) sweepToT
     checkHealth ctx net cfg
     tsd <- buildSweepSignData net ctx cfg accId secKeys sweepTo feeByte dust
-    info <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfo <- liftEither $ parseTxSignData net ctx pub tsd
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ outputM checkPathFree
-    nosigHash <- importPendingTx net ctx accId tsd
+    _ <- importPendingTx net ctx accId tsd
     for_ outputM $ \file -> liftIO $ writeJsonFile file $ Json.toJSON tsd
-    return $ ResponseTxInfo acc (NoSigUnsigned nosigHash info)
+    return $ ResponseTx acc txInfoL
 
 signSweep ::
   Ctx ->
@@ -871,12 +844,10 @@ signSweep ctx cfg nameM nosigHM inputM outputM keyFile =
     when (null secKeys) $ throwError "No private keys to sign"
     -- Sign the transactions
     (newTsd, txInfo) <- liftEither $ signTxWithKeys net ctx tsd pub secKeys
-    let nosigH = nosigTxHash $ txSignDataTx newTsd
-    when (isJust nosigHM && Just nosigH /= nosigHM) $
-      throwError "The nosigHash did not match"
+    txInfoL <- lift $ fillTxInfoLabels net txInfo
     when (isJust nosigHM) $ void $ importPendingTx net ctx accId newTsd
     for_ outputM $ \o -> liftIO $ writeJsonFile o $ Json.toJSON newTsd
-    return $ ResponseTxInfo acc (NoSigSigned nosigH txInfo False)
+    return $ ResponseTx acc txInfoL
 
 rollDice :: Natural -> IO Response
 rollDice n = do
