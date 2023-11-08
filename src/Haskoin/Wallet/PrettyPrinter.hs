@@ -11,7 +11,7 @@
 module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Monad
-import Data.List (intersperse)
+import Data.List (intersperse, intercalate)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
@@ -524,6 +524,14 @@ prettyPrinter unit =
             nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
             nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
           ]
+    ResponseRestore as -> do
+      let f (acc, t, c) =
+            [ accountPrinter unit acc,
+              formatTitle "Restore Results:",
+              nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
+              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
+            ]
+      renderIO $ vcat $ intercalate [text " "] (f <$> as)
     ResponseVersion v ->
       renderIO $ formatKey "Version:" <+> formatValue (cs v)
     ResponseRollDice ds e ->

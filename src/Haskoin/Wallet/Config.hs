@@ -8,12 +8,15 @@
 module Haskoin.Wallet.Config where
 
 import Control.Monad (unless)
+import Control.Monad.Except
+import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Default
 import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
-import Haskoin.Network
+import Haskoin
+import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
@@ -104,3 +107,17 @@ initConfig = do
 
 apiHost :: Network -> Config -> ApiConfig
 apiHost net = ApiConfig net . cs . configHost
+
+-- Utilities --
+
+checkHealth ::
+  (MonadIO m) =>
+  Ctx ->
+  Network ->
+  Config ->
+  ExceptT String m ()
+checkHealth ctx net cfg = do
+  let host = apiHost net cfg
+  health <- liftExcept $ apiCall ctx host GetHealth
+  unless (Store.isOK health) $
+    throwError "The indexer health check has failed"

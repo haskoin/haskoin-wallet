@@ -69,9 +69,9 @@ data TxInfo = TxInfo
   deriving (Eq, Show)
 
 data TxInfoPending = TxInfoPending
-  { pendingNosigHash :: !TxHash
-  , pendingSigned :: !Bool
-  , pendingOnline :: !Bool
+  { pendingNosigHash :: !TxHash,
+    pendingSigned :: !Bool,
+    pendingOnline :: !Bool
   }
   deriving (Eq, Show)
 
@@ -383,8 +383,9 @@ parseTxSignData net ctx pubkey tsd@(TxSignData tx _ inPaths outPaths signed) = d
   where
     inPathAddrs = Map.fromList $ (pathToAddr ctx pubkey &&& id) <$> inPaths
     outPathAddrs = Map.fromList $ (pathToAddr ctx pubkey &&& id) <$> outPaths
-    size | signed = BS.length $ S.encode tx
-         | otherwise = guessTxSize (length tx.inputs) [] (length tx.outputs) 0
+    size
+      | signed = BS.length $ S.encode tx
+      | otherwise = guessTxSize (length tx.inputs) [] (length tx.outputs) 0
 
 txSignDataCoins :: TxSignData -> Either String [(OutPoint, TxOut)]
 txSignDataCoins (TxSignData tx depTxs _ _ _) =

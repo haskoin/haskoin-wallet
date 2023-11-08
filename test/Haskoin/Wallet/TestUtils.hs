@@ -20,6 +20,7 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Backup
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -230,6 +231,21 @@ arbitraryTxInfoPending =
     <*> arbitrary
     <*> arbitrary
 
+arbitraryAccountBackup :: Ctx -> Gen AccountBackup
+arbitraryAccountBackup ctx =
+  AccountBackup
+    <$> arbitraryText
+    <*> arbitraryFingerprint
+    <*> arbitraryXPubKey ctx
+    <*> arbitraryNetwork
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> ( Map.fromList
+            <$> resize 20 (listOf $ (,) <$> arbitraryAddress <*> arbitraryText)
+        )
+    <*> resize 20 (listOf arbitraryAddress)
+    <*> arbitraryUTCTime
+
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
   oneof
@@ -243,22 +259,16 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> arbitrary
         <*> arbitraryText,
-      ResponseFile
-        <$> (cs <$> arbitraryText),
-      ResponseAccounts
-        <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
-      ResponseAddress
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryDBAddress net,
+      ResponseFile <$> (cs <$> arbitraryText),
+      ResponseAccounts <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
+      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net,
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryDBAddress net),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponseTx
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryTxInfo net ctx,
+      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net ctx,
       ResponseDeleteTx
         <$> arbitraryTxHash
         <*> arbitraryNatural
@@ -269,13 +279,21 @@ arbitraryResponse net ctx =
       ResponseSync
         <$> arbitraryDBAccount net ctx
         <*> arbitraryBlockHash
-        <*> arbitraryNatural
+        <*> arbitrary
         <*> arbitraryNatural
         <*> arbitraryNatural,
-      ResponseVersion <$> arbitraryText,
-      ResponseRollDice
-        <$> resize 20 (listOf arbitraryNatural)
-        <*> arbitraryText
+      ResponseRestore
+        <$> resize
+          20
+          ( listOf $
+              (,,)
+                <$> arbitraryDBAccount net ctx
+                <*> arbitraryNatural
+                <*> arbitraryNatural
+          ),
+      ResponseVersion
+        <$> arbitraryText,
+      ResponseRollDice <$> resize 20 (listOf arbitraryNatural) <*> arbitraryText
     ]
 
 arbitraryConfig :: Gen Config

@@ -572,14 +572,15 @@ genNextAddress ::
   DBAccountId ->
   AddrType ->
   AddrFree ->
+  Bool ->
   ExceptT String (DB m) DBAddress
-genNextAddress ctx cfg accId addrType addrFree = do
+genNextAddress ctx cfg accId addrType addrFree testGap = do
   acc <- getAccountById accId
   let net = accountNetwork acc
       pub = accountXPubKey ctx acc
       nextIdx = dBAccountCount addrType acc
       deriv = addrDeriv addrType
-  checkGap cfg accId nextIdx addrType
+  when testGap $ checkGap cfg accId nextIdx addrType
   let (addr, _) = derivePathAddr ctx pub deriv (fromIntegral nextIdx)
   dbAddr <-
     insertAddress net accId (deriv :/ fromIntegral nextIdx) addr addrFree
@@ -627,7 +628,8 @@ discoverAccGenAddrs ctx cfg accId addrType newAddrCnt = do
   acc <- getAccountById accId
   let oldAddrCnt = dBAccountCount addrType acc
       cnt = max 0 $ newAddrCnt - oldAddrCnt
-  replicateM_ cnt $ genNextAddress ctx cfg accId addrType AddrBusy
+  -- False: Don't check the gap while discovering
+  replicateM_ cnt $ genNextAddress ctx cfg accId addrType AddrBusy False
 
 genExtAddress ::
   (MonadUnliftIO m) =>
@@ -637,7 +639,8 @@ genExtAddress ::
   Text ->
   ExceptT String (DB m) DBAddress
 genExtAddress ctx cfg accId label = do
-  addr <- genNextAddress ctx cfg accId AddrExternal AddrBusy
+  -- True: check the gap
+  addr <- genNextAddress ctx cfg accId AddrExternal AddrBusy True
   setAddrLabel accId (dBAddressIndex addr) label
 
 setAddrLabel ::
@@ -673,7 +676,8 @@ nextFreeIntAddr ctx cfg accId@(DBAccountKey wallet accDeriv) = do
     return a
   case resM of
     Just (Entity _ a) -> return a
-    Nothing -> genNextAddress ctx cfg accId AddrInternal AddrFree
+    -- True: Check the gap
+    Nothing -> genNextAddress ctx cfg accId AddrInternal AddrFree True
 
 fromDBAddr :: Network -> DBAddress -> Either String (Address, SoftPath)
 fromDBAddr net addrDB = do
@@ -687,7 +691,9 @@ setAddrsFree :: (MonadUnliftIO m) => AddrFree -> [Text] -> DB m Natural
 setAddrsFree free addrs = do
   (fromIntegral <$>) . updateCount $ \a -> do
     set a [DBAddressFree =. val (isAddrFree free)]
-    where_ $ a ^. DBAddressAddress `in_` valList addrs
+    where_ $
+      a ^. DBAddressAddress `in_` valList addrs
+        &&. (a ^. DBAddressBalanceTxs ==. val 0)
 
 addressPage :: (MonadUnliftIO m) => DBAccountId -> Page -> DB m [DBAddress]
 addressPage (DBAccountKey wallet accDeriv) (Page lim off) = do
@@ -1156,7 +1162,7 @@ pendingTxPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
     let nosigHash = nosigTxHash $ txSignDataTx tsd
         pending =
           TxInfoPending nosigHash (txSignDataSigned tsd) (dBPendingTxOnline res)
-    let txInfoP = txInfo{txInfoPending = Just pending}
+    let txInfoP = txInfo {txInfoPending = Just pending}
     lift $ fillTxInfoLabels net txInfoP
 
 -- Returns the TxHash and NoSigHash of pending transactions. They are compared

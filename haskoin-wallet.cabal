@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: fef9dbde20e48762a6cc2e90e81a0a654e8f6f018e037a807b29dd5652444029
+-- hash: 110414bd6a1d03341c9e473088a518931dfd17b9de010954ba59894539737a61
 
 name:           haskoin-wallet
 version:        0.8.4
@@ -73,6 +73,7 @@ library
   exposed-modules:
       Haskoin.Wallet
       Haskoin.Wallet.Amounts
+      Haskoin.Wallet.Backup
       Haskoin.Wallet.Commands
       Haskoin.Wallet.Config
       Haskoin.Wallet.Database
