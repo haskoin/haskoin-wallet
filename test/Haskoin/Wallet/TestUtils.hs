@@ -20,6 +20,7 @@ import Database.Persist.Sqlite (runSqlite)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Util.Arbitrary
+import Haskoin.Wallet.Backup
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
@@ -140,12 +141,14 @@ arbitraryMyOutputs =
   MyOutputs
     <$> arbitraryNatural
     <*> arbitrarySoftPath
+    <*> arbitraryText
 
 arbitraryMyInputs :: Network -> Ctx -> Gen MyInputs
 arbitraryMyInputs net ctx =
   MyInputs
     <$> arbitraryNatural
     <*> arbitrarySoftPath
+    <*> arbitraryText
     <*> resize 10 (listOf $ fst <$> arbitrarySigInput net ctx)
 
 arbitraryOtherInputs :: Network -> Ctx -> Gen OtherInputs
@@ -189,7 +192,7 @@ arbitraryStoreInput =
 arbitraryTxInfo :: Network -> Ctx -> Gen TxInfo
 arbitraryTxInfo net ctx =
   TxInfo
-    <$> arbitraryTxHash
+    <$> arbitraryMaybe arbitraryTxHash
     <*> arbitraryTxType
     <*> arbitrary
     <*> ( Map.fromList
@@ -219,42 +222,29 @@ arbitraryTxInfo net ctx =
     <*> arbitraryNatural
     <*> arbitraryBlockRef
     <*> arbitraryNatural
+    <*> arbitraryMaybe arbitraryTxInfoPending
 
-arbitraryUnsignedTxInfo :: Network -> Ctx -> Gen UnsignedTxInfo
-arbitraryUnsignedTxInfo net ctx =
-  UnsignedTxInfo
-    <$> arbitraryTxType
+arbitraryTxInfoPending :: Gen TxInfoPending
+arbitraryTxInfoPending =
+  TxInfoPending
+    <$> arbitraryTxHash
     <*> arbitrary
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryMyOutputs)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryNatural)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryMyInputs net ctx)
-        )
-    <*> ( Map.fromList
-            <$> resize
-              10
-              (listOf $ (,) <$> arbitraryAddress <*> arbitraryOtherInputs net ctx)
-        )
-    <*> arbitraryNatural
-    <*> arbitraryNatural
-    <*> arbitraryNatural
+    <*> arbitrary
 
-arbitraryNoSigTxInfo :: Network -> Ctx -> Gen NoSigTxInfo
-arbitraryNoSigTxInfo net ctx =
-  oneof
-    [ NoSigSigned <$> arbitraryTxHash <*> arbitraryTxInfo net ctx <*> arbitrary,
-      NoSigUnsigned <$> arbitraryTxHash <*> arbitraryUnsignedTxInfo net ctx
-    ]
+arbitraryAccountBackup :: Ctx -> Gen AccountBackup
+arbitraryAccountBackup ctx =
+  AccountBackup
+    <$> arbitraryText
+    <*> arbitraryFingerprint
+    <*> arbitraryXPubKey ctx
+    <*> arbitraryNetwork
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+    <*> ( Map.fromList
+            <$> resize 20 (listOf $ (,) <$> arbitraryAddress <*> arbitraryText)
+        )
+    <*> resize 20 (listOf arbitraryAddress)
+    <*> arbitraryUTCTime
 
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
@@ -269,25 +259,16 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> arbitrary
         <*> arbitraryText,
-      ResponseFile
-        <$> (cs <$> arbitraryText),
-      ResponseAccounts
-        <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
-      ResponseAddress
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryDBAddress net,
+      ResponseFile <$> (cs <$> arbitraryText),
+      ResponseAccounts <$> resize 20 (listOf $ arbitraryDBAccount net ctx),
+      ResponseAddress <$> arbitraryDBAccount net ctx <*> arbitraryDBAddress net,
       ResponseAddresses
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryDBAddress net),
       ResponseTxs
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf $ arbitraryTxInfo net ctx),
-      ResponseTxInfo
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryNoSigTxInfo net ctx,
-      ResponseTxInfos
-        <$> arbitraryDBAccount net ctx
-        <*> resize 20 (listOf $ arbitraryNoSigTxInfo net ctx),
+      ResponseTx <$> arbitraryDBAccount net ctx <*> arbitraryTxInfo net ctx,
       ResponseDeleteTx
         <$> arbitraryTxHash
         <*> arbitraryNatural
@@ -298,13 +279,22 @@ arbitraryResponse net ctx =
       ResponseSync
         <$> arbitraryDBAccount net ctx
         <*> arbitraryBlockHash
-        <*> arbitraryNatural
+        <*> arbitrary
         <*> arbitraryNatural
         <*> arbitraryNatural,
-      ResponseVersion <$> arbitraryText,
-      ResponseRollDice
-        <$> resize 20 (listOf arbitraryNatural)
-        <*> arbitraryText
+      ResponseRestore
+        <$> resize
+          20
+          ( listOf $
+              (,,)
+                <$> arbitraryDBAccount net ctx
+                <*> arbitraryNatural
+                <*> arbitraryNatural
+          ),
+      ResponseVersion
+        <$> arbitraryText
+        <*> arbitraryText,
+      ResponseRollDice <$> resize 20 (listOf arbitraryNatural) <*> arbitraryText
     ]
 
 arbitraryConfig :: Gen Config

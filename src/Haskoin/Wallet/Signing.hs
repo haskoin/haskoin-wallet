@@ -167,21 +167,28 @@ signTxWithKeys ::
 signTxWithKeys net ctx tsd@(TxSignData tx _ _ _ signed) publicKey secKeys = do
   when signed $ Left "The transaction is already signed"
   when (null secKeys) $ Left "There are no private keys to sign"
-  txInfoU <- parseTxSignData net ctx publicKey tsd
+  txInfo <- parseTxSignData net ctx publicKey tsd
   -- signing
-  let myInputs = unsignedTxInfoMyInputs txInfoU
-      othInputs = unsignedTxInfoOtherInputs txInfoU
+  let myInputs = txInfoMyInputs txInfo
+      othInputs = txInfoOtherInputs txInfo
       mySigInputs = mconcat $ myInputsSigInput <$> Map.elems myInputs
       othSigInputs = mconcat $ otherInputsSigInput <$> Map.elems othInputs
       sigInputs = mySigInputs <> othSigInputs
   signedTx <- signTx net ctx tx sigInputs secKeys
-  let txInfo = unsignedToTxInfo signedTx txInfoU
-      isSigned = verifyTxInfo net ctx signedTx txInfo
+  let txInfoS = signTxInfo signedTx txInfo
+      isSigned = verifyTxInfo net ctx signedTx txInfoS
   unless isSigned $ Left "The transaction could not be signed"
   return
     ( tsd {txSignDataTx = signedTx, txSignDataSigned = True},
-      txInfo
+      txInfoS
     )
+
+signTxInfo :: Tx -> TxInfo -> TxInfo
+signTxInfo tx txInfo =
+  txInfo
+    { txInfoHash = Just $ txHash tx,
+      txInfoPending = Just $ TxInfoPending (nosigTxHash tx) True False
+    }
 
 verifyTxInfo :: Network -> Ctx -> Tx -> TxInfo -> Bool
 verifyTxInfo net ctx tx txInfo =
@@ -192,7 +199,7 @@ verifyTxInfo net ctx tx txInfo =
       sigInputs = mySigInputs <> othSigInputs
       f i = (i.script, i.value, i.outpoint)
       vDat = f <$> sigInputs
-   in txHash tx == txInfoHash txInfo
+   in Just (txHash tx) == txInfoHash txInfo
         && noEmptyInputs tx
         && verifyStdTx net ctx tx vDat
 
@@ -242,17 +249,17 @@ buildSweepSignData net ctx cfg accId prvKeys sweepTo feeByte dust
 genPossibleAddrs :: Network -> Ctx -> SecKey -> [Address]
 genPossibleAddrs net ctx k
   | net `elem` [btc, btcTest, btcRegTest] =
-    [ pubKeyAddr ctx pc,
-      pubKeyAddr ctx pu,
-      pubKeyWitnessAddr ctx pc,
-      pubKeyWitnessAddr ctx pu,
-      pubKeyCompatWitnessAddr ctx pc,
-      pubKeyCompatWitnessAddr ctx pu
-    ]
+      [ pubKeyAddr ctx pc,
+        pubKeyAddr ctx pu,
+        pubKeyWitnessAddr ctx pc,
+        pubKeyWitnessAddr ctx pu,
+        pubKeyCompatWitnessAddr ctx pc,
+        pubKeyCompatWitnessAddr ctx pu
+      ]
   | otherwise =
-    [ pubKeyAddr ctx pc,
-      pubKeyAddr ctx pu
-    ]
+      [ pubKeyAddr ctx pc,
+        pubKeyAddr ctx pu
+      ]
   where
     c = wrapSecKey False k :: PrivateKey -- Compressed
     u = wrapSecKey True k :: PrivateKey -- Uncompressed
@@ -277,7 +284,7 @@ buildSweepTx net ctx gen coins sweepTo feeByte dust =
     when (coinsTot < fee) $
       throwError "Could not find a sweep solution: fee is too large"
     let (q, r) = (coinsTot - fee) `quotRem` fromIntegral (length sweepTo)
-        amnts = (q+r):repeat q
+        amnts = (q + r) : repeat q
     when (q <= fromIntegral dust) $
       throwError "Outputs are smaller than the dust value"
     addrsT <- lift $ mapM (maybeToEither "Addr" . addrToText net) rdmSweepTo
@@ -300,4 +307,3 @@ randomShuffle xs = do
   case splitAt i xs of
     (as, e : bs) -> (e :) <$> randomShuffle (as <> bs)
     _ -> error "randomShuffle"
-

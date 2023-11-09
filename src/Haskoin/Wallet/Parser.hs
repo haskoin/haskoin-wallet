@@ -89,7 +89,7 @@ data Command
         commandFilePath :: !FilePath
       }
   | CommandDeleteTx
-      { commandNoSigHash :: !TxHash }
+      {commandNoSigHash :: !TxHash}
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
         commandNoSigHashMaybe :: !(Maybe TxHash),
@@ -102,7 +102,7 @@ data Command
         commandPage :: !Page
       }
   | CommandSendTx
-      { commandNoSigHash :: !TxHash }
+      {commandNoSigHash :: !TxHash}
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
         commandFull :: !Bool
@@ -110,6 +110,10 @@ data Command
   | CommandDiscoverAcc
       { commandMaybeAcc :: !(Maybe Text)
       }
+  | CommandBackup
+      {commandFilePath :: !FilePath}
+  | CommandRestore
+      {commandFilePath :: !FilePath}
   | CommandVersion
   | CommandPrepareSweep
       { commandMaybeAcc :: !(Maybe Text),
@@ -154,7 +158,8 @@ jsonOption =
   switch $
     short 'j'
       <> long "json"
-      <> help [r|
+      <> help
+        [r|
 Display the result as JSON. Specify this option at the end of your command.
 |]
 
@@ -166,18 +171,19 @@ satoshiOption =
   flag UnitBitcoin UnitSatoshi $
     short 's'
       <> long "satoshi"
-      <> help [r|
+      <> help
+        [r|
 Use satoshis for parsing and displaying amounts (default: bitcoin). Specify this
 option at the end of your command.
 |]
-
 
 bitOption :: Parser AmountUnit
 bitOption =
   flag UnitBitcoin UnitBit $
     short 'b'
       <> long "bit"
-      <> help  [r|
+      <> help
+        [r|
 Use bits for parsing and displaying amounts (default: bitcoin). Specify this
 option at the end of your command.
 |]
@@ -193,6 +199,7 @@ commandParser =
             command "testacc" testAccParser,
             command "renameacc" renameAccParser,
             command "accounts" accountsParser,
+            command "syncacc" syncAccParser,
             metavar "COMMAND",
             style (const "COMMAND --help")
           ],
@@ -211,6 +218,7 @@ commandParser =
             command "preparetx" prepareTxParser,
             command "pendingtxs" pendingTxsParser,
             command "signtx" signTxParser,
+            command "sendtx" sendTxParser,
             command "deletetx" deleteTxParser,
             command "coins" coinsParser,
             hidden
@@ -227,9 +235,9 @@ commandParser =
           ],
       hsubparser $
         mconcat
-          [ commandGroup "Network commands",
-            command "sendtx" sendTxParser,
-            command "syncacc" syncAccParser,
+          [ commandGroup "Backup/restore commands",
+            command "backup" backupParser,
+            command "restore" restoreParser,
             command "discoveracc" discoverAccParser,
             hidden
           ],
@@ -862,6 +870,38 @@ that have received coins at some point. The search is stopped when a gap
 run automatically at the end of the `discoveracc` command. When restoring an
 old wallet, it is important to discover it first before generating addresses
 and receiving payments. Otherwise some addresses might be reused.
+|]
+
+{- Backup & Restore Parsers -}
+
+backupParser :: ParserInfo Command
+backupParser = do
+  let cmd =
+        CommandBackup
+          <$> fileArgument "File where the backup will be saved"
+  info cmd $
+    progDesc "Create a wallet backup file"
+      <> footer
+        [r|
+This command will backup your wallet accounts, your address labels and the
+internal free addresses to an external file. This is enough to restore your
+entire wallet state with some network help. It will, however, not backup any
+pending transactions you might have so you should save those separately.
+|]
+
+restoreParser :: ParserInfo Command
+restoreParser = do
+  let cmd =
+        CommandRestore
+          <$> fileArgument "Path to the backup file"
+  info cmd $
+    progDesc "Restore a wallet backup file"
+      <> footer
+        [r|
+Restore a backup file containing your accounts, address labels and internal
+free addresses. This command will connect to the network to download everything
+else that is not included in the backup file like your transactions and coins.
+Pending transactions are not included in the backup file.
 |]
 
 {- Version Parser -}

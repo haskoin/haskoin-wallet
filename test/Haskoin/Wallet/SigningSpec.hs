@@ -183,11 +183,11 @@ signWalletTxSpec ctx =
       resTxInfo
         `shouldBe` TxInfo
           { txInfoHash =
-              "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2",
+              Just "e66b790c73d4e72fe13a07e247e4439bdea210cac2f947040e901f1e0ce59ac2",
             txInfoType = TxDebit,
             txInfoAmount = -60000000,
             txInfoMyOutputs =
-              Map.fromList [(iAddr' 0, MyOutputs 40000000 (intDeriv :/ 0))],
+              Map.fromList [(iAddr' 0, MyOutputs 40000000 (intDeriv :/ 0) "")],
             txInfoOtherOutputs = Map.fromList [(oAddr' 0, 50000000)],
             txInfoNonStdOutputs = [],
             txInfoMyInputs =
@@ -196,6 +196,7 @@ signWalletTxSpec ctx =
                     MyInputs
                       100000000
                       (extDeriv :/ 0)
+                      ""
                       [ SigInput
                           (PayPKHash (addr' 0).hash160)
                           100000000
@@ -211,7 +212,13 @@ signWalletTxSpec ctx =
             txInfoFee = 10000000,
             txInfoFeeByte = 44247,
             txInfoBlockRef = Store.MemRef 0,
-            txInfoConfirmations = 0
+            txInfoConfirmations = 0,
+            txInfoPending =
+              Just $
+                TxInfoPending
+                  "9b41b3cb7b10bfd1dc3f7f1885ce3623789b1b946d206fd59fb432ad4fdb6d70"
+                  True
+                  False
           }
     it "can set the correct TxInternal transaction types" $ do
       let fundTx =
