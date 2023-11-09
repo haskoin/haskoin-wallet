@@ -1,65 +1,42 @@
 {-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE EmptyDataDecls #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses #-}
-{-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE QuasiQuotes #-}
 {-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE StandaloneDeriving #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TupleSections #-}
 {-# LANGUAGE TypeFamilies #-}
-{-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 
 module Haskoin.Wallet.Migration.V0_9_0 where
 
-import Conduit (MonadUnliftIO, ResourceT)
-import Control.Arrow (Arrow (second))
+import Conduit (MonadUnliftIO)
 import Control.Monad
 import Control.Monad.Except
-import Control.Monad.IO.Class (MonadIO (liftIO))
-import Control.Monad.Logger (NoLoggingT)
-import Control.Monad.Reader (MonadTrans (lift), ReaderT)
-import Control.Monad.Trans.Maybe
+import Control.Monad.Reader (MonadTrans (lift))
 import Data.Aeson
 import qualified Data.Aeson as Json
-import Data.ByteString (ByteString)
 import qualified Data.ByteString as BS
-import Data.Either (fromRight)
-import Data.List (find, nub, partition)
 import Data.Map.Strict (Map)
-import qualified Data.Map.Strict as Map
-import Data.Maybe (fromJust, fromMaybe, mapMaybe)
-import qualified Data.Serialize as S
-import Data.String.Conversions (cs)
+import Data.Maybe (fromMaybe)
 import Data.Text (Text)
-import Data.Time (UTCTime, getCurrentTime)
-import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
-import Database.Persist.Sqlite (runSqlite)
-import Database.Persist.TH
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
-import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
 
 {- Migration from 0.8.* to 0.9.0 -}
 
-v0_9_0 :: Text
-v0_9_0 = "0.9.0"
+migrateFrom :: Text
+migrateFrom = "0.8"
+
+migrateTo :: Text
+migrateTo = "0.9.0"
 
 data OldTxInfo = OldTxInfo
   { oldTxInfoHash :: !TxHash,
@@ -218,4 +195,4 @@ migrateDB ctx = do
   -- This will create the missing version table
   lift $ do
     globalMigration
-    setVersion v0_9_0
+    setVersion migrateTo
