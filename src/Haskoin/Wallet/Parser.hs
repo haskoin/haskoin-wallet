@@ -89,7 +89,7 @@ data Command
         commandFilePath :: !FilePath
       }
   | CommandDeleteTx
-      { commandNoSigHash :: !TxHash }
+      {commandNoSigHash :: !TxHash}
   | CommandSignTx
       { commandMaybeAcc :: !(Maybe Text),
         commandNoSigHashMaybe :: !(Maybe TxHash),
@@ -102,7 +102,7 @@ data Command
         commandPage :: !Page
       }
   | CommandSendTx
-      { commandNoSigHash :: !TxHash }
+      {commandNoSigHash :: !TxHash}
   | CommandSyncAcc
       { commandMaybeAcc :: !(Maybe Text),
         commandFull :: !Bool
@@ -111,9 +111,9 @@ data Command
       { commandMaybeAcc :: !(Maybe Text)
       }
   | CommandBackup
-      { commandFilePath :: !FilePath }
+      {commandFilePath :: !FilePath}
   | CommandRestore
-      { commandFilePath :: !FilePath }
+      {commandFilePath :: !FilePath}
   | CommandVersion
   | CommandPrepareSweep
       { commandMaybeAcc :: !(Maybe Text),
@@ -158,7 +158,8 @@ jsonOption =
   switch $
     short 'j'
       <> long "json"
-      <> help [r|
+      <> help
+        [r|
 Display the result as JSON. Specify this option at the end of your command.
 |]
 
@@ -170,18 +171,19 @@ satoshiOption =
   flag UnitBitcoin UnitSatoshi $
     short 's'
       <> long "satoshi"
-      <> help [r|
+      <> help
+        [r|
 Use satoshis for parsing and displaying amounts (default: bitcoin). Specify this
 option at the end of your command.
 |]
-
 
 bitOption :: Parser AmountUnit
 bitOption =
   flag UnitBitcoin UnitBit $
     short 'b'
       <> long "bit"
-      <> help  [r|
+      <> help
+        [r|
 Use bits for parsing and displaying amounts (default: bitcoin). Specify this
 option at the end of your command.
 |]

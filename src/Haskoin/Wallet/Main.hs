@@ -4,11 +4,11 @@ import qualified Data.ByteString.Char8 as C8
 import Haskoin (Ctx, MarshalJSON (..), withContext)
 import Haskoin.Wallet.Commands (Response, commandResponse)
 import Haskoin.Wallet.Config (initConfig)
-import Haskoin.Wallet.Parser (parserMain)
-import Haskoin.Wallet.Util (encodeJsonPretty)
 import Haskoin.Wallet.Database (runDB)
 import Haskoin.Wallet.Migration (migrateDB)
+import Haskoin.Wallet.Parser (parserMain)
 import Haskoin.Wallet.PrettyPrinter (prettyPrinter)
+import Haskoin.Wallet.Util (encodeJsonPretty)
 
 clientMain :: IO ()
 clientMain =

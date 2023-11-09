@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Database.Persist.Sqlite (runSqlite, transactionUndo)
+import Database.Persist.Sqlite (transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
