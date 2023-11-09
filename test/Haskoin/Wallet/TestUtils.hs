@@ -292,7 +292,8 @@ arbitraryResponse net ctx =
                 <*> arbitraryNatural
           ),
       ResponseVersion
-        <$> arbitraryText,
+        <$> arbitraryText
+        <*> arbitraryText,
       ResponseRollDice <$> resize 20 (listOf arbitraryNatural) <*> arbitraryText
     ]
 

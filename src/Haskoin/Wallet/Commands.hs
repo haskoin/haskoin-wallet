@@ -19,7 +19,7 @@ import Data.Maybe (fromMaybe, isJust)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import qualified Data.Text as Text
-import Database.Persist.Sqlite (runMigrationQuiet, runSqlite, transactionUndo)
+import Database.Persist.Sqlite (runSqlite, transactionUndo)
 import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Store.WebClient
@@ -97,7 +97,9 @@ data Response
       { responseRestore :: ![(DBAccount, Natural, Natural)]
       }
   | ResponseVersion
-      {responseVersion :: !Text}
+      { responseVersion :: !Text,
+        responseDBVersion :: !Text
+      }
   | ResponseRollDice
       { responseRollDice :: ![Natural],
         responseEntropySource :: !Text
@@ -199,8 +201,12 @@ instance MarshalJSON Ctx Response where
               [ "type" .= Json.String "restore",
                 "restore" .= (f <$> xs)
               ]
-      ResponseVersion v ->
-        object ["type" .= Json.String "version", "version" .= v]
+      ResponseVersion v dbv ->
+        object
+          [ "type" .= Json.String "version",
+            "version" .= v,
+            "dbversion" .= dbv
+          ]
       ResponseRollDice ns e ->
         object
           ["type" .= Json.String "rolldice", "entropysource" .= e, "dice" .= ns]
@@ -274,6 +280,7 @@ instance MarshalJSON Ctx Response where
         "version" ->
           ResponseVersion
             <$> o .: "version"
+            <*> o .: "dbversion"
         "rolldice" ->
           ResponseRollDice
             <$> o .: "dice"
@@ -285,7 +292,6 @@ runDB ::
 runDB cfg action = do
   dbFile <- liftIO $ databaseFile cfg
   runSqlite (cs dbFile) $ do
-    _ <- runMigrationQuiet migrateAll
     resE <- runExceptT action
     case resE of
       Left err -> do
@@ -335,7 +341,7 @@ commandResponse ctx cfg unit cmd =
     CommandBackup f -> cmdBackup ctx cfg f
     CommandRestore f -> cmdRestore ctx cfg f
     -- Utilities
-    CommandVersion -> cmdVersion
+    CommandVersion -> cmdVersion cfg
     CommandPrepareSweep nameM prvKey st outputM f d ->
       prepareSweep ctx cfg nameM prvKey st outputM f d
     CommandSignSweep nameM h i o k -> signSweep ctx cfg nameM h i o k
@@ -668,11 +674,14 @@ cmdRestore :: Ctx -> Config -> FilePath -> IO Response
 cmdRestore ctx cfg fp =
   runDB cfg $ do
     backup <- liftEitherIO $ readMarshalFile ctx fp
-    let f (SyncRes a _ _ t c) = (a,t,c)
+    let f (SyncRes a _ _ t c) = (a, t, c)
     ResponseRestore . (f <$>) <$> restoreBackup ctx cfg backup
 
-cmdVersion :: IO Response
-cmdVersion = return $ ResponseVersion versionString
+cmdVersion :: Config -> IO Response
+cmdVersion cfg = do
+  runDB cfg $ do
+    dbv <- lift getVersion
+    return $ ResponseVersion versionString dbv
 
 prepareSweep ::
   Ctx ->

@@ -45,10 +45,11 @@ import Data.Time (UTCTime, getCurrentTime)
 import Data.Word (Word64)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
+import Database.Persist.Sqlite (runSqlite)
 import Database.Persist.TH
 import Haskoin
 import qualified Haskoin.Store.Data as Store
-import Haskoin.Wallet.Config (Config (configGap))
+import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
@@ -59,6 +60,11 @@ import Numeric.Natural (Natural)
 share
   [mkPersist sqlSettings, mkMigrate "migrateAll"]
   [persistLowerCase|
+
+DBVersion
+  version Text
+  Primary version
+  deriving Show
 
 DBWallet
   fingerprint Text
@@ -146,8 +152,8 @@ DBPendingTx
   accountWallet DBWalletId
   accountDerivation Text
   nosigHash Text
-  online Bool
   blob ByteString
+  online Bool
   created UTCTime default=CURRENT_TIME
   Primary nosigHash
   Foreign DBAccount fk_wallet_derivation accountWallet accountDerivation
@@ -165,6 +171,23 @@ DBBest
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
 {- Meta -}
+
+initDB :: (MonadUnliftIO m) => Config -> m ()
+initDB cfg = do
+  dbFile <- liftIO $ databaseFile cfg
+  runSqlite (cs dbFile) $ do
+    _ <- runMigrationQuiet migrateAll
+    setVersion
+
+setVersion :: (MonadUnliftIO m) => DB m ()
+setVersion = do
+  c <- P.count ([] :: [P.Filter DBVersion])
+  when (c == 0) $ P.insert_ $ DBVersion versionString
+
+getVersion :: (MonadUnliftIO m) => DB m Text
+getVersion = do
+  resM <- selectOne . from $ \v -> return $ v ^. DBVersionVersion
+  return $ unValue $ fromJust resM
 
 updateBest ::
   (MonadUnliftIO m) => Network -> BlockHash -> BlockHeight -> DB m ()
@@ -1124,7 +1147,7 @@ getPendingTx nosigHash = do
       key = DBPendingTxKey hashT
   resM <- P.get key
   case resM of
-    Just (DBPendingTx wallet accDeriv _ online blob _) -> do
+    Just (DBPendingTx wallet accDeriv _ blob online _) -> do
       let accId = DBAccountKey wallet accDeriv
           tsdM = Json.decode $ BS.fromStrict blob
       return $ do
@@ -1248,8 +1271,8 @@ importPendingTx net ctx accId tsd@(TxSignData tx _ _ _ signed) = do
               (dBAccountWallet acc)
               (dBAccountDerivation acc)
               (txHashToHex nosigHash)
-              False
               bs
+              False
               time
       lift $ P.insert_ ptx
       return nosigHash

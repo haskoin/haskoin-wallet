@@ -532,8 +532,12 @@ prettyPrinter unit =
               nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
             ]
       renderIO $ vcat $ intercalate [text " "] (f <$> as)
-    ResponseVersion v ->
-      renderIO $ formatKey "Version:" <+> formatValue (cs v)
+    ResponseVersion v dbv ->
+      renderIO $
+        vcat
+          [ formatKey "Software version:" <+> formatValue (cs v)
+          , formatKey "Database version:" <+> formatValue (cs dbv)
+          ]
     ResponseRollDice ds e ->
       renderIO . vcat $
         [ formatKey "System Entropy Source:" <+> formatFilePath (cs e),
