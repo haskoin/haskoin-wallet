@@ -170,19 +170,22 @@ DBBest
 
 type DB m = ReaderT SqlBackend (NoLoggingT (ResourceT m))
 
+runDB :: (MonadUnliftIO m) => Config -> DB m a -> m a
+runDB cfg action = do
+  dbFile <- liftIO $ databaseFile cfg
+  runSqlite (cs dbFile) action
+
+globalMigration :: (MonadUnliftIO m) => DB m ()
+globalMigration = void $ runMigrationQuiet migrateAll
+
 {- Meta -}
 
-initDB :: (MonadUnliftIO m) => Config -> m ()
-initDB cfg = do
-  dbFile <- liftIO $ databaseFile cfg
-  runSqlite (cs dbFile) $ do
-    _ <- runMigrationQuiet migrateAll
-    setVersion
-
-setVersion :: (MonadUnliftIO m) => DB m ()
-setVersion = do
-  c <- P.count ([] :: [P.Filter DBVersion])
-  when (c == 0) $ P.insert_ $ DBVersion versionString
+setVersion :: (MonadUnliftIO m) => Text -> DB m ()
+setVersion txt = do
+  verM <- selectOne $ from return
+  case verM of
+    Nothing -> P.insert_ $ DBVersion txt
+    Just (Entity k _) -> P.update k [DBVersionVersion P.=. txt]
 
 getVersion :: (MonadUnliftIO m) => DB m Text
 getVersion = do
@@ -883,7 +886,7 @@ txsPage ctx accId@(DBAccountKey wallet accDeriv) (Page lim off) = do
       return $ t ^. DBTxInfoBlob
   res <-
     forM dbTxs $ \(Value dbTx) -> do
-      liftEither . maybeToEither "TxInfo unmarshalJSON Failed" $
+      liftMaybe "TxInfo unmarshalJSON Failed" $
         unmarshalJSON (net, ctx) $
           BS.fromStrict dbTx
   resLabels <- lift $ mapM (fillTxInfoLabels net) res

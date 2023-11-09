@@ -28,7 +28,7 @@ versionString :: (IsString a) => a
 #ifdef CURRENT_PACKAGE_VERSION
 versionString = CURRENT_PACKAGE_VERSION
 #else
-versionString = "Unavailable"
+versionString = error "No version string"
 #endif
 
 hwDataDirectory :: IO FilePath

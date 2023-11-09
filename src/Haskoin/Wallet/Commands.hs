@@ -287,11 +287,10 @@ instance MarshalJSON Ctx Response where
             <*> o .: "entropysource"
         _ -> fail "Invalid JSON response type"
 
-runDB ::
+runDBResponse ::
   (MonadUnliftIO m) => Config -> ExceptT String (DB m) Response -> m Response
-runDB cfg action = do
-  dbFile <- liftIO $ databaseFile cfg
-  runSqlite (cs dbFile) $ do
+runDBResponse cfg action = do
+  runDB cfg $ do
     resE <- runExceptT action
     case resE of
       Left err -> do
@@ -347,7 +346,7 @@ commandResponse ctx cfg unit cmd =
     CommandSignSweep nameM h i o k -> signSweep ctx cfg nameM h i o k
     CommandRollDice n -> rollDice n
 
--- runDB Monad Stack:
+-- runDBResponse Monad Stack:
 -- ExceptT String (ReaderT SqlBackend (NoLoggingT (ResourceT (IO))))
 
 liftEitherIO :: (MonadIO m) => IO (Either String a) -> ExceptT String m a
@@ -362,7 +361,7 @@ cmdMnemonic ent useDice splitMnemIn =
 cmdCreateAcc ::
   Ctx -> Config -> Text -> Network -> Maybe Natural -> Natural -> IO Response
 cmdCreateAcc ctx cfg name net derivM splitMnemIn = do
-  runDB cfg $ do
+  runDBResponse cfg $ do
     mnem <- askMnemonicPass splitMnemIn
     walletFP <- liftEither $ walletFingerprint net ctx mnem
     d <- maybe (lift $ nextAccountDeriv walletFP net) return derivM
@@ -373,7 +372,7 @@ cmdCreateAcc ctx cfg name net derivM splitMnemIn = do
 
 cmdTestAcc :: Ctx -> Config -> Maybe Text -> Natural -> IO Response
 cmdTestAcc ctx cfg nameM splitMnemIn =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         xPubKey = accountXPubKey ctx acc
@@ -399,14 +398,14 @@ cmdTestAcc ctx cfg nameM splitMnemIn =
 
 cmdImportAcc :: Ctx -> Config -> FilePath -> IO Response
 cmdImportAcc ctx cfg fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (PubKeyDoc xpub net name wallet) <- liftEitherIO $ readMarshalFile ctx fp
     (_, acc) <- insertAccount net ctx wallet name xpub
     return $ ResponseAccount acc
 
 cmdExportAcc :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdExportAcc ctx cfg nameM file =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (_, acc) <- getAccountByName nameM
     checkPathFree file
     let xpub = accountXPubKey ctx acc
@@ -419,13 +418,13 @@ cmdExportAcc ctx cfg nameM file =
 
 cmdRenameAcc :: Config -> Text -> Text -> IO Response
 cmdRenameAcc cfg oldName newName =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     acc <- renameAccount oldName newName
     return $ ResponseAccount acc
 
 cmdAccounts :: Config -> Maybe Text -> IO Response
 cmdAccounts cfg nameM =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     case nameM of
       Just _ -> do
         (_, acc) <- getAccountByName nameM
@@ -436,28 +435,28 @@ cmdAccounts cfg nameM =
 
 cmdReceive :: Ctx -> Config -> Maybe Text -> Maybe Text -> IO Response
 cmdReceive ctx cfg nameM labelM =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     addr <- genExtAddress ctx cfg accId $ fromMaybe "" labelM
     return $ ResponseAddress acc addr
 
 cmdAddrs :: Config -> Maybe Text -> Page -> IO Response
 cmdAddrs cfg nameM page =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     as <- lift $ addressPage accId page
     return $ ResponseAddresses acc as
 
 cmdLabel :: Config -> Maybe Text -> Natural -> Text -> IO Response
 cmdLabel cfg nameM idx lab =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     adr <- setAddrLabel accId (fromIntegral idx) lab
     return $ ResponseAddress acc adr
 
 cmdTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdTxs ctx cfg nameM page =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     txInfos <- txsPage ctx accId page
     return $ ResponseTxs acc txInfos
@@ -474,7 +473,7 @@ cmdPrepareTx ::
   Maybe FilePath ->
   IO Response
 cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay fileM =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -498,14 +497,14 @@ cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay fileM =
 
 cmdPendingTxs :: Ctx -> Config -> Maybe Text -> Page -> IO Response
 cmdPendingTxs ctx cfg nameM page =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     txInfos <- pendingTxPage ctx accId page
     return $ ResponseTxs acc txInfos
 
 cmdReviewTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdReviewTx ctx cfg nameM fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (_, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -516,7 +515,7 @@ cmdReviewTx ctx cfg nameM fp =
 
 cmdExportTx :: Config -> TxHash -> FilePath -> IO Response
 cmdExportTx cfg nosigH fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     pendingTxM <- lift $ getPendingTx nosigH
     case pendingTxM of
       Just (_, tsd, _) -> do
@@ -527,7 +526,7 @@ cmdExportTx cfg nosigH fp =
 
 cmdImportTx :: Ctx -> Config -> Maybe Text -> FilePath -> IO Response
 cmdImportTx ctx cfg nameM fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -539,7 +538,7 @@ cmdImportTx ctx cfg nameM fp =
 
 cmdDeleteTx :: Ctx -> Config -> TxHash -> IO Response
 cmdDeleteTx ctx cfg nosigH =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (coins, addrs) <- deletePendingTx ctx nosigH
     return $ ResponseDeleteTx nosigH coins addrs
 
@@ -553,7 +552,7 @@ cmdSignTx ::
   Natural ->
   IO Response
 cmdSignTx ctx cfg nameM nosigHM inputM outputM splitMnemIn =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
       throwError "The transaction is already online"
@@ -603,7 +602,7 @@ parseSignInput nosigHM inputM outputM =
 
 cmdCoins :: Config -> Maybe Text -> Page -> IO Response
 cmdCoins cfg nameM page =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     coins <- coinPage net accId page
@@ -611,7 +610,7 @@ cmdCoins cfg nameM page =
 
 cmdSendTx :: Ctx -> Config -> TxHash -> IO Response
 cmdSendTx ctx cfg nosigH =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     tsdM <- lift $ getPendingTx nosigH
     case tsdM of
       Just (accId, tsd@(TxSignData signedTx _ _ _ signed), _) -> do
@@ -644,14 +643,14 @@ fromSyncRes (SyncRes a bh h t c) = ResponseSync a bh h t c
 
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx cfg nameM full =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
     fromSyncRes <$> sync ctx cfg net accId full
 
 cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx cfg nameM = do
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -664,7 +663,7 @@ cmdDiscoverAccount ctx cfg nameM = do
 
 cmdBackup :: Ctx -> Config -> FilePath -> IO Response
 cmdBackup ctx cfg fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     backup <- createBackup ctx
     checkPathFree fp
     liftIO $ writeJsonFile fp $ marshalValue ctx backup
@@ -672,14 +671,14 @@ cmdBackup ctx cfg fp =
 
 cmdRestore :: Ctx -> Config -> FilePath -> IO Response
 cmdRestore ctx cfg fp =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     backup <- liftEitherIO $ readMarshalFile ctx fp
     let f (SyncRes a _ _ t c) = (a, t, c)
     ResponseRestore . (f <$>) <$> restoreBackup ctx cfg backup
 
 cmdVersion :: Config -> IO Response
 cmdVersion cfg = do
-  runDB cfg $ do
+  runDBResponse cfg $ do
     dbv <- lift getVersion
     return $ ResponseVersion versionString dbv
 
@@ -694,7 +693,7 @@ prepareSweep ::
   Natural ->
   IO Response
 prepareSweep ctx cfg nameM prvKeyFile sweepToT outputM feeByte dust =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
@@ -719,7 +718,7 @@ signSweep ::
   FilePath ->
   IO Response
 signSweep ctx cfg nameM nosigHM inputM outputM keyFile =
-  runDB cfg $ do
+  runDBResponse cfg $ do
     (tsd, online) <- parseSignInput nosigHM inputM outputM
     when online $
       throwError "The transaction is already online"
