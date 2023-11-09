@@ -878,7 +878,7 @@ backupParser = do
         CommandBackup
           <$> fileArgument "File where the backup will be saved"
   info cmd $
-    progDesc "Create a backup file"
+    progDesc "Create a wallet backup file"
       <> footer
         [r|
 This command will backup your wallet accounts, your address labels and the
@@ -893,7 +893,7 @@ restoreParser = do
         CommandRestore
           <$> fileArgument "Path to the backup file"
   info cmd $
-    progDesc "Restore a backup file"
+    progDesc "Restore a wallet backup file"
       <> footer
         [r|
 Restore a backup file containing your accounts, address labels and internal
