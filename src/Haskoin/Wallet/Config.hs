@@ -12,7 +12,6 @@ import Control.Monad.Except
 import Control.Monad.Reader (MonadIO (..))
 import Data.Aeson
 import Data.Default
-import Data.String (IsString)
 import Data.String.Conversions (cs)
 import Data.Text (Text)
 import Haskoin
@@ -22,14 +21,6 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Directory as D
-
--- | Version of Haskoin Wallet package.
-versionString :: (IsString a) => a
-#ifdef CURRENT_PACKAGE_VERSION
-versionString = CURRENT_PACKAGE_VERSION
-#else
-versionString = error "No version string"
-#endif
 
 hwDataDirectory :: IO FilePath
 hwDataDirectory = do

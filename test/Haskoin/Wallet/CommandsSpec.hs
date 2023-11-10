@@ -133,7 +133,18 @@ bestSpec =
             )
 
 accountSpec :: Ctx -> Spec
-accountSpec ctx =
+accountSpec ctx = do
+  it "can find the correct account derivations with smallestUnused" $ do
+    smallestUnused [] `shouldBe` 0
+    smallestUnused [0] `shouldBe` 1
+    smallestUnused [1] `shouldBe` 0
+    smallestUnused [2] `shouldBe` 0
+    smallestUnused [1,2,3] `shouldBe` 0
+    smallestUnused [1,3,4] `shouldBe` 0
+    smallestUnused [0,2] `shouldBe` 1
+    smallestUnused [0,1,3,4] `shouldBe` 2
+    smallestUnused [0,1,3,4,6,7] `shouldBe` 2
+    smallestUnused [0,1,2,3,4,5] `shouldBe` 6
   it "can create and rename accounts" $ do
     runDBMemoryE $ do
       -- No accounts
@@ -185,7 +196,7 @@ accountSpec ctx =
         dBAccountXPubKey acc3 `shouldBe` snd keysT2
       lift $ nextAccountDeriv walletFP2 btc `dbShouldBe` 1
       lift $
-        getAccounts `dbShouldBe` [(accId, acc), (accId2, acc2), (accId3, acc3)]
+        getAccounts `dbShouldBe` [(accId3, acc3), (accId, acc), (accId2, acc2)]
       getAccountByName (Just "acc3") `dbShouldBeE` (accId3, acc3)
       lift $ shouldBeLeft $ getAccountByName Nothing -- There are > 1 accounts
       getAccountById accId3 `dbShouldBeE` acc3
@@ -447,19 +458,23 @@ coinSpec ctx =
               jsonCoinLocked = False
             }
       coinPage btc accId (Page 5 0) `dbShouldBeE` [jsonCoin1]
-      getSpendableCoins accId `dbShouldBeE` []
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1]
+      getSpendableCoins btc accId 1 `dbShouldBeE` []
       -- Nothing should happen when refreshing the same data
       refreshCoins btc accId extAddrs [coin1] `dbShouldBeE` (0, [])
       -- Confirm and update the coin
       let coin1' = coin1 {Store.block = Store.BlockRef 1 0} :: Store.Unspent
       refreshCoins btc accId extAddrs [coin1'] `dbShouldBeE` (1, [])
-      getSpendableCoins accId `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 2 `dbShouldBeE` []
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
                           { jsonCoinBlock = Store.BlockRef 1 0,
                             jsonCoinConfirmations = 1
                           }
                       ]
+      -- Best = 0
       lift $ updateBest btc (bid' 0) 0
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
@@ -467,6 +482,10 @@ coinSpec ctx =
                             jsonCoinConfirmations = 1
                           }
                       ]
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 2 `dbShouldBeE` []
+      -- Best = 1
       lift $ updateBest btc (bid' 0) 1
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
@@ -474,6 +493,10 @@ coinSpec ctx =
                             jsonCoinConfirmations = 1
                           }
                       ]
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 2 `dbShouldBeE` []
+      -- Best = 10
       lift $ updateBest btc (bid' 0) 10
       coinPage btc accId (Page 5 0)
         `dbShouldBeE` [ jsonCoin1
@@ -481,6 +504,9 @@ coinSpec ctx =
                             jsonCoinConfirmations = 10
                           }
                       ]
+      getSpendableCoins btc accId 9 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 10 `dbShouldBeE` [coin1']
+      getSpendableCoins btc accId 11 `dbShouldBeE` []
       let coin1'' = coin1 {Store.block = Store.BlockRef 10 0} :: Store.Unspent
       refreshCoins btc accId extAddrs [coin1''] `dbShouldBeE` (1, [])
       coinPage btc accId (Page 5 0)
@@ -489,6 +515,9 @@ coinSpec ctx =
                             jsonCoinConfirmations = 1
                           }
                       ]
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1'']
+      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
+      getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Lock the coin
       lift $ setLockCoin (OutPoint (txid' 0) 0) True `dbShouldBe` 1
       coinPage btc accId (Page 5 0)
@@ -498,7 +527,7 @@ coinSpec ctx =
                             jsonCoinLocked = True
                           }
                       ]
-      getSpendableCoins accId `dbShouldBeE` []
+      getSpendableCoins btc accId 0 `dbShouldBeE` []
       lift $ setLockCoin (OutPoint (txid' 0) 0) True `dbShouldBe` 0
       lift $ setLockCoin (OutPoint (txid' 0) 0) False `dbShouldBe` 1
       lift $ setLockCoin (OutPoint (txid' 0) 0) False `dbShouldBe` 0
@@ -509,10 +538,12 @@ coinSpec ctx =
                             jsonCoinLocked = False
                           }
                       ]
-      getSpendableCoins accId `dbShouldBeE` [coin1'']
+      getSpendableCoins btc accId 0 `dbShouldBeE` [coin1'']
+      getSpendableCoins btc accId 1 `dbShouldBeE` [coin1'']
+      getSpendableCoins btc accId 2 `dbShouldBeE` []
       -- Delete the coin
       refreshCoins btc accId extAddrs [] `dbShouldBeE` (1, [])
-      getSpendableCoins accId `dbShouldBeE` []
+      getSpendableCoins btc accId 0 `dbShouldBeE` []
       coinPage btc accId (Page 5 0) `dbShouldBeE` []
 
 checkFree :: Int -> Bool -> ExceptT String (DB IO) ()
@@ -549,7 +580,7 @@ pendingTxsSpec ctx cfg =
       liftTest $ c `shouldBe` 2
       let jsonCoin1 = forceRight $ toJsonCoin btc Nothing (head dbCoins)
           jsonCoin2 = forceRight $ toJsonCoin btc Nothing (dbCoins !! 1)
-      tsd <- buildTxSignData btc ctx cfg gen accId [(oAddr' 0, 8)] 0 0 False
+      tsd <- buildTxSignData btc ctx cfg gen accId [(oAddr' 0, 8)] 0 0 False 1
       liftTest $
         tsd
           `shouldBe` TxSignData
@@ -582,12 +613,12 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 2
       lift $
         shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 12)] 0 0 False
+          buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 12)] 0 0 False 1
       lift $
         shouldBeLeft' "The transaction already exists" $
           importPendingTx btc ctx accId tsd
       -- Create second pending transaction
-      tsd2 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 7)] 0 0 False
+      tsd2 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 1, 7)] 0 0 False 1
       liftTest $
         tsd2
           `shouldBe` TxSignData
@@ -619,7 +650,7 @@ pendingTxsSpec ctx cfg =
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 3
       lift $
         shouldBeLeft' "chooseCoins: No solution found" $
-          buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 1)] 0 0 False
+          buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 1)] 0 0 False 1
       -- Delete first transaction
       deletePendingTx ctx h1 `dbShouldBeE` (1, 1)
       coinPage btc accId (Page 5 0)
@@ -633,7 +664,7 @@ pendingTxsSpec ctx cfg =
       checkFree 2 False
       (dBAddressIndex <$> nextFreeIntAddr ctx cfg accId) `dbShouldBeE` 1
       -- Create transaction with no change
-      tsd3 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 20)] 0 0 False
+      tsd3 <- buildTxSignData btc ctx cfg gen accId [(oAddr' 2, 20)] 0 0 False 1
       liftTest $
         tsd3
           `shouldBe` TxSignData

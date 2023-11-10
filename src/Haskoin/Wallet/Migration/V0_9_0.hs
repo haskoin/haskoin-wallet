@@ -21,7 +21,6 @@ import qualified Data.Aeson as Json
 import qualified Data.ByteString as BS
 import Data.Map.Strict (Map)
 import Data.Maybe (fromMaybe)
-import Data.Text (Text)
 import Database.Esqueleto.Legacy as E
 import qualified Database.Persist as P
 import Haskoin
@@ -29,14 +28,15 @@ import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TxInfo
 import Numeric.Natural (Natural)
+import Haskoin.Wallet.Migration.SemVersion
 
-{- Migration from 0.8.* to 0.9.0 -}
+{- Migration from 0.8 to 0.9 -}
 
-migrateFrom :: Text
-migrateFrom = "0.8"
+migrateFrom :: SemVersion
+migrateFrom = VerMinor 0 8
 
-migrateTo :: Text
-migrateTo = "0.9.0"
+migrateTo :: SemVersion
+migrateTo = VerMinor 0 9
 
 data OldTxInfo = OldTxInfo
   { oldTxInfoHash :: !TxHash,

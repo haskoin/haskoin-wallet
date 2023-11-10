@@ -51,6 +51,7 @@ import Haskoin
 import qualified Haskoin.Store.Data as Store
 import Haskoin.Wallet.Config
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.TxInfo
 import Haskoin.Wallet.Util (Page (Page), textToAddrE)
 import Numeric.Natural (Natural)
@@ -180,17 +181,19 @@ globalMigration = void $ runMigrationQuiet migrateAll
 
 {- Meta -}
 
-setVersion :: (MonadUnliftIO m) => Text -> DB m ()
-setVersion txt = do
+-- Database versions use major.minor only. Patch versions are ignored.
+setVersion :: (MonadUnliftIO m) => SemVersion -> DB m ()
+setVersion semVer = do
   verM <- selectOne $ from return
+  let verTxt = cs $ verString $ toMinor semVer
   case verM of
-    Nothing -> P.insert_ $ DBVersion txt
-    Just (Entity k _) -> P.update k [DBVersionVersion P.=. txt]
+    Nothing -> P.insert_ $ DBVersion verTxt
+    Just (Entity k _) -> P.update k [DBVersionVersion P.=. verTxt]
 
-getVersion :: (MonadUnliftIO m) => DB m Text
+getVersion :: (MonadUnliftIO m) => DB m SemVersion
 getVersion = do
   resM <- selectOne . from $ \v -> return $ v ^. DBVersionVersion
-  return $ unValue $ fromJust resM
+  return $ parseSemVersion . cs . unValue $ fromJust resM
 
 updateBest ::
   (MonadUnliftIO m) => Network -> BlockHash -> BlockHeight -> DB m ()
@@ -298,13 +301,16 @@ accountXPubKey ctx acc =
 nextAccountDeriv :: (MonadUnliftIO m) => Fingerprint -> Network -> DB m Natural
 nextAccountDeriv walletFP net = do
   let walletId = DBWalletKey $ fingerprintToText walletFP
-  dM <-
-    selectOne . from $ \a -> do
+  idxs <-
+    select . from $ \a -> do
       where_ $
         a ^. DBAccountNetwork ==. val (cs net.name)
           &&. a ^. DBAccountWallet ==. val walletId
-      return $ max_ $ a ^. DBAccountIndex
-  return $ joinMaybe 0 ((+ 1) . fromIntegral) dM
+      return $ a ^. DBAccountIndex
+  return $ smallestUnused $ fromIntegral . unValue <$> idxs
+
+smallestUnused :: [Natural] -> Natural
+smallestUnused xs = fromJust $ find (not . (`elem` xs)) [0 ..]
 
 existsAccount :: (MonadUnliftIO m) => Text -> DB m Bool
 existsAccount name = P.existsBy $ UniqueName name
@@ -359,6 +365,26 @@ insertAccount net ctx walletFP name xpub = do
           key <- lift $ P.insert account
           return (key, account)
 
+deleteAccount :: (MonadUnliftIO m) => DBAccountId -> DB m ()
+deleteAccount accId@(DBAccountKey accWallet accDeriv) = do
+  delete . from $ \a ->
+    where_ $
+      a ^. DBAddressAccountWallet ==. val accWallet
+        &&. a ^. DBAddressAccountDerivation ==. val accDeriv
+  delete . from $ \t ->
+    where_ $
+      t ^. DBTxInfoAccountWallet ==. val accWallet
+        &&. t ^. DBTxInfoAccountDerivation ==. val accDeriv
+  delete . from $ \c ->
+    where_ $
+      c ^. DBCoinAccountWallet ==. val accWallet
+        &&. c ^. DBCoinAccountDerivation ==. val accDeriv
+  delete . from $ \p ->
+    where_ $
+      p ^. DBPendingTxAccountWallet ==. val accWallet
+        &&. p ^. DBPendingTxAccountDerivation ==. val accDeriv
+  P.delete accId
+
 -- When a name is provided, get that account or throw an error if it doesn't
 -- exist. When no name is provided, return the account only if there is one
 -- account.
@@ -384,7 +410,10 @@ getAccountById accId = liftMaybe "Invalid account" =<< lift (P.get accId)
 
 getAccounts :: (MonadUnliftIO m) => DB m [(DBAccountId, DBAccount)]
 getAccounts =
-  (go <$>) <$> P.selectList [] [P.Asc DBAccountCreated]
+  (go <$>)
+    <$> P.selectList
+      []
+      [P.Asc DBAccountWallet, P.Asc DBAccountNetwork, P.Asc DBAccountIndex]
   where
     go a = (entityKey a, entityVal a)
 
@@ -1007,16 +1036,24 @@ coinPage net (DBAccountKey wallet accDeriv) (Page lim off) = do
 
 -- Spendable coins must be confirmed and not locked
 getSpendableCoins ::
-  (MonadUnliftIO m) => DBAccountId -> ExceptT String (DB m) [Store.Unspent]
-getSpendableCoins (DBAccountKey wallet accDeriv) = do
+  (MonadUnliftIO m) =>
+  Network ->
+  DBAccountId ->
+  Natural ->
+  ExceptT String (DB m) [Store.Unspent]
+getSpendableCoins net (DBAccountKey wallet accDeriv) minConf = do
+  bestM <- lift $ getBest net
   coins <- lift . select . from $ \c -> do
     where_ $
       c ^. DBCoinAccountWallet ==. val wallet
         &&. c ^. DBCoinAccountDerivation ==. val accDeriv
-        &&. c ^. DBCoinConfirmed ==. val True
         &&. c ^. DBCoinLocked ==. val False
     return c
-  let bss = dBCoinBlob . entityVal <$> coins
+  let f c = do
+        ref <- liftEither $ S.decode $ dBCoinBlockRef c
+        return $ getConfirmations (snd <$> bestM) ref >= minConf
+  spendableCoins <- filterM (f . entityVal) coins
+  let bss = dBCoinBlob . entityVal <$> spendableCoins
   mapM (liftEither . S.decode) bss
 
 insertCoin ::

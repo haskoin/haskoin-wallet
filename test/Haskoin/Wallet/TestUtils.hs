@@ -255,7 +255,7 @@ arbitraryResponse net ctx =
         <*> resize 12 (listOf arbitraryText)
         <*> resize 12 (listOf $ resize 12 $ listOf arbitraryText),
       ResponseAccount <$> arbitraryDBAccount net ctx,
-      ResponseTestAcc
+      ResponseAccResult
         <$> arbitraryDBAccount net ctx
         <*> arbitrary
         <*> arbitraryText,
