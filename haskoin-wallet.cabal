@@ -4,10 +4,10 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 4bb858871f870eb2ff6dddfbd5b1f9cf53c343d39a7ba088967ddebba5e447c1
+-- hash: 2ec0da93b80b2107f12d7fb8b7665dbb95d3f5c0943c10e5271cc9376342487a
 
 name:           haskoin-wallet
-version:        0.9.0
+version:        0.9.1
 synopsis:       Lightweight command-line wallet for Bitcoin and Bitcoin Cash
 description:    haskoin-wallet (hw) is a lightweight Bitcoin wallet using BIP39 mnemonics and
                 BIP44 account structure. It requires a full blockchain index such as
@@ -63,6 +63,7 @@ library
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0
+    , split >=0.2.3.5
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , time >=1.12.2
@@ -81,6 +82,7 @@ library
       Haskoin.Wallet.FileIO
       Haskoin.Wallet.Main
       Haskoin.Wallet.Migration
+      Haskoin.Wallet.Migration.SemVersion
       Haskoin.Wallet.Migration.V0_9_0
       Haskoin.Wallet.Parser
       Haskoin.Wallet.PrettyPrinter
@@ -115,7 +117,7 @@ executable hw
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
-    , haskoin-wallet ==0.9.0
+    , haskoin-wallet ==0.9.1
     , http-types >=0.12.3
     , lens >=4.18.1
     , lens-aeson >=1.1
@@ -128,6 +130,7 @@ executable hw
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0
+    , split >=0.2.3.5
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , time >=1.12.2
@@ -148,6 +151,7 @@ test-suite spec
       Haskoin.Wallet.EntropySpec
       Haskoin.Wallet.SigningSpec
       Haskoin.Wallet.TestUtils
+      Haskoin.Wallet.VersionSpec
       Paths_haskoin_wallet
   hs-source-dirs:
       test
@@ -173,7 +177,7 @@ test-suite spec
     , haskeline >=0.7.5.0
     , haskoin-core >=1.0.4
     , haskoin-store-data >=1.2.2
-    , haskoin-wallet ==0.9.0
+    , haskoin-wallet ==0.9.1
     , hspec >=2.7.1
     , http-types >=0.12.3
     , lens >=4.18.1
@@ -187,6 +191,7 @@ test-suite spec
     , random >=1.1
     , raw-strings-qq >=1.1
     , secp256k1-haskell >=1.1.0
+    , split >=0.2.3.5
     , string-conversions >=0.4.0.1
     , text >=1.2.4.0
     , time >=1.12.2

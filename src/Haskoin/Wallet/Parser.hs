@@ -26,7 +26,7 @@ data Command
   | CommandCreateAcc
       { commandName :: !Text,
         commandNetwork :: !Network,
-        commandDerivation :: !(Maybe Natural),
+        commandDerivationMaybe :: !(Maybe Natural),
         commandSplitIn :: !Natural
       }
   | CommandTestAcc
@@ -46,6 +46,11 @@ data Command
       }
   | CommandAccounts
       { commandMaybeAcc :: !(Maybe Text)
+      }
+  | CommandDeleteAcc
+      { commandName :: !Text,
+        commandNetwork :: !Network,
+        commandDerivation :: !HardPath
       }
   | CommandReceive
       { commandMaybeAcc :: !(Maybe Text),
@@ -70,6 +75,7 @@ data Command
         commandFeeByte :: !Natural,
         commandDust :: !Natural,
         commandRcptPay :: !Bool,
+        commandMinConf :: !Natural,
         commandOutputFileMaybe :: !(Maybe FilePath)
       }
   | CommandPendingTxs
@@ -200,6 +206,7 @@ commandParser =
             command "renameacc" renameAccParser,
             command "accounts" accountsParser,
             command "syncacc" syncAccParser,
+            command "deleteacc" deleteAccParser,
             metavar "COMMAND",
             style (const "COMMAND --help")
           ],
@@ -339,7 +346,7 @@ createAccParser = do
         CommandCreateAcc
           <$> textArg "Name of the new account"
           <*> networkOption
-          <*> derivationOption
+          <*> optional derivationOption
           <*> splitInOption
   info cmd $
     progDescDoc (offline "Create a new account")
@@ -373,9 +380,9 @@ networkOption =
       Left $ "Invalid network name. Select one of the following: " <> nets
     f (Just res) = Right res
 
-derivationOption :: Parser (Maybe Natural)
+derivationOption :: Parser Natural
 derivationOption =
-  optional . option (maybeReader $ readNatural . cs) $
+  option (maybeReader $ readNatural . cs) $
     short 'd'
       <> long "derivation"
       <> metavar "INT"
@@ -385,6 +392,46 @@ Specify a different account derivation to use (the last part of
 m/44'/coin'/account'). By default, account derivations are chosen sequentially
 starting from 0.
 |]
+
+{- DeleteAcc Parser -}
+
+deleteAccParser :: ParserInfo Command
+deleteAccParser = do
+  let cmd =
+        CommandDeleteAcc
+          <$> textArg "Name of the account to delete"
+          <*> networkArg
+          <*> fullDerivationOption
+  info cmd $
+    progDescDoc (offline "Create a new account")
+      <> footer
+        [r|
+Delete an account from the wallet. You must specify the name, the network and
+the full derivation path as confirmation to delete an account.
+|]
+
+fullDerivationOption :: Parser HardPath
+fullDerivationOption =
+  argument (maybeReader parseHard) $
+    metavar "DERIVPATH"
+      <> help
+        [r|
+Specify the full derivation path of the account to delete. For example:
+/44'/0'/3'.
+|]
+
+networkArg :: Parser Network
+networkArg =
+  argument (eitherReader (f . netByName)) $
+    metavar "NETWORK"
+      <> completeWith ((.name) <$> allNets)
+      <> help ("Specify the network of the account to delete: " <> nets)
+  where
+    nets = intercalate ", " ((.name) <$> allNets)
+    f :: Maybe Network -> Either String Network
+    f Nothing =
+      Left $ "Invalid network name. Select one of the following: " <> nets
+    f (Just res) = Right res
 
 {- TestAcc Parser -}
 
@@ -588,6 +635,7 @@ prepareTxParser = do
           <*> feeOption
           <*> dustOption
           <*> rcptPayOption
+          <*> minConfOption
           <*> outputFileMaybeOption
   info cmd $
     progDesc "Prepare an unsigned transaction for making a payment"
@@ -615,7 +663,7 @@ addressArg =
     metavar "ADDRESS"
       <> help
         [r|
-Recipient address. By can provide multiple "ADDRESS AMOUNT" pairs. 
+Recipient address. You can provide multiple "ADDRESS AMOUNT" pairs. 
 |]
 
 amountArg :: Parser Text
@@ -657,6 +705,16 @@ rcptPayOption =
       <> long "recipientpay"
       <> showDefault
       <> help "The transaction fee will be deducted from the recipient amounts"
+
+minConfOption :: Parser Natural
+minConfOption =
+  option (maybeReader $ readNatural . cs) $
+    short 'c'
+      <> long "minconf"
+      <> metavar "INT"
+      <> value 1
+      <> showDefault
+      <> help "Minimum number of confirmations required to spend a coin"
 
 outputFileMaybeOption :: Parser (Maybe FilePath)
 outputFileMaybeOption =

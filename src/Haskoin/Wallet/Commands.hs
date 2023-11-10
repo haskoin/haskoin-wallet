@@ -32,6 +32,7 @@ import Haskoin.Wallet.FileIO
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TxInfo
+import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
@@ -50,7 +51,7 @@ data Response
   | ResponseAccount
       { responseAccount :: !DBAccount
       }
-  | ResponseTestAcc
+  | ResponseAccResult
       { responseAccount :: !DBAccount,
         responseResult :: !Bool,
         responseText :: !Text
@@ -125,9 +126,9 @@ instance MarshalJSON Ctx Response where
           [ "type" .= Json.String "account",
             "account" .= a
           ]
-      ResponseTestAcc a b t ->
+      ResponseAccResult a b t ->
         object
-          [ "type" .= Json.String "testacc",
+          [ "type" .= Json.String "accresult",
             "account" .= a,
             "result" .= b,
             "text" .= t
@@ -223,8 +224,8 @@ instance MarshalJSON Ctx Response where
         "account" ->
           ResponseAccount
             <$> o .: "account"
-        "testacc" ->
-          ResponseTestAcc
+        "accresult" ->
+          ResponseAccResult
             <$> o .: "account"
             <*> o .: "result"
             <*> o .: "text"
@@ -314,16 +315,19 @@ commandResponse ctx cfg unit cmd =
     CommandTestAcc nameM s -> cmdTestAcc ctx cfg nameM s
     CommandRenameAcc old new -> cmdRenameAcc cfg old new
     CommandAccounts nameM -> cmdAccounts cfg nameM
+    CommandSyncAcc nameM full -> cmdSyncAcc ctx cfg nameM full
+    CommandDeleteAcc name net deriv -> cmdDeleteAcc cfg name net deriv
     -- Address management
     CommandReceive nameM labM -> cmdReceive ctx cfg nameM labM
     CommandAddrs nameM p -> cmdAddrs cfg nameM p
     CommandLabel nameM i l -> cmdLabel cfg nameM i l
     -- Transaction management
     CommandTxs nameM p -> cmdTxs ctx cfg nameM p
-    CommandPrepareTx rcpts nameM fee dust rcptPay o ->
-      cmdPrepareTx ctx cfg rcpts nameM unit fee dust rcptPay o
+    CommandPrepareTx rcpts nameM fee dust rcptPay minConf o ->
+      cmdPrepareTx ctx cfg rcpts nameM unit fee dust rcptPay minConf o
     CommandPendingTxs nameM p -> cmdPendingTxs ctx cfg nameM p
     CommandSignTx nameM h i o s -> cmdSignTx ctx cfg nameM h i o s
+    CommandSendTx h -> cmdSendTx ctx cfg h
     CommandDeleteTx h -> cmdDeleteTx ctx cfg h
     CommandCoins nameM p -> cmdCoins cfg nameM p
     -- Import/export commands
@@ -332,13 +336,10 @@ commandResponse ctx cfg unit cmd =
     CommandReviewTx nameM file -> cmdReviewTx ctx cfg nameM file
     CommandExportTx h f -> cmdExportTx cfg h f
     CommandImportTx nameM file -> cmdImportTx ctx cfg nameM file
-    -- Online commands
-    CommandSendTx h -> cmdSendTx ctx cfg h
-    CommandSyncAcc nameM full -> cmdSyncAcc ctx cfg nameM full
-    CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Backup and Restore
     CommandBackup f -> cmdBackup ctx cfg f
     CommandRestore f -> cmdRestore ctx cfg f
+    CommandDiscoverAcc nameM -> cmdDiscoverAccount ctx cfg nameM
     -- Utilities
     CommandVersion -> cmdVersion cfg
     CommandPrepareSweep nameM prvKey st outputM f d ->
@@ -382,14 +383,14 @@ cmdTestAcc ctx cfg nameM splitMnemIn =
     return $
       if deriveXPubKey ctx xPrvKey == xPubKey
         then
-          ResponseTestAcc
+          ResponseAccResult
             { responseAccount = acc,
               responseResult = True,
               responseText =
                 "The mnemonic and passphrase matched the account"
             }
         else
-          ResponseTestAcc
+          ResponseAccResult
             { responseAccount = acc,
               responseResult = False,
               responseText =
@@ -421,6 +422,21 @@ cmdRenameAcc cfg oldName newName =
   runDBResponse cfg $ do
     acc <- renameAccount oldName newName
     return $ ResponseAccount acc
+
+cmdDeleteAcc :: Config -> Text -> Network -> HardPath -> IO Response
+cmdDeleteAcc cfg name net path =
+  runDBResponse cfg $ do
+    (accId, acc) <- getAccountByName $ Just name
+    unless (accountNetwork acc == net) $
+      throwError "The network of the account to delete did not match"
+    accPath <- liftMaybe "HardPath" $ parseHard $ cs $ dBAccountDerivation acc
+    unless (path == accPath) $
+      throwError
+        "The full derivation path of the account to delete did not match"
+    lift $ deleteAccount accId
+    return $
+      ResponseAccResult acc True $
+        "The account " <> name <> " has been deleted"
 
 cmdAccounts :: Config -> Maybe Text -> IO Response
 cmdAccounts cfg nameM =
@@ -470,16 +486,17 @@ cmdPrepareTx ::
   Natural ->
   Natural ->
   Bool ->
+  Natural ->
   Maybe FilePath ->
   IO Response
-cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay fileM =
+cmdPrepareTx ctx cfg rcpTxt nameM unit feeByte dust rcptPay minConf fileM =
   runDBResponse cfg $ do
     (accId, acc) <- getAccountByName nameM
     let net = accountNetwork acc
         pub = accountXPubKey ctx acc
     rcpts <- liftEither $ mapM (toRecipient net) rcpTxt
     gen <- liftIO initStdGen
-    signDat <- buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay
+    signDat <- buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay minConf
     txInfo <- liftEither $ parseTxSignData net ctx pub signDat
     txInfoL <- lift $ fillTxInfoLabels net txInfo
     for_ fileM checkPathFree
@@ -629,6 +646,7 @@ cmdSendTx ctx cfg nosigH =
             "The server returned the wrong TxHash: "
               <> cs (txHashToHex netTxId)
         _ <- lift $ setPendingTxOnline nosigH
+        lift $ insertRawTx signedTx
         return $ ResponseTx acc $ setTxInfoOnline txInfoL
       _ -> throwError "The nosigHash does not exist in the wallet"
 
@@ -680,7 +698,7 @@ cmdVersion :: Config -> IO Response
 cmdVersion cfg = do
   runDBResponse cfg $ do
     dbv <- lift getVersion
-    return $ ResponseVersion versionString dbv
+    return $ ResponseVersion currentVersionStr (cs $ verString dbv)
 
 prepareSweep ::
   Ctx ->

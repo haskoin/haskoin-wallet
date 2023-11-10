@@ -476,7 +476,7 @@ prettyPrinter unit =
     ResponseAccounts [] -> renderIO $ text "There are no accounts to display"
     ResponseAccounts accs ->
       renderIO . vcat $ intersperse (text " ") $ accountPrinter unit <$> accs
-    ResponseTestAcc _ res txt -> do
+    ResponseAccResult _ res txt -> do
       let p =
             if res
               then formatTrue "Success"

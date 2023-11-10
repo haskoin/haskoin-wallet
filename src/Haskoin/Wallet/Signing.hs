@@ -41,12 +41,13 @@ buildTxSignData ::
   Natural ->
   Natural ->
   Bool ->
+  Natural ->
   ExceptT String (DB m) TxSignData
-buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay
+buildTxSignData net ctx cfg gen accId rcpts feeByte dust rcptPay minConf
   | null rcpts = throwError "No recipients provided"
   | otherwise = do
       -- Get all spendable coins in the account
-      allCoins <- getSpendableCoins accId
+      allCoins <- getSpendableCoins net accId minConf
       -- Get a change address
       dbAddr <- nextFreeIntAddr ctx cfg accId
       (change, changeDeriv) <- liftEither $ fromDBAddr net dbAddr
