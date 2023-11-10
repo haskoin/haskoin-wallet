@@ -403,7 +403,7 @@ deleteAccParser = do
           <*> networkArg
           <*> fullDerivationOption
   info cmd $
-    progDescDoc (offline "Create a new account")
+    progDesc ("Delete an account")
       <> footer
         [r|
 Delete an account from the wallet. You must specify the name, the network and
