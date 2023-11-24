@@ -11,7 +11,7 @@
 module Haskoin.Wallet.PrettyPrinter where
 
 import Control.Monad
-import Data.List (intersperse, intercalate)
+import Data.List (intercalate, intersperse)
 import qualified Data.Map.Strict as Map
 import Data.Maybe (fromMaybe)
 import Data.String.Conversions (cs)
@@ -21,6 +21,7 @@ import Data.Time.Format
 import Data.Word
 import Haskoin
 import Haskoin.Wallet.Amounts
+import Haskoin.Wallet.Backup
 import Haskoin.Wallet.Commands
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.TxInfo
@@ -391,7 +392,7 @@ txInfoPrinter net unit TxInfo {..} =
               <> ( nest 2 . addrPrinter False
                      <$> Map.assocs
                        ( Map.map
-                           (, Nothing, "")
+                           (,Nothing,"")
                            txInfoOtherOutputs
                        )
                  )
@@ -512,18 +513,18 @@ prettyPrinter unit =
     ResponseCoins acc coins -> do
       let net = accountNetwork acc
       renderIO $ vcat $ intersperse (text " ") $ coinPrinter net unit <$> coins
-    ResponseSync acc bh h t c -> do
-      renderIO $
-        vcat
-          [ accountPrinter unit acc,
-            formatTitle "Sync Results:",
-            nest 2 $
-              keyPrinter 12 "Best Block"
-                <> formatBlockHash (cs $ blockHashToHex bh),
-            nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
-            nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
-            nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
-          ]
+    ResponseSync xs -> do
+      let f (SyncRes acc bh h t c) =
+            [ accountPrinter unit acc,
+              formatTitle "Sync Results:",
+              nest 2 $
+                keyPrinter 12 "Best Block"
+                  <> formatBlockHash (cs $ blockHashToHex bh),
+              nest 2 $ keyPrinter 12 "Best Height" <> formatValue (show h),
+              nest 2 $ keyPrinter 12 "Tx updates" <> formatValue (show t),
+              nest 2 $ keyPrinter 12 "Coin updates" <> formatValue (show c)
+            ]
+      renderIO $ vcat $ intercalate [text " "] (f <$> xs)
     ResponseRestore as -> do
       let f (acc, t, c) =
             [ accountPrinter unit acc,
@@ -535,8 +536,8 @@ prettyPrinter unit =
     ResponseVersion v dbv ->
       renderIO $
         vcat
-          [ formatKey "Software version:" <+> formatValue (cs v)
-          , formatKey "Database version:" <+> formatValue (cs dbv)
+          [ formatKey "Software version:" <+> formatValue (cs v),
+            formatKey "Database version:" <+> formatValue (cs dbv)
           ]
     ResponseRollDice ds e ->
       renderIO . vcat $
