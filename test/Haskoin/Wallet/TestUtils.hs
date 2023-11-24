@@ -246,6 +246,15 @@ arbitraryAccountBackup ctx =
     <*> resize 20 (listOf arbitraryAddress)
     <*> arbitraryUTCTime
 
+arbitrarySyncRes :: Network -> Ctx -> Gen SyncRes
+arbitrarySyncRes net ctx =
+  SyncRes
+    <$> arbitraryDBAccount net ctx
+    <*> arbitraryBlockHash
+    <*> arbitrary
+    <*> arbitraryNatural
+    <*> arbitraryNatural
+
 arbitraryResponse :: Network -> Ctx -> Gen Response
 arbitraryResponse net ctx =
   oneof
@@ -277,11 +286,7 @@ arbitraryResponse net ctx =
         <$> arbitraryDBAccount net ctx
         <*> resize 20 (listOf arbitraryJsonCoin),
       ResponseSync
-        <$> arbitraryDBAccount net ctx
-        <*> arbitraryBlockHash
-        <*> arbitrary
-        <*> arbitraryNatural
-        <*> arbitraryNatural,
+        <$> (resize 10 $ listOf $ arbitrarySyncRes net ctx),
       ResponseRestore
         <$> resize
           20

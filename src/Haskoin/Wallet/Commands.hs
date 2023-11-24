@@ -29,10 +29,10 @@ import Haskoin.Wallet.Config
 import Haskoin.Wallet.Database
 import Haskoin.Wallet.Entropy
 import Haskoin.Wallet.FileIO
+import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Parser
 import Haskoin.Wallet.Signing
 import Haskoin.Wallet.TxInfo
-import Haskoin.Wallet.Migration.SemVersion
 import Haskoin.Wallet.Util
 import Numeric.Natural (Natural)
 import qualified System.Console.Haskeline as Haskeline
@@ -87,13 +87,7 @@ data Response
       { responseAccount :: !DBAccount,
         responseCoins :: ![JsonCoin]
       }
-  | ResponseSync
-      { responseAccount :: !DBAccount,
-        responseBestBlock :: !BlockHash,
-        responseBestHeight :: !BlockHeight,
-        responseTxCount :: !Natural,
-        responseCoinCount :: !Natural
-      }
+  | ResponseSync {responseSync :: [SyncRes]}
   | ResponseRestore
       { responseRestore :: ![(DBAccount, Natural, Natural)]
       }
@@ -182,14 +176,18 @@ instance MarshalJSON Ctx Response where
             "account" .= a,
             "coins" .= (marshalValue net <$> coins)
           ]
-      ResponseSync as bb bh tc cc ->
+      ResponseSync xs -> do
+        let f (SyncRes as bb bh tc cc) =
+              object
+                [ "account" .= as,
+                  "bestblock" .= bb,
+                  "bestheight" .= bh,
+                  "txupdates" .= tc,
+                  "coinupdates" .= cc
+                ]
         object
           [ "type" .= Json.String "sync",
-            "account" .= as,
-            "bestblock" .= bb,
-            "bestheight" .= bh,
-            "txupdates" .= tc,
-            "coinupdates" .= cc
+            "syncres" .= (f <$> xs)
           ]
       ResponseRestore xs ->
         let f (acc, t, c) =
@@ -263,13 +261,16 @@ instance MarshalJSON Ctx Response where
           xs <- o .: "coins"
           coins <- mapM (unmarshalValue (accountNetwork a)) xs
           return $ ResponseCoins a coins
-        "sync" ->
-          ResponseSync
-            <$> o .: "account"
-            <*> o .: "bestblock"
-            <*> o .: "bestheight"
-            <*> o .: "txupdates"
-            <*> o .: "coinupdates"
+        "sync" -> do
+          xs <- o .: "syncres"
+          res <- forM xs $ \x ->
+            SyncRes
+              <$> x .: "account"
+              <*> x .: "bestblock"
+              <*> x .: "bestheight"
+              <*> x .: "txupdates"
+              <*> x .: "coinupdates"
+          return $ ResponseSync res
         "restore" -> do
           let f =
                 Json.withObject "account" $ \o' ->
@@ -656,15 +657,18 @@ setTxInfoOnline txInfo =
     Just p -> txInfo {txInfoPending = Just p {pendingOnline = True}}
     _ -> txInfo
 
-fromSyncRes :: SyncRes -> Response
-fromSyncRes (SyncRes a bh h t c) = ResponseSync a bh h t c
-
 cmdSyncAcc :: Ctx -> Config -> Maybe Text -> Bool -> IO Response
 cmdSyncAcc ctx cfg nameM full =
   runDBResponse cfg $ do
-    (accId, acc) <- getAccountByName nameM
-    let net = accountNetwork acc
-    fromSyncRes <$> sync ctx cfg net accId full
+    accs <-
+      case nameM of
+        Just _ -> (:[]) <$> getAccountByName nameM
+        _ -> lift getAccounts
+    when (null accs) $ throwError "There are no accounts in the wallet"
+    res <- forM accs $ \(accId, acc) -> do
+      let net = accountNetwork acc
+      sync ctx cfg net accId full
+    return $ ResponseSync res
 
 cmdDiscoverAccount :: Ctx -> Config -> Maybe Text -> IO Response
 cmdDiscoverAccount ctx cfg nameM = do
@@ -677,7 +681,8 @@ cmdDiscoverAccount ctx cfg nameM = do
     discoverAccGenAddrs ctx cfg accId AddrExternal $ fromIntegral e
     discoverAccGenAddrs ctx cfg accId AddrInternal $ fromIntegral i
     -- Perform a full sync after discovery
-    fromSyncRes <$> sync ctx cfg net accId True
+    res <- sync ctx cfg net accId True
+    return $ ResponseSync [res]
 
 cmdBackup :: Ctx -> Config -> FilePath -> IO Response
 cmdBackup ctx cfg fp =
